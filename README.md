@@ -120,6 +120,16 @@ requirements. Instructions for AI coding agents are in [AGENTS.md](AGENTS.md),
 and repository-level AI assistance is recorded in
 [AI_PROVENANCE.md](AI_PROVENANCE.md).
 
+## AI-assisted development
+
+This codebase was developed almost entirely with AI coding assistance. Human
+maintainers selected the requirements, reviewed the generated code, ran the
+applicable tests, and accept responsibility for the published result.
+
+The tools and models used are recorded in
+[AI_PROVENANCE.md](AI_PROVENANCE.md). Where available, individual commits also
+contain `Assisted-by:` trailers.
+
 ## License
 
 `cdrgam` is distributed under the MIT License. See

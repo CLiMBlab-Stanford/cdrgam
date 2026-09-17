@@ -1,0 +1,34 @@
+# Local R state and libraries
+.Renviron
+.Rhistory
+.RData
+.Ruserdata
+.Rproj.user/
+.r-lib/
+.diagnostic-lib/
+.prototype-lib/
+.trust-lib/
+.trust-v2-lib/
+
+# Package build and check artifacts
+*.tar.gz
+*.Rcheck/
+cdrgam/src/*.o
+cdrgam/src/*.so
+cdrgam/src/*.dll
+cdrgam/src/*.dylib
+cdrgam/src/symbols.rds
+
+# Historical implementation
+archive/
+
+# Generated validation results and benchmark reports
+validation/output/
+validation/HESSIAN_BENCHMARK.md
+validation/OUTER_OPTIMIZER_BENCHMARK.md
+
+# Editor and operating-system files
+.DS_Store
+*~
+*.swp
+*.swo

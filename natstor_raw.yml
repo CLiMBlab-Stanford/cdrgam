@@ -1,0 +1,156 @@
+data:
+  X_train: /juice6/u/nlp/climblab/data/SPR_natstor_old/natstor_X.csv
+  X_val: /juice6/u/nlp/climblab/data/SPR_natstor_old/natstor_X.csv
+  X_test: /juice6/u/nlp/climblab/data/SPR_natstor_old/natstor_X.csv
+  Y_train: /juice6/u/nlp/climblab/data/SPR_natstor_old/natstor_y_train.csv
+  Y_val: /juice6/u/nlp/climblab/data/SPR_natstor_old/natstor_y_dev.csv
+  Y_test: /juice6/u/nlp/climblab/data/SPR_natstor_old/natstor_y_test.csv
+  sep: " "
+  series_ids:
+    - subject
+    - docid
+  history_length: 8
+  t_delta_cutoff: 2
+  filters:
+    - column: fdur
+      fun: ">"
+      args: 100
+    - column: fdur
+      fun: "<"
+      args: 3000
+    - column: correct
+      fun: ">"
+      args: 4
+    - column: startofsentence
+      fun: "!="
+      args: 1
+    - column: endofsentence
+      fun: "!="
+      args: 1
+    - factor: subject
+      min: 101
+output_dir: ../results/cdrgam_journal/natstor_raw
+name_map:
+  wlen: Word length
+  unigramsurp: Unigram surprisal
+  fwprob5surp: 5-gram surprisal
+  fdur: RT (ms)
+preds:
+  all: &allpreds
+    - wlen
+    - unigramsurp
+    - fwprob5surp
+  nosurp: &nosurppreds
+    - wlen
+    - unigramsurp
+response: &response
+  fdur
+model:
+  k_t: 20
+  k: 3
+  bs_t: cr
+  bs: null
+plot:
+  t_delta_xlim: [0, 1]
+tempterms: &tempterms
+  - te(time_Y, bs="cr", k=20)
+  - ti(time_Y, subject_Y, bs=c("cr", "re"), k=20)
+models:
+  L0H0S0:
+    response: *response
+    formula:
+      mean:
+        - irfs: *allpreds
+        - irfs: *allpreds
+          ran_gf: subject
+  L1H0S0:
+    response: *response
+    bs: cr
+    formula:
+      mean:
+        - irfs: *allpreds
+        - irfs: *allpreds
+          ran_gf: subject
+  L0H1S0:
+    response: *response
+    family: gaulss
+    formula:
+      mean:
+        - irfs: *allpreds
+        - irfs: *allpreds
+          ran_gf: subject
+      sd:
+        - irfs: *allpreds
+        - irfs: *allpreds
+          ran_gf: subject
+  L0H0S1:
+    response: *response
+    formula:
+      mean:
+        - irfs: *allpreds
+          others: *tempterms
+          stationary: false
+        - irfs: *allpreds
+          ran_gf: subject
+          stationary: false
+  L1H1S0:
+    response: *response
+    family: gaulss
+    bs: cr
+    formula:
+      mean:
+        - irfs: *allpreds
+        - irfs: *allpreds
+          ran_gf: subject
+      sd:
+        - irfs: *allpreds
+        - irfs: *allpreds
+          ran_gf: subject
+  L1H0S1:
+    response: *response
+    bs: cr
+    formula:
+      mean:
+        - irfs: *allpreds
+          others: *tempterms
+          stationary: false
+        - irfs: *allpreds
+          ran_gf: subject
+          stationary: false
+  L0H1S1:
+    response: *response
+    family: gaulss
+    formula:
+      mean:
+        - irfs: *allpreds
+          others: *tempterms
+          stationary: false
+        - irfs: *allpreds
+          ran_gf: subject
+          stationary: false
+      sd:
+        - irfs: *allpreds
+          others: *tempterms
+          stationary: false
+        - irfs: *allpreds
+          ran_gf: subject
+          stationary: false
+  L1H1S1:
+    response: *response
+    family: gaulss
+    bs: cr
+    formula:
+      mean:
+        - irfs: *allpreds
+          others: *tempterms
+          stationary: false
+        - irfs: *allpreds
+          ran_gf: subject
+          stationary: false
+      sd:
+        - irfs: *allpreds
+          others: *tempterms
+          stationary: false
+        - irfs: *allpreds
+          ran_gf: subject
+          stationary: false

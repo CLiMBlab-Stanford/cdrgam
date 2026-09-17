@@ -1,0 +1,80 @@
+data:
+  X_train: /juice6/u/nlp/climblab/data/SPR_brown/brown_X.csv
+  X_val: /juice6/u/nlp/climblab/data/SPR_brown/brown_X.csv
+  X_test: /juice6/u/nlp/climblab/data/SPR_brown/brown_X.csv
+  Y_train: /juice6/u/nlp/climblab/data/SPR_brown/brown_y_train.csv
+  Y_val: /juice6/u/nlp/climblab/data/SPR_brown/brown_y_dev.csv
+  Y_test: /juice6/u/nlp/climblab/data/SPR_brown/brown_y_test.csv
+  sep: " "
+  series_ids:
+    - subject
+    - docid
+  history_length: 8
+  t_delta_cutoff: 2
+  filters:
+    - column: fdur
+      fun: ">"
+      args: 100
+    - column: fdur
+      fun: "<"
+      args: 3000
+    - column: startofsentence
+      fun: "!="
+      args: 1
+    - column: endofsentence
+      fun: "!="
+      args: 1
+    - factor: subject
+      min: 101
+output_dir: ../results/reading_EXPTNAME/brown
+name_map:
+  endofsentence: End of sentence
+  wlen: Word length
+  unigramsurpOWT: Unigram surprisal
+  gpt: GPT-2 surprisal
+  fdur: RT (ms)
+preds:
+  all: &allpreds
+    - endofsentence
+    - wlen
+    - unigramsurpOWT
+    - gpt
+response: &response
+  fdur
+model:
+  k_t: 20
+  k: 3
+  bs_t: cr
+  bs: null
+plot:
+  t_delta_xlim: [0, 1]
+tempterms: &tempterms
+  - te(time_Y, bs="cr", k=20)
+  - ti(time_Y, subject_Y, bs=c("cr", "re"), k=20)
+models:
+  minimal:
+    response: *response
+    bs:
+      '!!!DEFAULT!!!': null
+      endofsentence: null
+    formula:
+      mean:
+        - irfs: gpt
+        - irfs: gpt
+          rangf:
+            - subject
+  main:
+    response: *response
+    bs:
+      '!!!DEFAULT!!!': null
+      endofsentence: null
+    formula:
+      mean:
+        - irfs: *allpreds
+          others: *tempterms
+        - irfs: *allpreds
+          others: *tempterms
+          ran_gf:
+            - subject
+        - ran_gf: [sentid, sentpos]
+          use_rate: false

@@ -6,6 +6,7 @@
     )
     list(
         pterms=setup$pterms,
+        assign=setup$assign,
         xlevels=setup$xlevels,
         nsdf=setup$nsdf,
         smooth=setup$smooth,
@@ -22,7 +23,8 @@
         impulses,
         responses,
         chunk_size,
-        allow_new_levels
+        source_impulses=impulses,
+        source_responses=responses
 ) {
     stream <- object$cdrgam$preparation$stream
     specifications <- object$cdrgam$preparation$specification
@@ -35,22 +37,27 @@
     for (i in seq_along(metadata)) {
         info <- metadata[[i]]
         specification <- specifications[[i]]
-        predictor <- specification$predictor
+        predictors <- if (is.null(specification$predictors)) {
+            if (isTRUE(specification$constant)) character() else
+                specification$predictor
+        } else specification$predictors
         constant <- isTRUE(specification$constant)
-        if (!constant && !(predictor %in% names(impulses))) {
-            stop('Prediction impulse stream is missing: ', predictor)
+        missing_predictors <- setdiff(predictors, names(impulses))
+        if (length(missing_predictors)) {
+            stop('Prediction impulse stream is missing: ',
+                paste(missing_predictors, collapse=', '))
         }
-        values <- if (constant) {
-            rep.int(1, nrow(impulses))
-        } else {
-            impulses[[predictor]]
-        }
-        if (!is.numeric(values) || any(!is.finite(values))) {
-            stop('Prediction impulse predictors must be finite numeric columns')
-        }
+        predictor_values <- lapply(predictors, function(predictor) {
+            value <- impulses[[predictor]]
+            if (!is.numeric(value) || any(!is.finite(value))) {
+                stop('Prediction impulse predictors must be finite numeric columns')
+            }
+            value
+        })
+        names(predictor_values) <- predictors
         links <- .build_history_links(
-            impulses,
-            responses,
+            source_impulses,
+            source_responses,
             stream$series,
             stream$impulse_time,
             stream$response_time,
@@ -58,6 +65,11 @@
             history_length=if (is.null(stream$history_length)) Inf else
                 stream$history_length
         )
+        scaling <- object$cdrgam$scaling
+        if (is.null(scaling)) scaling <- object$cdrgam$preparation$scaling
+        if (!is.null(scaling) && isTRUE(scaling$enabled)) {
+            links$delay <- links$delay / scaling$time_divisor
+        }
         base_dimension <- if (is.null(info$base_dimension)) {
             length(info$coefficient_index)
         } else {
@@ -65,6 +77,53 @@
         }
         base <- matrix(0, nrow=nrow(responses), ncol=base_dimension)
         if (length(links$delay)) {
+            if (!is.null(info$axis)) {
+                linear_predictors <- if (is.null(info$linear_predictors)) {
+                    predictors[vapply(specification$k_p, is.null, logical(1))]
+                } else info$linear_predictors
+                linked_weights <- rep.int(1, length(links$delay))
+                for (predictor in linear_predictors) {
+                    linked_weights <- linked_weights * predictor_values[[predictor]][
+                        links$impulse_index
+                    ]
+                }
+                for (start in seq.int(1L, length(links$delay), by=chunk_size)) {
+                    end <- min(length(links$delay), start + chunk_size - 1L)
+                    rows <- start:end
+                    axis_data <- setNames(lapply(info$axis, function(axis) {
+                        switch(
+                            axis$role,
+                            lag=links$delay[rows],
+                            time={
+                                if (!(axis$variable %in% names(responses))) {
+                                    stop('Prediction responses are missing time axis: ',
+                                        axis$variable)
+                                }
+                                responses[[axis$variable]][links$response_index[rows]]
+                            },
+                            predictor=predictor_values[[axis$variable]][
+                                links$impulse_index[rows]
+                            ]
+                        )
+                    }), vapply(info$axis, `[[`, character(1), 'internal'))
+                    basis <- mgcv::PredictMat(
+                        info$basis,
+                        axis_data,
+                        n=length(rows)
+                    ) %*% info$transform
+                    basis <- basis * linked_weights[rows]
+                    accumulated <- rowsum(
+                        basis,
+                        links$response_index[rows],
+                        reorder=FALSE
+                    )
+                    response_rows <- as.integer(rownames(accumulated))
+                    base[response_rows, ] <-
+                        base[response_rows, , drop=FALSE] + accumulated
+                }
+            } else {
+            values <- if (constant) rep.int(1, nrow(impulses)) else
+                predictor_values[[1L]]
             linked_values <- values[links$impulse_index]
             tensor_values <- if (!is.null(specification$varying)) {
                 if (!(specification$varying %in% names(responses))) {
@@ -114,6 +173,7 @@
                 base[response_rows, ] <- base[response_rows, , drop=FALSE] +
                     accumulated
             }
+            }
         }
         if (!is.null(specification$by)) {
             if (!(specification$by %in% names(responses))) {
@@ -135,10 +195,13 @@
         }
         group_index <- match(as.character(responses[[group]]), info$group_levels)
         unknown <- is.na(group_index)
-        if (any(unknown) && !isTRUE(allow_new_levels)) {
-            stop(
-                'Unknown levels for ', group, ': ',
-                paste(unique(as.character(responses[[group]])[unknown]), collapse=', ')
+        if (any(unknown)) {
+            warning(
+                'Factor levels ',
+                paste(unique(as.character(responses[[group]])[unknown]), collapse=', '),
+                ' for ', group, ' were not in the original fit; ',
+                'their grouped deviations were set to zero',
+                call.=FALSE
             )
         }
         known <- which(!unknown)
@@ -187,8 +250,7 @@
 .cdr_setup_lpmatrix <- function(
         prediction,
         responses,
-        extra=list(),
-        allow_new_levels=FALSE
+        extra=list()
 ) {
     n <- nrow(responses)
     data <- as.list(responses)
@@ -236,8 +298,14 @@
                 value <- as.character(smooth_data[[variable]])
                 missing <- is.na(value) | !(value %in% levels)
                 unknown <- unknown | missing
-                if (any(missing) && !isTRUE(allow_new_levels)) {
-                    stop('Unknown random-effect levels in new response data')
+                if (any(missing)) {
+                    warning(
+                        'Factor levels ',
+                        paste(unique(value[missing]), collapse=', '),
+                        ' for ', variable, ' were not in the original fit; ',
+                        'their random effects were set to zero',
+                        call.=FALSE
+                    )
                 }
                 value[missing] <- levels[[1L]]
                 smooth_data[[variable]] <- factor(value, levels=levels)
@@ -260,7 +328,7 @@
     list(X=output, offset=offset)
 }
 
-.cdr_predict_random_effect <- function(effect, responses, allow_new_levels) {
+.cdr_predict_random_effect <- function(effect, responses) {
     data <- responses
     unknown <- rep.int(FALSE, nrow(data))
     for (variable in effect$variables) {
@@ -270,8 +338,12 @@
         value[missing] <- effect$levels[[variable]][[1L]]
         data[[variable]] <- factor(value, levels=effect$levels[[variable]])
     }
-    if (any(unknown) && !isTRUE(allow_new_levels)) {
-        stop('Unknown random-effect levels in new response data')
+    if (any(unknown)) {
+        warning(
+            'Factor levels absent from the original fit had their random ',
+            'effects set to zero',
+            call.=FALSE
+        )
     }
     formula <- stats::as.formula(paste(
         '~', paste(effect$variables, collapse=':'), '- 1'
@@ -290,29 +362,13 @@
     output
 }
 
-#' Predict from new impulse and response streams
-#'
-#' @param object A fitted `cdrgam` model.
-#' @param impulses New untiled impulse stream.
-#' @param responses New response-aligned covariates and timestamps. The fitted
-#'   response itself is not required.
-#' @param type Either `"response"`, `"link"`, or `"lpmatrix"`.
-#' @param se.fit Return conditional prediction standard errors.
-#' @param allow_new_levels Treat unseen random-effect/grouped-IRF levels as
-#'   zero deviations instead of raising an error.
-#' @param chunk_size Maximum history links transformed at once.
-#' @param unconditional Include smoothing-parameter uncertainty in standard
-#'   errors.
-#' @return A prediction vector, linear-predictor matrix, or list containing
-#'   `fit` and `se.fit`.
-#' @export
-predict_cdrgam <- function(
+# Internal implementation shared by the fitted-class prediction methods.
+.predict_cdrgam_streams <- function(
         object,
         impulses,
         responses,
         type=c('response', 'link', 'lpmatrix'),
         se.fit=FALSE,
-        allow_new_levels=FALSE,
         chunk_size=10000,
         unconditional=FALSE
 ) {
@@ -321,8 +377,19 @@ predict_cdrgam <- function(
             !is.data.frame(responses)) {
         stop('object must be a cdrgam fit and streams must be data frames')
     }
+    source_impulses <- impulses
+    source_responses <- responses
+    scaling <- object$cdrgam$scaling
+    if (is.null(scaling)) scaling <- object$cdrgam$preparation$scaling
+    impulses <- .cdr_apply_scaling(impulses, scaling, 'impulses')
+    responses <- .cdr_apply_scaling(responses, scaling, 'responses')
     irf_matrices <- .cdr_predict_irf_matrices(
-        object, impulses, responses, chunk_size, allow_new_levels
+        object,
+        impulses,
+        responses,
+        chunk_size,
+        source_impulses=source_impulses,
+        source_responses=source_responses
     )
     if (inherits(object, 'gam')) {
         extra <- stats::setNames(
@@ -332,8 +399,7 @@ predict_cdrgam <- function(
         assembled <- .cdr_setup_lpmatrix(
             .cdr_prediction_setup(object),
             responses,
-            extra,
-            allow_new_levels=allow_new_levels
+            extra
         )
     } else {
         prediction <- object$cdrgam$prediction
@@ -348,20 +414,17 @@ predict_cdrgam <- function(
             assembled <- .cdr_setup_lpmatrix(
                 prediction$setup,
                 responses,
-                extra,
-                allow_new_levels=allow_new_levels
+                extra
             )
         } else {
             ordinary <- .cdr_setup_lpmatrix(
                 prediction$setup,
-                responses,
-                allow_new_levels=allow_new_levels
+                responses
             )
             random <- lapply(
                 prediction$random_effects,
                 .cdr_predict_random_effect,
-                responses=responses,
-                allow_new_levels=allow_new_levels
+                responses=responses
             )
             prediction_parts <- c(list(ordinary$X), random, irf_matrices)
             prediction_parts <- lapply(

@@ -41,25 +41,46 @@ stopifnot(identical(design$terms[[1]]$type, 'linear'))
 stopifnot(identical(design$terms[[2]]$type, 'nonlinear'))
 stopifnot(ncol(design$terms[[2]]$X) == 10 * (7 - 1))
 
-native <- fit_cdrgam(design, backend='mgcv', engine='gam', method='REML')
-block <- fit_cdrgam(design, backend='block', method='REML')
-sparse <- fit_cdrgam(
+native <- cdrgam.fit(design, backend='mgcv', engine='gam', method='REML')
+block <- cdrgam.fit(design, backend='block', method='REML')
+sparse <- cdrgam.fit(
     design,
     backend='sparse',
     method='REML',
     sparse_control=list(hessian='optimhess')
 )
-sparse_profiled_hessian <- fit_cdrgam(
+sparse_profiled_hessian <- cdrgam.fit(
     design,
     backend='sparse',
     method='REML',
     sparse_control=list(hessian='profiled')
+)
+sparse_analytic_hessian <- cdrgam.fit(
+    design,
+    backend='sparse',
+    method='REML',
+    sparse_control=list(hessian='analytic')
+)
+sparse_gradient_hessian <- cdrgam.fit(
+    design,
+    backend='sparse',
+    method='REML',
+    sparse_control=list(hessian='gradient')
 )
 hessian_scale <- max(1, max(abs(sparse$outer.info$hess)))
 stopifnot(
     max(abs(
         sparse$outer.info$hess - sparse_profiled_hessian$outer.info$hess
     )) / hessian_scale < 3e-3,
+    max(abs(
+        sparse$outer.info$hess - sparse_analytic_hessian$outer.info$hess
+    )) / hessian_scale < 3e-3,
+    max(abs(
+        sparse_gradient_hessian$outer.info$hess -
+            sparse_analytic_hessian$outer.info$hess
+    )) / hessian_scale < 1e-5,
+    identical(sparse_analytic_hessian$sparse$hessian_evaluations, 0L),
+    sparse_analytic_hessian$sparse$hessian_rhs > 0L,
     max(abs(coef(sparse) - coef(sparse_profiled_hessian))) < 1e-8
 )
 lag <- seq(0, 2, length.out=81)
@@ -100,6 +121,79 @@ stopifnot(max(abs(
 # Surface extraction uses the full Cartesian grid and provides uncertainty.
 stopifnot(nrow(native_surface) == length(lag) * length(values))
 stopifnot(all(is.finite(native_surface$se)))
+
+# The plotting interface returns the same evaluated surfaces for every backend
+# and can reorient them as lag curves or predictor curves without drawing.
+native_plot <- plot(
+    native,
+    view='irf',
+    select='nonlinear_peak',
+    at=list(lag=lag, predictor=values),
+    draw=FALSE
+)
+block_plot <- plot(
+    block,
+    view='irf',
+    select='nonlinear_peak',
+    at=list(lag=lag, predictor=values),
+    draw=FALSE
+)
+sparse_plot <- plot(
+    sparse,
+    view='irf',
+    select='nonlinear_peak',
+    at=list(lag=lag, predictor=values),
+    draw=FALSE
+)
+stopifnot(
+    inherits(native_plot, 'cdrgam_plot_data'),
+    identical(native_plot$panels[[1L]]$data$estimate, native_surface$estimate),
+    max(abs(
+        native_plot$panels[[1L]]$data$estimate -
+            block_plot$panels[[1L]]$data$estimate
+    )) < 3e-4,
+    max(abs(
+        native_plot$panels[[1L]]$data$estimate -
+            sparse_plot$panels[[1L]]$data$estimate
+    )) < 3e-4
+)
+predictor_plot <- plot(
+    sparse,
+    view='predictor',
+    select='nonlinear_peak',
+    at=list(lag=c(0.3, 0.8), predictor=values),
+    draw=FALSE
+)
+surface_plot <- plot(
+    sparse,
+    view='surface',
+    select='nonlinear_peak',
+    at=list(lag=lag, predictor=values),
+    draw=FALSE
+)
+coefficient_plot <- plot(
+    sparse,
+    view='coef',
+    select='parametric',
+    draw=FALSE
+)
+stopifnot(
+    nrow(predictor_plot$panels[[1L]]$data) == 2L * length(values),
+    nrow(surface_plot$panels[[1L]]$data) == length(lag) * length(values),
+    length(coefficient_plot$panels) == 1L
+)
+
+saved_plot <- tempfile(fileext='.pdf')
+save_cdrgam_plots(
+    sparse,
+    saved_plot,
+    view='surface',
+    select='nonlinear_peak',
+    at=list(lag=lag, predictor=values),
+    surface='image'
+)
+stopifnot(file.exists(saved_plot), file.info(saved_plot)$size > 0)
+unlink(saved_plot)
 
 # Render predictor-conditioned IRF slices as a visual smoke test.
 plot_path <- tempfile(fileext='.png')

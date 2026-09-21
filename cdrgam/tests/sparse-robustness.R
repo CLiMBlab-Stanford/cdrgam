@@ -1,7 +1,7 @@
 library(cdrgam)
 
 # Structural sparse keys must remain exact beyond the 32-bit overflow point
-# reached by realistic crossed nonlinear random-IRF models.
+# reached by realistic crossed nonlinear grouped-IRF models.
 large_keys <- cdrgam:::.sparse_matrix_keys(
     c(0L, 49999L, 0L, 49999L),
     c(0L, 0L, 49999L, 49999L),
@@ -38,28 +38,30 @@ design <- prepare_cdrgam(
     history='ragged',
     quiet=TRUE
 )
-small_chunks <- fit_cdrgam(
+small_chunks <- cdrgam.fit(
     design,
     backend='sparse',
     method='REML',
     sparse_control=list(
         gradient='exact',
+        outer_optimizer='lbfgsb',
         crossprod_chunk_size=17,
         restarts=2
     )
 )
-one_chunk <- fit_cdrgam(
+one_chunk <- cdrgam.fit(
     design,
     backend='sparse',
     method='REML',
     sparse_control=list(
         gradient='exact',
+        outer_optimizer='lbfgsb',
         crossprod_chunk_size=100000,
         restarts=2
     )
 )
-native <- fit_cdrgam(design, backend='mgcv', engine='gam', method='REML')
-block <- fit_cdrgam(design, backend='block', method='REML')
+native <- cdrgam.fit(design, backend='mgcv', engine='gam', method='REML')
+block <- cdrgam.fit(design, backend='block', method='REML')
 stopifnot(isTRUE(small_chunks$converged), isTRUE(one_chunk$converged))
 stopifnot(small_chunks$sparse$convergence$restart_count == 2L)
 stopifnot(length(small_chunks$sparse$convergence$restart_objectives) == 3L)
@@ -80,11 +82,14 @@ shuffled_design <- prepare_cdrgam(
     history='ragged',
     quiet=TRUE
 )
-shuffled <- fit_cdrgam(
+shuffled <- cdrgam.fit(
     shuffled_design,
     backend='sparse',
     method='REML',
-    sparse_control=list(gradient='exact', crossprod_chunk_size=19)
+    sparse_control=list(
+        gradient='exact', outer_optimizer='lbfgsb',
+        crossprod_chunk_size=19
+    )
 )
 stopifnot(isTRUE(shuffled$converged))
 stopifnot(max(abs(coef(small_chunks) - coef(shuffled))) < 1e-5)
@@ -128,13 +133,13 @@ unbalanced <- prepare_cdrgam(
     history='ragged',
     quiet=TRUE
 )
-unbalanced_native <- fit_cdrgam(
+unbalanced_native <- cdrgam.fit(
     unbalanced,
     backend='mgcv',
     engine='gam',
     method='REML'
 )
-unbalanced_sparse <- fit_cdrgam(
+unbalanced_sparse <- cdrgam.fit(
     unbalanced,
     backend='sparse',
     method='REML',
@@ -161,7 +166,7 @@ rank_design <- prepare_cdrgam(
 )
 rank_warning <- NULL
 rank_fit <- withCallingHandlers(
-    fit_cdrgam(rank_design, backend='sparse', method='REML'),
+    cdrgam.fit(rank_design, backend='sparse', method='REML'),
     warning=function(w) {
         if (grepl('aliased ordinary parametric', conditionMessage(w))) {
             rank_warning <<- conditionMessage(w)
@@ -176,14 +181,14 @@ rank_reference <- prepare_cdrgam(
     history='ragged',
     quiet=TRUE
 )
-rank_reference <- fit_cdrgam(rank_reference, backend='sparse', method='REML')
-rank_native <- suppressWarnings(fit_cdrgam(
+rank_reference <- cdrgam.fit(rank_reference, backend='sparse', method='REML')
+rank_native <- suppressWarnings(cdrgam.fit(
     rank_design,
     backend='mgcv',
     engine='gam',
     method='REML'
 ))
-rank_block <- suppressWarnings(fit_cdrgam(
+rank_block <- suppressWarnings(cdrgam.fit(
     rank_design,
     backend='block',
     method='REML'
@@ -219,11 +224,11 @@ confounded_design <- prepare_cdrgam(
     quiet=TRUE
 )
 rank_error <- tryCatch(
-    fit_cdrgam(confounded_design, backend='sparse', method='REML'),
+    cdrgam.fit(confounded_design, backend='sparse', method='REML'),
     error=function(e) conditionMessage(e)
 )
 drop_error <- tryCatch(
-    fit_cdrgam(
+    cdrgam.fit(
         confounded_design,
         backend='sparse',
         method='REML',
@@ -231,13 +236,13 @@ drop_error <- tryCatch(
     ),
     error=function(e) conditionMessage(e)
 )
-minimum_norm <- suppressWarnings(fit_cdrgam(
+minimum_norm <- suppressWarnings(cdrgam.fit(
     confounded_design,
     backend='sparse',
     method='REML',
     rank_action='minimum_norm'
 ))
-penalized <- suppressWarnings(fit_cdrgam(
+penalized <- suppressWarnings(cdrgam.fit(
     confounded_design,
     backend='sparse',
     method='REML',
@@ -265,7 +270,7 @@ stopifnot(max(abs(
         coef(minimum_norm)[minimum_indices[[2L]]]
 )) < 1e-5)
 
-block_minimum_norm <- suppressWarnings(fit_cdrgam(
+block_minimum_norm <- suppressWarnings(cdrgam.fit(
     confounded_design,
     backend='block',
     method='REML',

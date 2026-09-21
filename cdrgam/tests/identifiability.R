@@ -37,11 +37,11 @@ stopifnot(identical(
 ))
 stopifnot(grepl(
     'irf\\(1',
-    paste(deparse(cdr_formula(implicit, type='normalized')), collapse='')
+    paste(deparse(formula(implicit, type='normalized')), collapse='')
 ))
 stopifnot(!grepl(
     'irf\\(1',
-    paste(deparse(cdr_formula(implicit, type='effective')), collapse='')
+    paste(deparse(formula(implicit, type='effective')), collapse='')
 ))
 
 suppressed <- prepare_cdrgam(

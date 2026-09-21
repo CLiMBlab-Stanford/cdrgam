@@ -45,12 +45,13 @@ NULL
 #'
 #' `sum_j by[i, j] * b(t_delta[i, j])`,
 #'
-#' where `b()` is an `mgcv` cubic regression spline basis.  The resulting term
-#' can be fitted with [fit_cdrgam()].
+#' where `b()` is an `mgcv` smooth basis. The resulting term
+#' can be fitted with [cdrgam()].
 #'
-#' This initial implementation supports univariate
-#' cubic regression spline (`bs = "cr"`) terms and deliberately does not apply
-#' a centering constraint.  The latter matches `mgcv` linear-functional terms
+#' The implementation supports univariate numeric marginal bases recognized
+#' by `mgcv` and deliberately does not apply
+#' a centering constraint unless the effective row sum is constant. This
+#' matches `mgcv` linear-functional terms
 #' when `rowSums(by)` is non-constant, which is the usual case for
 #' predictor-weighted CDR terms.
 #'
@@ -58,7 +59,7 @@ NULL
 #' @param by Numeric matrix of convolution weights with the same dimensions as
 #'   `t_delta`. Invalid/padded history positions should have weight zero.
 #' @param k Basis dimension.
-#' @param bs Spline basis. Currently only `"cr"` is supported.
+#' @param bs Univariate numeric marginal basis recognized by `mgcv`.
 #' @param knots Optional numeric knot vector of length `k`. If omitted, knots
 #'   are placed at quantiles of the unique values in `t_delta`, following the
 #'   `mgcv` cubic regression spline constructor.
@@ -70,7 +71,7 @@ NULL
 #'   measure. The stream compiler uses actual, unpadded history links.
 #' @return A `cdrgam_term` object containing the
 #'   response-level design matrix, penalties, and underlying `mgcv` smooth.
-#' @export
+#' @keywords internal
 compress_cdr_smooth <- function(
         t_delta,
         by,
@@ -100,8 +101,8 @@ compress_cdr_smooth <- function(
     if (any(!is.finite(by))) {
         stop('by must contain only finite values')
     }
-    if (!identical(bs, 'cr')) {
-        stop('The experimental compressed backend currently supports only bs="cr"')
+    if (!is.character(bs) || length(bs) != 1L || is.na(bs) || !nzchar(bs)) {
+        stop('bs must be one nonempty mgcv basis name')
     }
     if (length(k) != 1 || !is.numeric(k) || !is.finite(k) || k < 3) {
         stop('k must be a finite numeric scalar greater than or equal to 3')
@@ -160,11 +161,12 @@ compress_cdr_smooth <- function(
     marginal <- mgcv::smoothCon(
         spec,
         data=list(cdr_delta=knots),
-        knots=list(cdr_delta=knots),
+        knots=if (identical(bs, 'ps')) NULL else list(cdr_delta=knots),
         absorb.cons=FALSE,
         scale.penalty=FALSE,
         n=length(knots)
     )[[1]]
+    marginal_dimension <- ncol(marginal$X)
 
     transform <- if (centered) {
         centering_values <- if (is.null(constraint_delays)) {
@@ -181,9 +183,9 @@ compress_cdr_smooth <- function(
             centering_values,
             chunk_size
         )
-        .cdr_constraint_transform(constraint, k)
+        .cdr_constraint_transform(constraint, marginal_dimension)
     } else {
-        diag(k)
+        diag(marginal_dimension)
     }
     basis_dimension <- ncol(transform)
 
@@ -274,23 +276,7 @@ compress_cdr_smooth <- function(
     object
 }
 
-#' Fit a continuous-time deconvolutional GAM
-#'
-#' Fit one or more response-level CDR basis matrices constructed by
-#' [compress_cdr_smooth()] while retaining `mgcv` smoothing-parameter
-#' estimation and GAM result semantics. The returned object is a direct
-#' subclass of the fitted `mgcv` object, rather than a wrapper around it.
-#'
-#' @param y Numeric response vector.
-#' @param terms A `cdr_compressed_term` or list of such terms.
-#' @param family An `mgcv` family.
-#' @param method Smoothing parameter estimation method.
-#' @param engine Either `"bam"` or `"gam"`.
-#' @param intercept Whether to include a parametric intercept.
-#' @param ... Additional arguments passed to `mgcv::bam()` or `mgcv::gam()`.
-#' @return A `cdrgam` object that also inherits from the native classes of the
-#'   selected `mgcv` fitting engine.
-#' @export
+# Fit precomputed response-level CDR bases with the native mgcv backend.
 .fit_compressed_mgcv <- function(
         y,
         terms,
@@ -445,6 +431,7 @@ compress_cdr_smooth <- function(
             mgcv=formula
         ),
         preparation=preparation,
+        scaling=if (is.null(preparation)) NULL else preparation$scaling,
         identifiability=if (is.null(preparation)) NULL else
             preparation$identifiability,
         term_labels=labels,
@@ -469,6 +456,9 @@ compress_cdr_smooth <- function(
                 type=term$type,
                 knots=term$knots,
                 predictor_knots=term$predictor_knots,
+                axis=term$axis,
+                linear_predictors=term$linear_predictors,
+                linear_predictor_summaries=term$linear_predictor_summaries,
                 basis=term$basis,
                 transform=term$transform,
                 group=term$group,
@@ -477,40 +467,17 @@ compress_cdr_smooth <- function(
                 rank=term$rank,
                 null.space.dim=term$null.space.dim,
                 S.scale=term$S.scale,
+                lag_scale=if (is.null(term$lag_scale)) 1 else term$lag_scale,
+                predictor_scale=if (is.null(term$predictor_scale)) 1 else
+                    term$predictor_scale,
+                amplitude_scale=if (is.null(term$amplitude_scale)) 1 else
+                    term$amplitude_scale,
                 coefficient_index=coefficient_index
             )
         })
     )
     class(fit) <- c('cdrgam', class(fit))
     fit
-}
-
-#' Fit precomputed CDR smooth terms using mgcv
-#'
-#' `fit_compressed_cdr_gam()` is retained as a descriptive alias for
-#' [fit_cdrgam()]. New code should normally use `fit_cdrgam()`.
-#'
-#' @inheritParams fit_cdrgam
-#' @return A `cdrgam` object.
-#' @export
-fit_compressed_cdr_gam <- function(
-        y,
-        terms,
-        family=stats::gaussian(),
-        method=NULL,
-        engine=c('bam', 'gam'),
-        intercept=TRUE,
-        ...
-) {
-    .fit_compressed_mgcv(
-        y=y,
-        terms=terms,
-        family=family,
-        method=method,
-        engine=engine,
-        intercept=intercept,
-        ...
-    )
 }
 
 #' Test whether an object is a CDR-GAM fit
@@ -550,16 +517,92 @@ print.cdrgam <- function(x, ...) {
 }
 
 #' @export
+summary.cdrgam <- function(
+        object,
+        dispersion=NULL,
+        freq=FALSE,
+        re.test=TRUE,
+        all.coefficients=FALSE,
+        ...
+) {
+    output <- summary(
+        as_gam(object), dispersion=dispersion, freq=freq,
+        re.test=re.test, ...
+    )
+    divisors <- .cdr_coefficient_divisors(object)
+    table <- output$p.table
+    if (!is.null(table) && nrow(table)) {
+        positions <- match(rownames(table), names(divisors))
+        scale <- divisors[positions]
+        scale[is.na(scale)] <- 1
+        estimate <- match('Estimate', colnames(table))
+        standard_error <- match('Std. Error', colnames(table))
+        if (!is.na(estimate)) table[, estimate] <- table[, estimate] / scale
+        if (!is.na(standard_error)) {
+            table[, standard_error] <- table[, standard_error] / abs(scale)
+        }
+        output$p.table <- table
+        output$p.coeff <- table[, 'Estimate']
+    }
+    formulas <- .cdrgam_summary_formulas(object)
+    output$formula <- formulas$user
+    output$formulas <- formulas
+    output$formula_strings <- .cdrgam_formula_strings(formulas)
+    output$cdrgam.scaling <- object$cdrgam$scaling
+    if (!is.null(output$s.table)) {
+        labels <- .cdrgam_smooth_labels(object)
+        rownames(output$s.table) <- labels
+        if (length(output$edf) == length(labels)) names(output$edf) <- labels
+        if (length(output$s.pv) == length(labels)) names(output$s.pv) <- labels
+        if (length(output$chi.sq) == length(labels)) {
+            names(output$chi.sq) <- labels
+        }
+    }
+    if (isTRUE(all.coefficients)) {
+        indices <- seq_along(object$coefficients)
+        output$coefficients <- .cdrgam_coefficient_table(
+            object,
+            indices,
+            stats::vcov(object)[indices, indices, drop=FALSE],
+            output$residual.df
+        )
+    }
+    class(output) <- c('summary.cdrgam', class(output))
+    output
+}
+
+#' Predict from a fitted CDR-GAM
+#'
+#' Supply new untiled streams as
+#' `newdata=list(impulses=impulses, responses=responses)`. Stored training-data
+#' scaling is applied before the response-level design is rebuilt. Native
+#' `mgcv` fits also accept a response-side data frame. Factor labels are mapped
+#' to the fitted training vocabulary. Unseen random-effect and grouped-IRF
+#' levels produce a warning and contribute zero deviation.
+#'
+#' @param object A fitted `cdrgam` model.
+#' @param newdata A named list containing `impulses` and `responses` data
+#'   frames, or a response-side data frame for a native `mgcv` fit.
+#' @param ... Prediction controls, including `type`, `se.fit`, `chunk_size`,
+#'   and `unconditional`.
+#' @return A prediction vector, linear-predictor matrix, or list containing
+#'   `fit` and `se.fit`.
+#' @export
 predict.cdrgam <- function(object, newdata=NULL, ...) {
     if (is.list(newdata) && all(c('impulses', 'responses') %in% names(newdata))) {
-        return(predict_cdrgam(
+        return(.predict_cdrgam_streams(
             object,
             impulses=newdata$impulses,
             responses=newdata$responses,
             ...
         ))
     }
-    NextMethod('predict')
+    if (is.data.frame(newdata)) {
+        scaling <- object$cdrgam$scaling
+        if (is.null(scaling)) scaling <- object$cdrgam$preparation$scaling
+        newdata <- .cdr_apply_scaling(newdata, scaling, 'responses')
+    }
+    NextMethod('predict', object=object, newdata=newdata)
 }
 
 # Internal mgcv extension: the covariate supplied to this smooth is an N by p

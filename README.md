@@ -17,11 +17,12 @@ predictors come from an impulse stream:
 ```r
 library(cdrgam)
 
-model <- fit_cdrgam(
+model <- cdrgam(
     rt ~ s(word_position, k = 5) +
-        irf(surprisal, window = c(0, 2), k = 20),
+        irf(surprisal, k_l = 20),
     impulses = words,
     responses = fixations,
+    window = c(0, 2),
     series = c("subject", "document"),
     impulse_time = "time",
     response_time = "time",
@@ -38,35 +39,79 @@ once:
 
 ```r
 design <- prepare_cdrgam(
-    rt ~ irf(surprisal, window = c(0, 2), k = 20),
+    rt ~ irf(surprisal, k_l = 20),
     impulses = words,
     responses = fixations,
+    window = c(0, 2),
     series = c("subject", "document")
 )
 
-model <- fit_cdrgam(design, backend = "sparse")
+model <- cdrgam.fit(design, backend = "sparse")
 ```
 
-`predict_cdrgam()` accepts new untiled impulse and response streams and rebuilds
-their response-level design from the fitted bases and constraints.
+`predict()` accepts new untiled streams in a named `newdata` list and rebuilds
+their response-level design from the fitted bases and constraints:
+
+```r
+prediction <- predict(model, newdata = list(
+    impulses = new_words,
+    responses = new_fixations
+))
+```
+
+Set `rescale_predictors = TRUE` to improve numerical conditioning when
+continuous predictors or timestamps have awkward units. The transformation
+divides by training-data standard deviations but never centers, so interaction
+reference points retain their meaning. Binary, categorical, grouping, series,
+and constant variables are left alone. History windows are built in native
+time units, then lag and time are divided by the same impulse-time standard
+deviation. Formulas remain unchanged; new data are transformed with the stored
+training statistics, and CDR plots and effect estimates use native source
+units.
+
+## Plotting
+
+`plot()` provides CDR-specific views of the fitted terms:
+
+```r
+plot(model, view = "irf", select = "surprisal",
+     at = list(predictor = c(-1, 0, 1)))
+plot(model, view = "predictor", select = "surprisal",
+     at = list(lag = c(0.2, 0.5, 1)))
+plot(model, view = "surface", select = "surprisal")
+```
+
+Grouped terms support population, deviation, and conditional views. CDR plots
+show additive effects on the linear-predictor scale and can include conditional
+or smoothing-parameter-adjusted uncertainty. `save_cdrgam_plots()` writes the
+same panels to PDF or raster devices. Native `mgcv` fits retain access to the
+translated GAM display through `plot(model, view = "gam")` or
+`mgcv::plot.gam(as_gam(model))`. The first form restores scaled ordinary-smooth
+axes to source units; the explicit `as_gam()` escape hatch exposes the literal
+internal mgcv parameterization.
 
 ## Supported terms
 
 The current implementation supports:
 
-- stationary linear impulse-response functions;
-- nonlinear tensor surfaces over lag and impulse value;
+- stationary linear and nonlinear impulse-response functions;
+- multi-predictor tensor interactions with mixed linear and smooth axes;
 - response-aligned `by` modulation;
-- lag-by-covariate varying impulse-response functions;
-- factor-specific random impulse-response deviations;
+- nonstationary response-time axes;
+- grouped impulse-response deviations;
 - ordinary `mgcv` terms, including response-side random effects; and
 - Gaussian and non-Gaussian families through the native `mgcv` backend.
 
-Cubic regression splines are currently the supported IRF basis.
+`k_l`, `k_t`, and `k_p` control the lag, response-time, and predictor basis
+dimensions. `NULL` predictor entries are linear; use an R list such as
+`k_p = list(NULL, 4)` when an interaction mixes linear and smooth predictors.
+The corresponding `bs_l`, `bs_t`, and `bs_p` arguments accept standard numeric
+`mgcv` marginal bases. Smooth non-lag tensor marginals are centered to separate
+an interaction from its lower-order effects.
 
 ## Fitting backends
 
-`fit_cdrgam()` provides three fitting paths:
+`cdrgam()` provides three fitting paths:
 
 - `backend = "mgcv"` fits the compiled response-level design with
   `mgcv::gam()` or `mgcv::bam()`. The result directly inherits from the native
@@ -76,9 +121,36 @@ Cubic regression splines are currently the supported IRF basis.
   normal equations and sparse Cholesky factorization. Grouped IRFs remain
   compact until backend assembly.
 
-`backend = "sparse_trust"` selects the sparse engine with its experimental
-exact-score, safeguarded trust-region BFGS optimizer. The sparse backends also
-support resumable checkpoints and structured progress reporting.
+The sparse backend's experimental exact-score, safeguarded trust-region BFGS
+optimizer is selected with
+`sparse_control = list(gradient = "exact", outer_optimizer = "bfgs_trust")`.
+Its checkpoints preserve
+the complete optimizer state, including BFGS curvature and trust radius, so an
+interrupted run continues its original trajectory. If the trust radius reaches
+the numerical floor during fitting, the resolved Hessian strategy is used to
+certify practical convergence in identifiable curvature directions or reset
+curvature for a bounded recovery attempt. The default automatic strategy uses
+the analytic Hessian when it fits the process memory budget and otherwise
+differences exact gradients. Near-neutral steps are accepted only when their
+exact score reaches tolerance or improves, which prevents factorization-level
+objective noise from collapsing the trust radius.
+
+With `sparse_control = list(schur = "always")`, response-aligned random-effect
+blocks are eliminated through a consolidated Schur transfer matrix. The
+factorization, exact-score trace, and multi-right-hand-side solves use batched
+BLAS operations. A threaded BLAS implementation such as OpenBLAS materially
+reduces runtime for large Schur cores; R's reference BLAS remains supported
+but executes these kernels serially.
+
+Set `sparse_control$boundary_action = "reduce"` to convert certified IRF
+curvature boundaries into explicit reduced bases and reoptimize the remaining
+smoothing parameters. The user formula is preserved, and the fitted object
+records the removed penalty subspaces, original and effective dimensions, and
+the conditional status of subsequent inference. The default `"report"`
+records the same diagnosis without altering the fitted representation. Reports
+name the affected component (for example, lag curvature, predictor curvature,
+or group-deviation magnitude). A full-rank boundary would erase an entire
+term, so it is reported for confirmation and is never removed automatically.
 
 The independent backends are used to test compilation, fitting, prediction,
 and inference against one another.

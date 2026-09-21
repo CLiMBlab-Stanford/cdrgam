@@ -1,7 +1,7 @@
 % Generated manually from cdrgam/R/diagnostics.R.
 \name{estimate_irf}
 \alias{estimate_irf}
-\title{Evaluate fitted fixed-effect impulse-response functions}
+\title{Evaluate fitted impulse-response function terms}
 \usage{
 estimate_irf(
   object,
@@ -10,7 +10,8 @@ estimate_irf(
   n = 200,
   predictor = NULL,
   n_predictor = 25,
-  level = NULL,
+  at = list(),
+  group = NULL,
   se = TRUE,
   unconditional = FALSE
 )
@@ -22,7 +23,10 @@ estimate_irf(
 \item{n}{Number of default grid points.}
 \item{predictor}{Optional predictor-value grid for nonlinear IRFs.}
 \item{n_predictor}{Number of default predictor-value grid points.}
-\item{level}{Optional grouping levels to evaluate for a random IRF. By default
+\item{at}{Named list of evaluation values for smooth response-time and
+predictor axes. \code{predictor} remains an alias for the first non-lag axis;
+additional axes default to their fitted-grid medians.}
+\item{group}{Optional grouping levels for grouped IRF deviations. By default
 all fitted levels are returned.}
 \item{se}{Include pointwise standard errors when covariance is available.}
 \item{unconditional}{Include the first-order smoothing-parameter uncertainty
@@ -30,5 +34,5 @@ correction when supported by the fitted backend.}
 }
 \value{A data frame containing term, grouping level, lag, predictor value,
 estimate, and standard error.}
-\description{Evaluates each fitted fixed-effect IRF using its stored marginal
+\description{Evaluates each fitted IRF term using its stored marginal
 basis, fitted coefficients, and covariance matrix.}

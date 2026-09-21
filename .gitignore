@@ -9,6 +9,10 @@
 .prototype-lib/
 .trust-lib/
 .trust-v2-lib/
+.trust-v3-lib/
+
+# Agent-facing implementation plans
+plans/
 
 # Package build and check artifacts
 *.tar.gz

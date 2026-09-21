@@ -37,15 +37,15 @@ design <- prepare_cdrgam(
     chunk_size=100,
     quiet=TRUE
 )
-native <- fit_cdrgam(design, backend='mgcv', engine='gam', method='REML')
-block <- fit_cdrgam(design, backend='block', method='REML')
-sparse <- fit_cdrgam(
+native <- cdrgam.fit(design, backend='mgcv', engine='gam', method='REML')
+block <- cdrgam.fit(design, backend='block', method='REML')
+sparse <- cdrgam.fit(
     design,
     backend='sparse',
     method='REML',
     sparse_control=list(gradient='finite', crossprod_chunk_size=37)
 )
-sparse_exact <- fit_cdrgam(
+sparse_exact <- cdrgam.fit(
     design,
     backend='sparse',
     method='REML',
@@ -76,7 +76,29 @@ stopifnot(length(sparse$sparse$convergence$boundary) == 0L)
 stopifnot(isTRUE(all.equal(predict(sparse), fitted(sparse))))
 sparse_summary <- summary(sparse)
 stopifnot(inherits(sparse_summary, 'summary.cdrgam_sparse'))
-stopifnot(abs(sparse_summary$edf - sum(native$edf)) < 1e-4)
+stopifnot(abs(sum(sparse_summary$edf) - sum(summary(native)$edf)) < 1e-4)
+stopifnot(
+    is.null(sparse_summary$coefficients),
+    nrow(sparse_summary$p.table) < length(coef(sparse)),
+    nrow(sparse_summary$s.table) == length(sparse$smooth),
+    identical(rownames(sparse_summary$s.table), sparse$cdrgam$term_labels),
+    identical(names(sparse_summary$s.pv), sparse$cdrgam$term_labels),
+    identical(
+        sparse_summary$formula_strings$user,
+        paste(deparse(formula(sparse, type='user')), collapse=' ')
+    )
+)
+native_summary <- summary(native)
+stopifnot(
+    inherits(native_summary, 'summary.cdrgam'),
+    identical(rownames(native_summary$s.table), native$cdrgam$term_labels),
+    identical(
+        native_summary$formula_strings$effective,
+        paste(deparse(formula(native, type='effective')), collapse=' ')
+    )
+)
+expanded_summary <- summary(sparse, all.coefficients=TRUE)
+stopifnot(nrow(expanded_summary$coefficients) == length(coef(sparse)))
 stopifnot(abs(
     sparse_summary$df.residual - native$df.residual
 ) < 1e-4)

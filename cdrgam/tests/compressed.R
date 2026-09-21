@@ -12,7 +12,7 @@ t_delta[!mask] <- 0
 by[!mask] <- 0
 knots <- seq(0, 2, length.out=k)
 
-compressed <- compress_cdr_smooth(
+compressed <- cdrgam:::compress_cdr_smooth(
     t_delta,
     by,
     k=k,
@@ -40,7 +40,7 @@ reference_fit <- gam(
     knots=list(t_delta=knots),
     method='REML'
 )
-compressed_fit <- fit_compressed_cdr_gam(
+compressed_fit <- cdrgam:::.fit_compressed_mgcv(
     y,
     compressed,
     engine='gam',
@@ -69,20 +69,20 @@ invisible(capture.output(reference_vcomp <- gam.vcomp(reference_fit)))
 invisible(capture.output(compressed_vcomp <-
     variance_components(compressed_fit)))
 stopifnot(isTRUE(all.equal(
-    unname(compressed_vcomp),
-    unname(reference_vcomp),
+    unname(as.numeric(compressed_vcomp$vc)),
+    unname(as.numeric(reference_vcomp$vc)),
     tolerance=1e-6
 )))
 
 # Compression is invariant to response chunking.
-single_chunk <- compress_cdr_smooth(
+single_chunk <- cdrgam:::compress_cdr_smooth(
     t_delta,
     by,
     k=k,
     knots=knots,
     chunk_size=n
 )
-one_row_chunks <- compress_cdr_smooth(
+one_row_chunks <- cdrgam:::compress_cdr_smooth(
     t_delta,
     by,
     k=k,
@@ -128,14 +128,14 @@ reference_bam <- bam(
     method='fREML',
     chunk.size=53
 )
-compressed_bam <- fit_compressed_cdr_gam(
+compressed_bam <- cdrgam:::.fit_compressed_mgcv(
     y,
     compressed,
     engine='bam',
     method='fREML',
     chunk.size=53
 )
-compressed_bam_2 <- fit_compressed_cdr_gam(
+compressed_bam_2 <- cdrgam:::.fit_compressed_mgcv(
     y,
     compressed,
     engine='bam',
@@ -163,7 +163,7 @@ t_delta_2 <- matrix(runif(n * width, 0, 2), n, width)
 by_2 <- matrix(rnorm(n * width), n, width)
 t_delta_2[!mask] <- 0
 by_2[!mask] <- 0
-compressed_2 <- compress_cdr_smooth(
+compressed_2 <- cdrgam:::compress_cdr_smooth(
     t_delta_2,
     by_2,
     k=k,
@@ -189,7 +189,7 @@ reference_multiple <- gam(
     knots=list(t_delta=knots, t_delta_2=knots),
     method='REML'
 )
-compressed_multiple <- fit_cdrgam(
+compressed_multiple <- cdrgam:::.fit_compressed_mgcv(
     y_2,
     list(primary=compressed, secondary=compressed_2),
     engine='gam',
@@ -223,7 +223,7 @@ reference_poisson <- gam(
     family=poisson(),
     method='REML'
 )
-compressed_poisson <- fit_compressed_cdr_gam(
+compressed_poisson <- cdrgam:::.fit_compressed_mgcv(
     poisson_y,
     compressed,
     family=poisson(),
@@ -239,7 +239,7 @@ stopifnot(isTRUE(all.equal(
 # Constant linear-functional weight sums receive the same centering constraint
 # and reduced penalty as native mgcv.
 constant_by <- matrix(1, n, width)
-constant_compressed <- compress_cdr_smooth(
+constant_compressed <- cdrgam:::compress_cdr_smooth(
     t_delta,
     constant_by,
     k=k,
@@ -282,10 +282,10 @@ expect_error <- function(expr, pattern) {
     stopifnot(!is.na(message), grepl(pattern, message))
 }
 expect_error(
-    compress_cdr_smooth(t_delta, by[, -1, drop=FALSE], k=k, knots=knots),
+    cdrgam:::compress_cdr_smooth(t_delta, by[, -1, drop=FALSE], k=k, knots=knots),
     'identical dimensions'
 )
-expect_error(
-    compress_cdr_smooth(t_delta, by, k=k, bs='tp', knots=knots),
-    'only bs="cr"'
+thin_plate <- cdrgam:::compress_cdr_smooth(
+    t_delta, by, k=k, bs='tp', knots=knots
 )
+stopifnot(nrow(thin_plate$X) == n, ncol(thin_plate$X) > 0L)

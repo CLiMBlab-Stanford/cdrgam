@@ -276,9 +276,12 @@
         response_data=design$responses,
         user_formula=design$formula,
         preparation=list(
+            configuration=design$configuration,
             plan=design$plan,
             stream=design$stream,
-            specification=design$specification
+            specification=design$specification,
+            simplifications=design$simplifications,
+            scaling=design$scaling
         ),
         setup_only=TRUE,
         ...
@@ -635,6 +638,9 @@
             type=term$type,
             knots=term$knots,
             predictor_knots=term$predictor_knots,
+            axis=term$axis,
+            linear_predictors=term$linear_predictors,
+            linear_predictor_summaries=term$linear_predictor_summaries,
             basis=term$basis,
             transform=term$transform,
             group=term$group,
@@ -643,6 +649,11 @@
             rank=term$rank,
             null.space.dim=term$null.space.dim,
             S.scale=term$S.scale,
+            lag_scale=if (is.null(term$lag_scale)) 1 else term$lag_scale,
+            predictor_scale=if (is.null(term$predictor_scale)) 1 else
+                term$predictor_scale,
+            amplitude_scale=if (is.null(term$amplitude_scale)) 1 else
+                term$amplitude_scale,
             coefficient_index=coefficient_index
         )
     })
@@ -695,11 +706,15 @@
                 mgcv=setup$formula
             ),
             preparation=list(
+                configuration=design$configuration,
                 plan=design$plan,
                 stream=design$stream,
                 specification=design$specification,
+                simplifications=design$simplifications,
+                scaling=design$scaling,
                 identifiability=design$identifiability
             ),
+            scaling=design$scaling,
             identifiability=identifiability,
             term_labels=names(design$terms),
             terms=term_metadata,
@@ -773,6 +788,7 @@ vcov.cdrgam_block <- function(object, unconditional=FALSE, ...) {
     object$Vp
 }
 
+#' @rdname predict.cdrgam
 #' @export
 predict.cdrgam_block <- function(object, newdata=NULL, ...) {
     if (is.null(newdata)) return(object$fitted.values)
@@ -780,7 +796,7 @@ predict.cdrgam_block <- function(object, newdata=NULL, ...) {
             !all(c('impulses', 'responses') %in% names(newdata))) {
         stop('newdata must contain impulse and response data frames')
     }
-    predict_cdrgam(
+    .predict_cdrgam_streams(
         object,
         impulses=newdata$impulses,
         responses=newdata$responses,
@@ -799,47 +815,39 @@ print.cdrgam_block <- function(x, ...) {
 }
 
 #' @export
-summary.cdrgam_block <- function(object, ...) {
-    standard_errors <- sqrt(diag(object$Vp))
-    table <- cbind(
-        Estimate=object$coefficients,
-        `Std. Error`=standard_errors,
-        `t value`=object$coefficients / standard_errors
+summary.cdrgam_block <- function(
+        object,
+        dispersion=NULL,
+        freq=FALSE,
+        re.test=TRUE,
+        all.coefficients=FALSE,
+        ...
+) {
+    out <- .cdrgam_custom_summary(
+        object,
+        covariance=function(indices) object$Vp[indices, indices, drop=FALSE],
+        smooth_edf=.cdrgam_block_smooth_edf(object),
+        dispersion=dispersion,
+        all.coefficients=all.coefficients,
+        all_variances=function() diag(object$Vp)
     )
-    out <- list(
-        call=NULL,
-        family=object$family,
-        coefficients=table,
-        sp=object$sp,
-        scale=object$scale,
-        edf=object$edf,
-        df.residual=object$df.residual,
-        reml=object$reml,
-        backend=object$cdrgam$solver,
-        rank=object$cdrgam$rank
-    )
-    class(out) <- 'summary.cdrgam_block'
+    class(out) <- c('summary.cdrgam_block', 'summary.cdrgam', 'summary.gam')
     out
 }
 
 #' @export
 print.summary.cdrgam_block <- function(x, ...) {
-    cat('CDR-GAM block fit summary\n')
-    cat('Family:', x$family$family, '(', x$family$link, ')\n')
-    cat('Backend:', x$backend, '\n\n')
-    stats::printCoefmat(x$coefficients)
-    cat('\nSmoothing parameters:\n')
-    print(x$sp)
-    cat('\nScale:', format(x$scale, digits=7), '\n')
-    if (isTRUE(x$rank$parametric$corrected)) {
+    .print_summary_cdrgam(x, ...)
+    cat('Backend:', x$backend, '\n')
+    if (isTRUE(x$rank_metadata$parametric$corrected)) {
         cat(
             'Aliased parametric coefficients removed:',
-            paste(x$rank$parametric$dropped, collapse=', '), '\n'
+            paste(x$rank_metadata$parametric$dropped, collapse=', '), '\n'
         )
     }
-    if (!is.null(x$rank$resolution) &&
-            !identical(x$rank$resolution, 'none')) {
-        cat('Rank resolution:', x$rank$resolution, '\n')
+    if (!is.null(x$rank_metadata$resolution) &&
+            !identical(x$rank_metadata$resolution, 'none')) {
+        cat('Rank resolution:', x$rank_metadata$resolution, '\n')
     }
     invisible(x)
 }

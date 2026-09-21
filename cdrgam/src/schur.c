@@ -105,19 +105,36 @@ SEXP cdrgam_schur_factor_sparse(SEXP system, SEXP core_indices,
         }
     }
 
+    R_xlen_t total_columns_x = 0;
+    for (int g = 0; g < group_count; ++g)
+        total_columns_x += length(VECTOR_ELT(block_indices, g));
+    if (total_columns_x > INT_MAX)
+        error("Schur block dimension exceeds the matrix limit");
+    int total_columns = (int) total_columns_x;
+
+    int *block_offsets = (int *) R_alloc(
+        (size_t) group_count + 1, sizeof(int)
+    );
+    block_offsets[0] = 0;
+    for (int g = 0; g < group_count; ++g)
+        block_offsets[g + 1] = block_offsets[g] +
+            length(VECTOR_ELT(block_indices, g));
+
     SEXP core = PROTECT(allocMatrix(REALSXP, q, q));
     memset(REAL(core), 0, (size_t) q * q * sizeof(double));
     SEXP blocks = PROTECT(allocVector(VECSXP, group_count));
-    SEXP crosses = PROTECT(allocVector(VECSXP, group_count));
+    SEXP transfer = PROTECT(allocMatrix(REALSXP, q, total_columns));
+    memset(
+        REAL(transfer), 0,
+        (size_t) q * (size_t) total_columns * sizeof(double)
+    );
+    SEXP connections = PROTECT(allocVector(INTSXP, group_count));
     for (int g = 0; g < group_count; ++g) {
         int p = length(VECTOR_ELT(block_indices, g));
         SEXP block = PROTECT(allocMatrix(REALSXP, p, p));
-        SEXP cross = PROTECT(allocMatrix(REALSXP, q, p));
         memset(REAL(block), 0, (size_t) p * p * sizeof(double));
-        memset(REAL(cross), 0, (size_t) q * p * sizeof(double));
         SET_VECTOR_ELT(blocks, g, block);
-        SET_VECTOR_ELT(crosses, g, cross);
-        UNPROTECT(2);
+        UNPROTECT(1);
     }
 
     int *pointers = INTEGER(column_pointers);
@@ -142,23 +159,170 @@ SEXP cdrgam_schur_factor_sparse(SEXP system, SEXP core_indices,
                 REAL(block)[local_row + p * local_column] = value;
                 REAL(block)[local_column + p * local_row] = value;
             } else if (core_row >= 0 && column_block >= 0) {
-                SEXP cross = VECTOR_ELT(crosses, column_block);
-                REAL(cross)[core_row + q * block_position[column]] = value;
+                int local_column = block_offsets[column_block] +
+                    block_position[column];
+                REAL(transfer)[core_row + q * local_column] = value;
             } else if (core_column >= 0 && row_block >= 0) {
-                SEXP cross = VECTOR_ELT(crosses, row_block);
-                REAL(cross)[core_column + q * block_position[row]] = value;
+                int local_column = block_offsets[row_block] +
+                    block_position[row];
+                REAL(transfer)[core_column + q * local_column] = value;
             } else if (row != column) {
                 error("Sparse Schur layout contains coupling between blocks");
             }
         }
     }
 
-    SEXP dense_factor = PROTECT(cdrgam_schur_factor(core, blocks, crosses));
-    SEXP output = PROTECT(allocVector(VECSXP, 3));
-    SET_VECTOR_ELT(output, 0, VECTOR_ELT(dense_factor, 0));
-    SET_VECTOR_ELT(output, 1, VECTOR_ELT(dense_factor, 1));
-    SET_VECTOR_ELT(output, 2, crosses);
-    UNPROTECT(5);
+    int info;
+    const double one = 1.0;
+    const double minus_one = -1.0;
+    SEXP schur = PROTECT(duplicate(core));
+    SEXP cholesky = PROTECT(allocVector(VECSXP, group_count));
+    for (int g = 0; g < group_count; ++g) {
+        SEXP block = VECTOR_ELT(blocks, g);
+        int p = matrix_nrow(block);
+        SEXP chol = PROTECT(duplicate(block));
+        F77_CALL(dpotrf)("U", &p, REAL(chol), &p, &info FCONE);
+        check_info(info, "dpotrf");
+        for (int column = 0; column < p; ++column)
+            for (int row = column + 1; row < p; ++row)
+                REAL(chol)[row + p * column] = 0.0;
+        double *between = REAL(transfer) +
+            (size_t) q * (size_t) block_offsets[g];
+        F77_CALL(dtrsm)(
+            "R", "U", "N", "N", &q, &p, &one,
+            REAL(chol), &p, between, &q FCONE FCONE FCONE FCONE
+        );
+        int connected = 0;
+        for (int row = 0; row < q; ++row) {
+            int present = 0;
+            for (int column = 0; column < p; ++column) {
+                if (between[row + q * column] != 0.0) {
+                    present = 1;
+                    break;
+                }
+            }
+            connected += present;
+        }
+        INTEGER(connections)[g] = connected;
+        SET_VECTOR_ELT(cholesky, g, chol);
+        UNPROTECT(1);
+    }
+    F77_CALL(dsyrk)(
+        "U", "N", &q, &total_columns, &minus_one,
+        REAL(transfer), &q, &one, REAL(schur), &q FCONE FCONE
+    );
+    for (int g = 0; g < group_count; ++g) {
+        SEXP chol = VECTOR_ELT(cholesky, g);
+        int p = matrix_nrow(chol);
+        double *between = REAL(transfer) +
+            (size_t) q * (size_t) block_offsets[g];
+        F77_CALL(dtrsm)(
+            "R", "U", "T", "N", &q, &p, &one,
+            REAL(chol), &p, between, &q FCONE FCONE FCONE FCONE
+        );
+    }
+    SEXP core_cholesky = PROTECT(duplicate(schur));
+    F77_CALL(dpotrf)("U", &q, REAL(core_cholesky), &q, &info FCONE);
+    check_info(info, "Schur dpotrf");
+    for (int column = 0; column < q; ++column)
+        for (int row = column + 1; row < q; ++row)
+            REAL(core_cholesky)[row + q * column] = 0.0;
+
+    SEXP output = PROTECT(allocVector(VECSXP, 4));
+    SET_VECTOR_ELT(output, 0, core_cholesky);
+    SET_VECTOR_ELT(output, 1, cholesky);
+    SET_VECTOR_ELT(output, 2, transfer);
+    SET_VECTOR_ELT(output, 3, connections);
+    UNPROTECT(8);
+    return output;
+}
+
+SEXP cdrgam_schur_solve_batched(SEXP core_indices, SEXP block_indices,
+                                 SEXP transfer, SEXP block_cholesky,
+                                 SEXP core_cholesky, SEXP rhs) {
+    int n = matrix_nrow(rhs);
+    int nrhs = matrix_ncol(rhs);
+    int q = length(core_indices);
+    int group_count = length(block_indices);
+    int total_columns = matrix_ncol(transfer);
+    int info;
+    const double one = 1.0;
+    const double minus_one = -1.0;
+
+    if (matrix_nrow(transfer) != q)
+        error("Invalid batched Schur transfer dimensions");
+
+    SEXP output = PROTECT(allocMatrix(REALSXP, n, nrhs));
+    memset(REAL(output), 0, (size_t) n * nrhs * sizeof(double));
+    SEXP adjusted_sexp = PROTECT(allocMatrix(REALSXP, q, nrhs));
+    SEXP block_rhs_sexp = PROTECT(allocMatrix(REALSXP, total_columns, nrhs));
+    double *adjusted = REAL(adjusted_sexp);
+    double *block_rhs = REAL(block_rhs_sexp);
+    double *input = REAL(rhs);
+
+    for (int column = 0; column < nrhs; ++column)
+        for (int row = 0; row < q; ++row)
+            adjusted[row + q * column] =
+                input[(INTEGER(core_indices)[row] - 1) + n * column];
+
+    int offset = 0;
+    for (int g = 0; g < group_count; ++g) {
+        SEXP indices = VECTOR_ELT(block_indices, g);
+        int p = length(indices);
+        for (int column = 0; column < nrhs; ++column)
+            for (int row = 0; row < p; ++row)
+                block_rhs[offset + row + total_columns * column] =
+                    input[(INTEGER(indices)[row] - 1) + n * column];
+        offset += p;
+    }
+
+    F77_CALL(dgemm)(
+        "N", "N", &q, &nrhs, &total_columns, &minus_one,
+        REAL(transfer), &q, block_rhs, &total_columns,
+        &one, adjusted, &q FCONE FCONE
+    );
+
+    offset = 0;
+    for (int g = 0; g < group_count; ++g) {
+        SEXP indices = VECTOR_ELT(block_indices, g);
+        SEXP chol = VECTOR_ELT(block_cholesky, g);
+        int p = length(indices);
+        F77_CALL(dpotrs)(
+            "U", &p, &nrhs, REAL(chol), &p,
+            block_rhs + offset, &total_columns, &info FCONE
+        );
+        check_info(info, "block dpotrs");
+        offset += p;
+    }
+
+    F77_CALL(dpotrs)(
+        "U", &q, &nrhs, REAL(core_cholesky), &q,
+        adjusted, &q, &info FCONE
+    );
+    check_info(info, "core dpotrs");
+
+    F77_CALL(dgemm)(
+        "T", "N", &total_columns, &nrhs, &q, &minus_one,
+        REAL(transfer), &q, adjusted, &q,
+        &one, block_rhs, &total_columns FCONE FCONE
+    );
+
+    for (int column = 0; column < nrhs; ++column)
+        for (int row = 0; row < q; ++row)
+            REAL(output)[(INTEGER(core_indices)[row] - 1) + n * column] =
+                adjusted[row + q * column];
+    offset = 0;
+    for (int g = 0; g < group_count; ++g) {
+        SEXP indices = VECTOR_ELT(block_indices, g);
+        int p = length(indices);
+        for (int column = 0; column < nrhs; ++column)
+            for (int row = 0; row < p; ++row)
+                REAL(output)[(INTEGER(indices)[row] - 1) + n * column] =
+                    block_rhs[offset + row + total_columns * column];
+        offset += p;
+    }
+
+    UNPROTECT(3);
     return output;
 }
 

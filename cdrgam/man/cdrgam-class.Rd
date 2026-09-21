@@ -17,7 +17,8 @@ the native mgcv backend.}
 same fitted model with the \code{cdrgam} subclass removed.
 }
 \description{
-A fitted \code{cdrgam} object directly subclasses its native \pkg{mgcv}
-\code{gam} or \code{bam} result, so standard model methods work without
-unwrapping. These helpers test the class or remove only its CDR-GAM subclass.
+Fits from the native backend subclass their \pkg{mgcv} \code{gam} or
+\code{bam} result. Custom-backend fits implement the corresponding standard
+model methods without inheriting from \code{gam}. These helpers test the common
+CDR-GAM class or remove its subclass from a native-backend fit.
 }

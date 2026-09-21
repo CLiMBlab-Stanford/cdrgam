@@ -25,9 +25,9 @@ by_design <- prepare_cdrgam(
     quiet=TRUE
 )
 stopifnot(identical(names(by_design$terms), 'x:z'))
-by_native <- fit_cdrgam(by_design, backend='mgcv', engine='gam', method='REML')
-by_block <- fit_cdrgam(by_design, backend='block', method='REML')
-by_sparse <- fit_cdrgam(by_design, backend='sparse', method='REML')
+by_native <- cdrgam.fit(by_design, backend='mgcv', engine='gam', method='REML')
+by_block <- cdrgam.fit(by_design, backend='block', method='REML')
+by_sparse <- cdrgam.fit(by_design, backend='sparse', method='REML')
 stopifnot(max(abs(fitted(by_native) - fitted(by_block))) < 5e-4)
 stopifnot(max(abs(fitted(by_native) - fitted(by_sparse))) < 5e-4)
 
@@ -58,14 +58,14 @@ varying_design <- prepare_cdrgam(
     quiet=TRUE
 )
 stopifnot(identical(names(varying_design$terms), c('x', 'x~z')))
-varying_native <- fit_cdrgam(
+varying_native <- cdrgam.fit(
     varying_design,
     backend='mgcv',
     engine='gam',
     method='REML'
 )
-varying_block <- fit_cdrgam(varying_design, backend='block', method='REML')
-varying_sparse <- fit_cdrgam(varying_design, backend='sparse', method='REML')
+varying_block <- cdrgam.fit(varying_design, backend='block', method='REML')
+varying_sparse <- cdrgam.fit(varying_design, backend='sparse', method='REML')
 stopifnot(max(abs(fitted(varying_native) - fitted(varying_block))) < 8e-4)
 stopifnot(max(abs(fitted(varying_native) - fitted(varying_sparse))) < 8e-4)
 
@@ -76,6 +76,31 @@ surface <- estimate_irf(
     predictor=c(-1, 0, 1)
 )
 stopifnot(nrow(surface) == 93L, all(is.finite(surface$estimate)))
+varying_term <- plot(
+    varying_sparse,
+    view='irf',
+    select='x~z',
+    component='term',
+    at=list(lag=seq(0, 2, length.out=31), predictor=c(-1, 0, 1)),
+    draw=FALSE
+)$panels[[1L]]$data
+varying_total <- plot(
+    varying_sparse,
+    view='irf',
+    select='x~z',
+    component='total',
+    at=list(lag=seq(0, 2, length.out=31), predictor=c(-1, 0, 1)),
+    draw=FALSE
+)$panels[[1L]]$data
+varying_baseline <- estimate_irf(
+    varying_sparse,
+    term='x',
+    lag=seq(0, 2, length.out=31)
+)
+stopifnot(max(abs(
+    varying_total$estimate -
+        (varying_term$estimate + rep(varying_baseline$estimate, times=3L))
+)) < 1e-10)
 prediction_data <- list(
     impulses=base$impulses,
     responses=base$responses[names(base$responses) != 'response']

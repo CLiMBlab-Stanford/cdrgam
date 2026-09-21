@@ -7,13 +7,16 @@ prepare_cdrgam(
   formula,
   impulses,
   responses,
+  window = NULL,
   series = character(),
   impulse_time = "time",
   response_time = "time",
   history = c("auto", "dense", "ragged"),
   history_length = Inf,
   chunk_size = 10000,
-  quiet = FALSE
+  rescale_predictors = FALSE,
+  quiet = FALSE,
+  drop.unused.levels = TRUE
 )
 }
 \arguments{
@@ -21,6 +24,9 @@ prepare_cdrgam(
 \code{irf()} terms. An implicit \code{irf(1)} is added unless suppressed.}
 \item{impulses}{Data frame with one row per impulse.}
 \item{responses}{Data frame with one row per response.}
+\item{window}{Default inclusive lag window inherited by each \code{irf()}
+term that does not supply its own window. \code{NULL} retains the term-level
+default \code{c(0, Inf)}.}
 \item{series}{Character vector naming independent-series columns.}
 \item{impulse_time}{Name of the impulse-time column.}
 \item{response_time}{Name of the response-time column.}
@@ -28,10 +34,28 @@ prepare_cdrgam(
 \item{history_length}{Maximum number of most-recent impulses retained within
 each IRF lag window; \code{Inf} retains all impulses.}
 \item{chunk_size}{Maximum responses or links transformed in a chunk.}
+\item{rescale_predictors}{If \code{TRUE}, divide continuous numeric
+predictors by their training-data standard deviations without centering.
+Binary, constant, categorical, grouping, and series variables are unchanged.
+Lag and explicit time predictors share the standard deviation of the untiled
+impulse-time column, after history links have been constructed in native time
+units.}
+\item{drop.unused.levels}{Drop factor levels without training observations.
+The default matches \code{mgcv::gam()}. Retained levels remain part of the
+fitted factor vocabulary.}
 \item{quiet}{Suppress preparation-plan messages.}
 }
-\value{A reusable \code{cdrgam_design} object.}
+\value{A reusable \code{cdrgam_design} object. Its \code{simplifications}
+data frame records automatic axis-basis reductions and
+lower-dimensional representations of discrete predictor axes.}
 \description{
 Validates and aligns untiled streams, selects or applies a history layout, and
-constructs response-level spline designs in bounded-memory chunks.
+constructs response-level spline designs in bounded-memory chunks. Requested
+axis basis dimensions are reduced when the linked data support fewer distinct
+values and the marginal basis minimum remains.
+Nonlinear IRFs with one or two linked predictor values are represented as
+linear IRFs using their original numeric coding. Optional scaling is an
+upstream data transformation and does not modify the user, normalized, or
+effective model formula. Its training-data divisors and exclusions are stored
+in the returned object's \code{scaling} component.
 }

@@ -180,6 +180,7 @@
         restart_count=as.integer(restart_count),
         completed_runs=list(),
         optimizer_progress=NULL,
+        optimizer_state=NULL,
         optimizer_history=list(),
         current_log_sp=NULL,
         current_criterion=Inf,
@@ -253,6 +254,114 @@
     list(hessian=out, evaluations=evaluations)
 }
 
+.central_difference_jacobian <- function(fn, parameters, step=1e-3) {
+    count <- length(parameters)
+    out <- matrix(0, nrow=count, ncol=count)
+    for (j in seq_len(count)) {
+        forward <- backward <- parameters
+        forward[[j]] <- forward[[j]] + step
+        backward[[j]] <- backward[[j]] - step
+        forward_value <- fn(forward)
+        backward_value <- fn(backward)
+        if (!is.numeric(forward_value) || !is.numeric(backward_value) ||
+                length(forward_value) != count ||
+                length(backward_value) != count ||
+                any(!is.finite(forward_value)) ||
+                any(!is.finite(backward_value))) {
+            stop('Central-difference Jacobian received a non-finite score')
+        }
+        out[, j] <- (forward_value - backward_value) / (2 * step)
+    }
+    # Roundoff and inexact sparse solves can make a differentiated gradient
+    # very slightly asymmetric. A scalar objective has a symmetric Hessian.
+    out <- (out + t(out)) / 2
+    list(hessian=out, evaluations=2L * count)
+}
+
+.analytic_outer_convergence_assessment <- function(
+        hessian,
+        gradient,
+        criterion,
+        gradient_tolerance,
+        initial_radius,
+        objective_noise=0
+) {
+    hessian <- (as.matrix(hessian) + t(as.matrix(hessian))) / 2
+    decomposition <- eigen(hessian, symmetric=TRUE)
+    values <- decomposition$values
+    vectors <- decomposition$vectors
+    scale <- max(1, max(abs(values)))
+    curvature_tolerance <- scale * sqrt(.Machine$double.eps)
+    positive <- values > curvature_tolerance
+    coordinates <- drop(crossprod(vectors, gradient))
+    step_coordinates <- numeric(length(values))
+    if (any(positive)) {
+        step_coordinates[positive] <-
+            -coordinates[positive] / values[positive]
+    }
+    newton_step <- drop(vectors %*% step_coordinates)
+    predicted_improvement <- if (any(positive)) {
+        sum(coordinates[positive]^2 / values[positive]) / 2
+    } else {
+        0
+    }
+    unresolved_gradient <- if (any(!positive)) {
+        max(abs(coordinates[!positive]))
+    } else {
+        0
+    }
+    step_max <- if (length(newton_step)) max(abs(newton_step)) else 0
+    # REML criteria scale with the number of observations. Improvements below
+    # this relative floor are not reliably distinguishable from sparse
+    # factorization roundoff and cannot justify movement along a flat outer
+    # direction.
+    baseline_objective_floor <- max(
+        1e-8,
+        1e-10 * (1 + abs(criterion))
+    )
+    if (!is.numeric(objective_noise) || length(objective_noise) != 1L ||
+            !is.finite(objective_noise) || objective_noise < 0) {
+        objective_noise <- 0
+    }
+    objective_floor <- max(baseline_objective_floor, objective_noise)
+    converged <- is.finite(predicted_improvement) &&
+        predicted_improvement <= objective_floor &&
+        unresolved_gradient <= gradient_tolerance
+    eigenvalue_floor <- scale * 1e-6
+    restart_hessian <- vectors %*% (
+        pmax(values, eigenvalue_floor) * t(vectors)
+    )
+    restart_hessian <- (restart_hessian + t(restart_hessian)) / 2
+    restart_radius <- min(
+        initial_radius,
+        max(0.1, 4 * sqrt(sum(newton_step^2)))
+    )
+    diagnostics <- list(
+        predicted_improvement=predicted_improvement,
+        objective_floor=objective_floor,
+        baseline_objective_floor=baseline_objective_floor,
+        observed_objective_noise=objective_noise,
+        newton_step_max=step_max,
+        unresolved_gradient=unresolved_gradient,
+        curvature_tolerance=curvature_tolerance,
+        minimum_eigenvalue=min(values),
+        positive_directions=sum(positive),
+        flat_directions=sum(!positive),
+        dimension=length(values)
+    )
+    list(
+        converged=converged,
+        message=if (converged) {
+            'analytic practical convergence reached in the identifiable subspace'
+        } else {
+            'analytic Hessian found unresolved local improvement'
+        },
+        restart_hessian=restart_hessian,
+        restart_radius=restart_radius,
+        diagnostics=diagnostics
+    )
+}
+
 # Experimental bounded, safeguarded dense-BFGS outer optimizer. Unlike
 # stats::optim() with a numerical score, an accepted iteration needs one
 # objective factorization; the exact score is then assembled from the retained
@@ -268,17 +377,23 @@
         gradient_tolerance=1e-4,
         initial_radius=2,
         maximum_radius=10,
-        progress=NULL
+        progress=NULL,
+        state=NULL,
+        convergence_assessment=NULL,
+        maximum_recovery_resets=2L,
+        minimum_radius=1e-8
 ) {
     par <- pmin(upper, pmax(lower, as.numeric(par)))
     dimension <- length(par)
-    function_count <- 1L
-    gradient_count <- 1L
-    value <- fn(par)
-    gradient <- gr(par)
-    scale <- max(1, max(abs(gradient)))
-    hessian <- diag(scale, dimension)
-    radius <- initial_radius
+    maximum_recovery_resets <- as.integer(maximum_recovery_resets)
+    if (length(maximum_recovery_resets) != 1L ||
+            is.na(maximum_recovery_resets) || maximum_recovery_resets < 0L) {
+        stop('maximum_recovery_resets must be a non-negative integer')
+    }
+    if (!is.numeric(minimum_radius) || length(minimum_radius) != 1L ||
+            !is.finite(minimum_radius) || minimum_radius <= 0) {
+        stop('minimum_radius must be positive')
+    }
     projected_gradient <- function(parameters, score) {
         out <- score
         at_lower <- parameters <= lower + 1e-10
@@ -287,19 +402,212 @@
         out[at_upper & out < 0] <- 0
         out
     }
-    emit_progress <- function(record) {
-        if (!is.null(progress)) progress(record)
-        invisible(record)
+    scalar_finite <- function(value) {
+        is.numeric(value) && length(value) == 1L && is.finite(value)
     }
-    accepted_steps <- 0L
-    rejected <- 0L
-    consecutive_rejections <- 0L
-    curvature_resets <- 0L
-    consecutive_small <- 0L
+    state_counters <- if (is.list(state)) c(
+        state$function_evaluations,
+        state$gradient_evaluations,
+        state$accepted_steps,
+        state$rejected_steps,
+        state$consecutive_rejections,
+        state$curvature_resets,
+        state$consecutive_small_steps,
+        state$recovery_resets,
+        state$iteration
+    ) else numeric()
+    valid_state <- !is.null(state) && is.list(state) &&
+        identical(state$version, 1L) &&
+        identical(state$optimizer, 'safeguarded_outer_bfgs') &&
+        length(state$parameters) == dimension &&
+        length(state$gradient) == dimension &&
+        identical(dim(state$hessian), c(dimension, dimension)) &&
+        all(is.finite(state$parameters)) && all(is.finite(state$gradient)) &&
+        all(is.finite(state$hessian)) && scalar_finite(state$criterion) &&
+        scalar_finite(state$trust_radius) && state$trust_radius > 0 &&
+        length(state_counters) == 9L && all(is.finite(state_counters)) &&
+        all(state_counters >= 0)
+    if (!is.null(state) && !valid_state) {
+        warning(
+            'Saved trust-optimizer state is invalid; resuming from its ',
+            'parameters with fresh curvature.',
+            call.=FALSE
+        )
+        if (is.list(state) && length(state$parameters) == dimension &&
+                all(is.finite(state$parameters))) {
+            par <- pmin(upper, pmax(lower, as.numeric(state$parameters)))
+        }
+    }
+    resumed <- isTRUE(valid_state)
+    if (resumed) {
+        par <- pmin(upper, pmax(lower, as.numeric(state$parameters)))
+        value <- as.numeric(state$criterion)
+        gradient <- as.numeric(state$gradient)
+        hessian <- as.matrix(state$hessian)
+        radius <- as.numeric(state$trust_radius)
+        function_count <- as.integer(state$function_evaluations)
+        gradient_count <- as.integer(state$gradient_evaluations)
+        accepted_steps <- as.integer(state$accepted_steps)
+        rejected <- as.integer(state$rejected_steps)
+        consecutive_rejections <- as.integer(state$consecutive_rejections)
+        curvature_resets <- as.integer(state$curvature_resets)
+        consecutive_small <- as.integer(state$consecutive_small_steps)
+        recovery_resets <- as.integer(state$recovery_resets)
+        completed_iteration <- as.integer(state$iteration)
+        counters <- c(
+            function_count, gradient_count, accepted_steps, rejected,
+            consecutive_rejections, curvature_resets, consecutive_small,
+            recovery_resets, completed_iteration
+        )
+        if (anyNA(counters) || any(counters < 0L)) {
+            stop('Saved trust-optimizer state has invalid counters')
+        }
+    } else {
+        function_count <- 1L
+        gradient_count <- 1L
+        value <- fn(par)
+        gradient <- gr(par)
+        scale <- max(1, max(abs(gradient)))
+        hessian <- diag(scale, dimension)
+        radius <- initial_radius
+        accepted_steps <- 0L
+        rejected <- 0L
+        consecutive_rejections <- 0L
+        curvature_resets <- 0L
+        consecutive_small <- 0L
+        recovery_resets <- 0L
+        completed_iteration <- 0L
+    }
+    optimizer_state <- function(iteration) list(
+        version=1L,
+        optimizer='safeguarded_outer_bfgs',
+        parameters=par,
+        criterion=value,
+        gradient=gradient,
+        hessian=hessian,
+        trust_radius=radius,
+        iteration=as.integer(iteration),
+        function_evaluations=function_count,
+        gradient_evaluations=gradient_count,
+        accepted_steps=accepted_steps,
+        rejected_steps=rejected,
+        consecutive_rejections=consecutive_rejections,
+        curvature_resets=curvature_resets,
+        consecutive_small_steps=consecutive_small,
+        recovery_resets=recovery_resets
+    )
+    history <- list()
+    emit_progress <- function(record, save=TRUE) {
+        if (save) history[[length(history) + 1L]] <<- record
+        emitted <- record
+        emitted$optimizer_state <- optimizer_state(record$iteration)
+        if (!is.null(progress)) progress(emitted)
+        invisible(emitted)
+    }
+    observed_objective_noise <- function() {
+        if (!length(history)) return(0)
+        microscopic <- 1e-5 * max(1, max(abs(par)))
+        parameter_tolerance <- sqrt(.Machine$double.eps) *
+            max(1, max(abs(par)))
+        degradation <- vapply(history, function(entry) {
+            if (!identical(entry$event, 'rejected') ||
+                    !is.numeric(entry$parameters) ||
+                    length(entry$parameters) != length(par) ||
+                    any(!is.finite(entry$parameters)) ||
+                    max(abs(entry$parameters - par)) > parameter_tolerance ||
+                    !is.numeric(entry$step_max) ||
+                    !is.finite(entry$step_max) ||
+                    entry$step_max > microscopic ||
+                    !is.numeric(entry$actual_improvement) ||
+                    !is.finite(entry$actual_improvement) ||
+                    entry$actual_improvement >= 0) return(NA_real_)
+            -entry$actual_improvement
+        }, numeric(1))
+        degradation <- utils::tail(degradation[is.finite(degradation)], 5L)
+        if (length(degradation) < 3L) return(0)
+        stats::median(degradation)
+    }
+    assess_stagnation <- function(record, reason) {
+        assessment <- if (is.null(convergence_assessment)) NULL else {
+            tryCatch(
+                convergence_assessment(
+                    par,
+                    value,
+                    gradient,
+                    objective_noise=observed_objective_noise()
+                ),
+                error=function(error) list(
+                    converged=FALSE,
+                    message=paste(
+                        'curvature convergence assessment failed:',
+                        conditionMessage(error)
+                    )
+                )
+            )
+        }
+        if (is.list(assessment) && isTRUE(assessment$converged)) {
+            certified <- record
+            certified$event <- 'convergence_certified'
+            certified$step_type <- 'curvature_certification'
+            certified$assessment <- assessment$diagnostics
+            certified$stagnation_reason <- reason
+            emit_progress(certified)
+            return(list(
+                action='converged',
+                message=if (!is.null(assessment$message)) {
+                    assessment$message
+                } else {
+                    'curvature numerical-floor convergence reached'
+                }
+            ))
+        }
+        can_recover <- recovery_resets < maximum_recovery_resets
+        replacement <- if (is.list(assessment)) {
+            assessment$restart_hessian
+        } else {
+            NULL
+        }
+        if (can_recover && is.matrix(replacement) &&
+                identical(dim(replacement), c(dimension, dimension)) &&
+                all(is.finite(replacement))) {
+            hessian <<- (replacement + t(replacement)) / 2
+            replacement_radius <- assessment$restart_radius
+            if (!is.numeric(replacement_radius) ||
+                    length(replacement_radius) != 1L ||
+                    !is.finite(replacement_radius) ||
+                    replacement_radius <= minimum_radius) {
+                replacement_radius <- min(initial_radius, 0.1)
+            }
+            radius <<- min(maximum_radius, replacement_radius)
+            consecutive_rejections <<- 0L
+            consecutive_small <<- 0L
+            recovery_resets <<- recovery_resets + 1L
+            curvature_resets <<- curvature_resets + 1L
+            recovery <- record
+            recovery$event <- 'curvature_recovery'
+            recovery$trust_radius <- radius
+            recovery$consecutive_rejections <- 0L
+            recovery$consecutive_small_steps <- 0L
+            recovery$curvature_resets <- curvature_resets
+            recovery$curvature_reset <- TRUE
+            recovery$step_type <- 'curvature_hessian_reset'
+            recovery$recovery_resets <- recovery_resets
+            recovery$assessment <- assessment$diagnostics
+            recovery$stagnation_reason <- reason
+            emit_progress(recovery)
+            return(list(action='recovered'))
+        }
+        detail <- if (is.list(assessment) && !is.null(assessment$message)) {
+            assessment$message
+        } else {
+            'no analytic recovery was available'
+        }
+        list(action='failed', message=paste0(reason, '; ', detail))
+    }
     projected <- projected_gradient(par, gradient)
     initial_record <- list(
-        event='initial',
-        iteration=0L,
+        event=if (resumed) 'resumed' else 'initial',
+        iteration=completed_iteration,
         parameters=par,
         criterion=value,
         candidate_criterion=value,
@@ -315,22 +623,45 @@
         actual_improvement=NA_real_,
         acceptance_ratio=NA_real_,
         accepted=TRUE,
-        accepted_steps=0L,
-        rejected_steps=0L,
-        consecutive_rejections=0L,
-        curvature_resets=0L,
+        accepted_steps=accepted_steps,
+        rejected_steps=rejected,
+        consecutive_rejections=consecutive_rejections,
+        curvature_resets=curvature_resets,
         curvature_reset=FALSE,
-        step_type='initial',
-        consecutive_small_steps=0L,
+        step_type=if (resumed) 'resumed' else 'initial',
+        consecutive_small_steps=consecutive_small,
+        recovery_resets=recovery_resets,
         function_evaluations=function_count,
         gradient_evaluations=gradient_count
     )
-    history <- list(initial_record)
     emit_progress(initial_record)
     convergence <- 1L
     message <- 'iteration limit reached'
-    iterations <- 0L
-    for (iteration in seq_len(maxit)) {
+    iterations <- completed_iteration
+    continue_optimization <- TRUE
+    if (resumed && (radius < minimum_radius || consecutive_small >= 3L)) {
+        reason <- if (radius < minimum_radius) {
+            'trust radius was below its minimum on resume'
+        } else {
+            'accepted steps had ceased making numerically resolvable progress'
+        }
+        outcome <- assess_stagnation(initial_record, reason)
+        if (identical(outcome$action, 'converged')) {
+            convergence <- 0L
+            message <- outcome$message
+            continue_optimization <- FALSE
+        } else if (identical(outcome$action, 'failed')) {
+            message <- outcome$message
+            continue_optimization <- FALSE
+        }
+    }
+    iteration_sequence <- if (continue_optimization &&
+            completed_iteration < maxit) {
+        seq.int(completed_iteration + 1L, maxit)
+    } else {
+        integer()
+    }
+    for (iteration in iteration_sequence) {
         projected <- projected_gradient(par, gradient)
         projected_norm <- max(abs(projected))
         if (projected_norm <= gradient_tolerance) {
@@ -363,7 +694,7 @@
         candidate <- pmin(upper, pmax(lower, par + direction))
         step <- candidate - par
         model_reduction <- function(candidate_step) {
-            reduction <- -sum(gradient * candidate_step) -
+            reduction <- -sum(projected * candidate_step) -
                 drop(crossprod(
                     candidate_step,
                     hessian %*% candidate_step
@@ -415,6 +746,24 @@
             -Inf
         }
         accepted <- is.finite(ratio) && ratio > 1e-4 && actual > 0
+        candidate_gradient <- NULL
+        objective_floor <- max(1e-10, 1e-10 * (1 + abs(value)))
+        noise_limited <- !accepted && is.finite(candidate_value) &&
+            predicted > 0 && predicted <= objective_floor &&
+            actual >= -objective_floor
+        if (noise_limited) {
+            candidate_gradient <- gr(candidate)
+            gradient_count <- gradient_count + 1L
+            candidate_projected <- projected_gradient(
+                candidate,
+                candidate_gradient
+            )
+            candidate_norm <- max(abs(candidate_projected))
+            accepted <- candidate_norm <= gradient_tolerance ||
+                candidate_norm < projected_norm -
+                    sqrt(.Machine$double.eps) * max(1, projected_norm)
+            if (accepted) step_type <- paste0(step_type, '_noise_limited')
+        }
         if (!accepted) {
             rejected <- rejected + 1L
             consecutive_rejections <- consecutive_rejections + 1L
@@ -452,19 +801,33 @@
                 curvature_reset=curvature_reset,
                 step_type=step_type,
                 consecutive_small_steps=consecutive_small,
+                recovery_resets=recovery_resets,
                 function_evaluations=function_count,
                 gradient_evaluations=gradient_count
             )
-            history[[length(history) + 1L]] <- record
             emit_progress(record)
-            if (radius < 1e-8) {
-                message <- 'trust radius became too small'
+            if (radius < minimum_radius) {
+                outcome <- assess_stagnation(
+                    record,
+                    'trust radius became too small'
+                )
+                if (identical(outcome$action, 'converged')) {
+                    convergence <- 0L
+                    message <- outcome$message
+                    break
+                }
+                if (identical(outcome$action, 'recovered')) {
+                    next
+                }
+                message <- outcome$message
                 break
             }
             next
         }
-        candidate_gradient <- gr(candidate)
-        gradient_count <- gradient_count + 1L
+        if (is.null(candidate_gradient)) {
+            candidate_gradient <- gr(candidate)
+            gradient_count <- gradient_count + 1L
+        }
         difference <- candidate_gradient - gradient
         hessian_step <- drop(crossprod(step, hessian %*% step))
         curvature <- sum(step * difference)
@@ -529,11 +892,27 @@
             curvature_reset=FALSE,
             step_type=step_type,
             consecutive_small_steps=consecutive_small,
+            recovery_resets=recovery_resets,
             function_evaluations=function_count,
             gradient_evaluations=gradient_count
         )
-        history[[length(history) + 1L]] <- record
         emit_progress(record)
+        if (radius < minimum_radius || consecutive_small >= 3L) {
+            reason <- if (radius < minimum_radius) {
+                'trust radius became too small after an accepted step'
+            } else {
+                'accepted steps ceased making numerically resolvable progress'
+            }
+            outcome <- assess_stagnation(record, reason)
+            if (identical(outcome$action, 'converged')) {
+                convergence <- 0L
+                message <- outcome$message
+                break
+            }
+            if (identical(outcome$action, 'recovered')) next
+            message <- outcome$message
+            break
+        }
     }
     final_projected <- projected_gradient(par, gradient)
     emit_progress(list(
@@ -561,11 +940,12 @@
         curvature_reset=FALSE,
         step_type='finished',
         consecutive_small_steps=consecutive_small,
+        recovery_resets=recovery_resets,
         function_evaluations=function_count,
         gradient_evaluations=gradient_count,
         convergence=convergence,
         message=message
-    ))
+    ), save=FALSE)
     list(
         par=par,
         value=value,
@@ -577,6 +957,8 @@
         iterations=iterations,
         rejected_steps=rejected,
         curvature_resets=curvature_resets,
+        recovery_resets=recovery_resets,
+        optimizer_state=optimizer_state(iterations),
         history=history
     )
 }

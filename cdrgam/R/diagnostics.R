@@ -1,4 +1,4 @@
-#' Evaluate fitted fixed-effect impulse-response functions
+#' Evaluate fitted impulse-response function terms
 #'
 #' @param object A fitted `cdrgam` model.
 #' @param term Term name or one-based term number. Omit to evaluate every IRF.
@@ -7,8 +7,11 @@
 #' @param n Number of default grid points.
 #' @param predictor Optional predictor-value grid for nonlinear IRFs.
 #' @param n_predictor Number of default predictor grid points.
-#' @param level Optional grouping levels for random IRFs. By default all fitted
-#'   levels are returned.
+#' @param at Named list of evaluation values for smooth response-time and
+#'   predictor axes. `predictor` remains an alias for the first non-lag axis;
+#'   additional axes default to their fitted-grid medians.
+#' @param group Optional grouping levels for grouped IRF deviations. By default
+#'   all fitted levels are returned.
 #' @param se Include pointwise standard errors when covariance is available.
 #' @param unconditional Include smoothing-parameter uncertainty in standard
 #'   errors when supported by the fitted backend.
@@ -21,7 +24,8 @@ estimate_irf <- function(
         n=200,
         predictor=NULL,
         n_predictor=25,
-        level=NULL,
+        at=list(),
+        group=NULL,
         se=TRUE,
         unconditional=FALSE
 ) {
@@ -56,40 +60,92 @@ estimate_irf <- function(
     for (j in seq_along(indices)) {
         i <- indices[[j]]
         info <- metadata[[i]]
+        lag_scale <- if (is.null(info$lag_scale)) 1 else info$lag_scale
+        predictor_scale <- if (is.null(info$predictor_scale)) {
+            1
+        } else info$predictor_scale
+        amplitude_scale <- if (is.null(info$amplitude_scale)) {
+            1
+        } else info$amplitude_scale
         lag_grid <- lag
         if (is.null(lag_grid)) {
-            lag_grid <- seq(min(info$knots), max(info$knots), length.out=n)
+            lag_grid <- seq(
+                min(info$knots) * lag_scale,
+                max(info$knots) * lag_scale,
+                length.out=n
+            )
         }
         if (!is.numeric(lag_grid) || any(!is.finite(lag_grid))) {
             stop('lag must be a finite numeric vector')
         }
-        is_surface <- startsWith(info$type, 'nonlinear') ||
+        is_surface <- (!is.null(info$axis) && length(info$axis) > 1L) ||
+            startsWith(info$type, 'nonlinear') ||
             startsWith(info$type, 'varying')
         if (is_surface) {
-            predictor_grid <- predictor
-            if (is.null(predictor_grid)) {
-                predictor_grid <- seq(
-                    min(info$predictor_knots),
-                    max(info$predictor_knots),
-                    length.out=n_predictor
+            if (!is.null(info$axis)) {
+                grid_values <- list(lag=lag_grid)
+                for (axis_index in seq.int(2L, length(info$axis))) {
+                    axis <- info$axis[[axis_index]]
+                    requested <- at[[axis$variable]]
+                    if (is.null(requested) && axis_index == 2L) {
+                        requested <- predictor
+                    }
+                    if (is.null(requested)) {
+                        requested <- if (axis_index == 2L) {
+                            seq(
+                                min(axis$grid), max(axis$grid),
+                                length.out=n_predictor
+                            ) * axis$scale
+                        } else stats::median(axis$grid) * axis$scale
+                    }
+                    if (!is.numeric(requested) || any(!is.finite(requested))) {
+                        stop('IRF axis values must be finite numeric vectors')
+                    }
+                    grid_values[[axis$variable]] <- requested
+                }
+                evaluation_grid <- do.call(expand.grid, c(
+                    grid_values,
+                    list(KEEP.OUT.ATTRS=FALSE, stringsAsFactors=FALSE)
+                ))
+                axis_data <- setNames(lapply(seq_along(info$axis), function(index) {
+                    axis <- info$axis[[index]]
+                    value <- if (index == 1L) evaluation_grid$lag else
+                        evaluation_grid[[axis$variable]]
+                    value / axis$scale
+                }), vapply(info$axis, `[[`, character(1), 'internal'))
+                basis <- mgcv::PredictMat(
+                    info$basis,
+                    axis_data,
+                    n=nrow(evaluation_grid)
+                ) %*% info$transform
+                evaluation_grid$predictor <- evaluation_grid[[
+                    info$axis[[2L]]$variable
+                ]]
+            } else {
+                predictor_grid <- predictor
+                if (is.null(predictor_grid)) {
+                    predictor_grid <- seq(
+                        min(info$predictor_knots) * predictor_scale,
+                        max(info$predictor_knots) * predictor_scale,
+                        length.out=n_predictor
+                    )
+                }
+                if (!is.numeric(predictor_grid) || any(!is.finite(predictor_grid))) {
+                    stop('predictor must be a finite numeric vector')
+                }
+                evaluation_grid <- expand.grid(
+                    lag=lag_grid,
+                    predictor=predictor_grid
                 )
+                basis <- mgcv::PredictMat(
+                    info$basis,
+                    list(
+                        cdr_delay=evaluation_grid$lag / lag_scale,
+                        cdr_value=evaluation_grid$predictor / predictor_scale
+                    ),
+                    n=nrow(evaluation_grid)
+                ) %*% info$transform
             }
-            if (!is.numeric(predictor_grid) || any(!is.finite(predictor_grid))) {
-                stop('predictor must be a finite numeric vector')
-            }
-            evaluation_grid <- expand.grid(
-                lag=lag_grid,
-                predictor=predictor_grid
-            )
-            basis <- mgcv::PredictMat(
-                info$basis,
-                list(
-                    cdr_delay=evaluation_grid$lag,
-                    cdr_value=evaluation_grid$predictor
-                ),
-                n=nrow(evaluation_grid)
-            )
-            basis <- basis %*% info$transform
         } else {
             evaluation_grid <- data.frame(
                 lag=lag_grid,
@@ -97,22 +153,23 @@ estimate_irf <- function(
             )
             basis <- mgcv::PredictMat(
                 info$basis,
-                list(cdr_delta=lag_grid),
+                list(cdr_delta=lag_grid / lag_scale),
                 n=length(lag_grid)
             )
             if (!is.null(info$transform)) {
                 basis <- basis %*% info$transform
             }
         }
+        basis <- basis / amplitude_scale
         coefficient_index <- info$coefficient_index
         grouped <- length(info$group_levels) > 0L
         levels_to_evaluate <- if (grouped) {
-            if (is.null(level)) info$group_levels else as.character(level)
+            if (is.null(group)) info$group_levels else as.character(group)
         } else {
             NA_character_
         }
         if (grouped && any(!(levels_to_evaluate %in% info$group_levels))) {
-            stop('Unknown random-IRF grouping level requested')
+            stop('Unknown grouped-IRF deviation level requested')
         }
         for (group_level in levels_to_evaluate) {
             term_index <- coefficient_index
@@ -144,17 +201,29 @@ estimate_irf <- function(
                     rowSums((basis %*% term_covariance) * basis)
                 ))
             }
-            output[[length(output) + 1L]] <- data.frame(
+            result <- data.frame(
                 term=labels[[i]],
                 group=if (grouped) group_level else NA_character_,
-                lag=evaluation_grid$lag,
-                predictor=evaluation_grid$predictor,
+                evaluation_grid,
                 estimate=estimate,
                 se=standard_error,
-                stringsAsFactors=FALSE
+                stringsAsFactors=FALSE,
+                check.names=FALSE
             )
+            leading <- c('term', 'group', 'lag', 'predictor')
+            output[[length(output) + 1L]] <- result[c(
+                leading[leading %in% names(result)],
+                setdiff(names(result), c(leading, 'estimate', 'se')),
+                'estimate', 'se'
+            )]
         }
     }
+    columns <- unique(unlist(lapply(output, names)))
+    output <- lapply(output, function(value) {
+        missing <- setdiff(columns, names(value))
+        for (name in missing) value[[name]] <- NA
+        value[columns]
+    })
     do.call(rbind, output)
 }
 
@@ -189,6 +258,11 @@ variance_components <- function(object, rescale=TRUE, conf.lev=0.95) {
     }
     if (!inherits(object, c('cdrgam_block', 'cdrgam_sparse'))) {
         stop('Unsupported cdrgam fitting backend')
+    }
+    if (inherits(object, 'cdrgam_sparse') &&
+            is.null(object$outer.info$hess) &&
+            is.environment(object$sparse$deferred_hessian)) {
+        object$outer.info$hess <- .sparse_resolve_outer_hessian(object)
     }
 
     # gam.vcomp() only depends on this subset of a fitted gam object. Using it

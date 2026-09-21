@@ -63,9 +63,9 @@ for (case in seq_len(3L)) {
         )))
     }
 
-    native <- fit_cdrgam(dense, backend='mgcv', engine='gam', method='REML')
-    block <- fit_cdrgam(ragged, backend='block', method='REML')
-    sparse <- fit_cdrgam(
+    native <- cdrgam.fit(dense, backend='mgcv', engine='gam', method='REML')
+    block <- cdrgam.fit(ragged, backend='block', method='REML')
+    sparse <- cdrgam.fit(
         ragged,
         backend='sparse',
         method='REML',

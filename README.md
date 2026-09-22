@@ -59,6 +59,18 @@ prediction <- predict(model, newdata = list(
 ))
 ```
 
+The native `mgcv` backend accepts Gaussian, binomial, Poisson, and Gamma
+families through the validated `cdrgam_family()` registry, with an optional
+explicit link. Stream-aware prediction supports both response and link
+scales. The dense block backend provides a generalized reference
+implementation for `poisson(log)`, `binomial(logit)`, and
+estimated-dispersion `Gamma(log)` models using safeguarded penalized IRLS and
+Laplace marginal-likelihood optimization. The sparse backend supports the
+same families with streamed PIRLS, numeric sparse-factor updates, and an exact
+Laplace score. Canonical fixed-dispersion fits use safeguarded trust-region
+BFGS; Gamma uses exact-gradient L-BFGS-B to avoid a boundary-adjacent secondary
+basin. Noncanonical links remain native-only.
+
 Set `rescale_predictors = TRUE` to improve numerical conditioning when
 continuous predictors or timestamps have awkward units. The transformation
 divides by training-data standard deviations but never centers, so interaction
@@ -100,7 +112,9 @@ The current implementation supports:
 - nonstationary response-time axes;
 - grouped impulse-response deviations;
 - ordinary `mgcv` terms, including response-side random effects; and
-- Gaussian and non-Gaussian families through the native `mgcv` backend.
+- Gaussian families through every backend; canonical Poisson and binomial
+  families through every backend; and other validated family/link pairs
+  through the native `mgcv` backend.
 
 `k_l`, `k_t`, and `k_p` control the lag, response-time, and predictor basis
 dimensions. `NULL` predictor entries are linear; use an R list such as
@@ -109,6 +123,13 @@ The corresponding `bs_l`, `bs_t`, and `bs_p` arguments accept standard numeric
 `mgcv` marginal bases. Smooth non-lag tensor marginals are centered to separate
 an interaction from its lower-order effects.
 
+`knots_l` supplies exactly `k_l` strictly increasing lag-basis construction
+points in the original lag units. This can concentrate interior resolution
+within part of a longer window without increasing the basis dimension. The
+points must span the linked training lags. Custom lag knots are supported for
+the numeric `cr`, `cs`, `cc`, `tp`, and `ts` marginals; `ps` has a different
+knot contract and rejects `knots_l`.
+
 ## Fitting backends
 
 `cdrgam()` provides three fitting paths:
@@ -116,10 +137,12 @@ an interaction from its lower-order effects.
 - `backend = "mgcv"` fits the compiled response-level design with
   `mgcv::gam()` or `mgcv::bam()`. The result directly inherits from the native
   `gam` or `bam` class.
-- `backend = "block"` is an independent dense Gaussian REML reference solver.
-- `backend = "sparse"` fits Gaussian identity-link models with sparse penalized
-  normal equations and sparse Cholesky factorization. Grouped IRFs remain
-  compact until backend assembly.
+- `backend = "block"` is an independent dense Gaussian REML and generalized
+  LAML reference solver.
+- `backend = "sparse"` fits Gaussian identity-link models and Poisson,
+  binomial, or Gamma models with sparse penalized systems and sparse Cholesky
+  factorization. Generalized fits stream changing PIRLS cross-products and use
+  an exact Laplace score. Grouped IRFs remain compact until backend assembly.
 
 The sparse backend's experimental exact-score, safeguarded trust-region BFGS
 optimizer is selected with

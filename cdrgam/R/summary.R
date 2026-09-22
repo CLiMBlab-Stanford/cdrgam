@@ -26,8 +26,10 @@
         indices,
         covariance,
         residual_df,
-        include_p=TRUE
+        include_p=TRUE,
+        reference=c('t', 'z')
 ) {
+    reference <- match.arg(reference)
     if (!length(indices)) return(NULL)
     coefficients <- object$coefficients[indices]
     variances <- if (is.matrix(covariance)) diag(covariance) else covariance
@@ -37,17 +39,22 @@
     table <- cbind(
         Estimate=coefficients / divisors,
         `Std. Error`=standard_errors / abs(divisors),
-        `t value`=statistic
+        statistic
     )
+    colnames(table)[[3L]] <- if (reference == 't') 't value' else 'z value'
     if (isTRUE(include_p)) {
+        probability <- if (reference == 't') {
+            2 * stats::pt(abs(statistic), df=residual_df, lower.tail=FALSE)
+        } else {
+            2 * stats::pnorm(abs(statistic), lower.tail=FALSE)
+        }
         table <- cbind(
             table,
-            `Pr(>|t|)`=2 * stats::pt(
-                abs(statistic),
-                df=residual_df,
-                lower.tail=FALSE
-            )
+            probability
         )
+        colnames(table)[[4L]] <- if (reference == 't') {
+            'Pr(>|t|)'
+        } else 'Pr(>|z|)'
     }
     rownames(table) <- names(coefficients)
     table
@@ -73,10 +80,16 @@
 }
 
 .cdrgam_block_smooth_edf <- function(object) {
-    weights <- sqrt(object$prior.weights)
+    source_weights <- if (is.null(object$working.weights)) {
+        object$prior.weights
+    } else object$working.weights
+    weights <- sqrt(source_weights)
     weighted_design <- object$X * weights
     information <- crossprod(weighted_design)
-    influence_diagonal <- diag((object$Vp / object$scale) %*% information)
+    influence_covariance <- if (is.null(object$working.weights)) {
+        object$Vp / object$scale
+    } else object$Vp
+    influence_diagonal <- diag(influence_covariance %*% information)
     vapply(object$smooth, function(smooth) {
         sum(influence_diagonal[smooth$first.para:smooth$last.para])
     }, numeric(1))
@@ -127,14 +140,16 @@
     }, numeric(1))
 }
 
-.cdrgam_smooth_table <- function(object, edf, covariance, residual_df) {
+.cdrgam_smooth_table <- function(
+        object, edf, covariance, residual_df, chi_square=FALSE
+) {
     count <- length(object$smooth)
     if (!count) return(NULL)
     table <- matrix(
         NA_real_, nrow=count, ncol=4L,
         dimnames=list(
             .cdrgam_smooth_labels(object),
-            c('edf', 'Ref.df', 'F', 'p-value')
+            c('edf', 'Ref.df', if (chi_square) 'Chi.sq' else 'F', 'p-value')
         )
     )
     table[, 'edf'] <- edf
@@ -157,13 +172,20 @@
         statistic <- drop(crossprod(coefficients, precision %*% coefficients))
         reference_df <- max(edf[[i]], 1)
         table[i, 'Ref.df'] <- reference_df
-        table[i, 'F'] <- statistic / reference_df
-        table[i, 'p-value'] <- stats::pf(
-            table[i, 'F'],
-            df1=reference_df,
-            df2=residual_df,
-            lower.tail=FALSE
-        )
+        statistic_column <- if (chi_square) 'Chi.sq' else 'F'
+        table[i, statistic_column] <- if (chi_square) {
+            statistic
+        } else statistic / reference_df
+        table[i, 'p-value'] <- if (chi_square) {
+            stats::pchisq(statistic, df=reference_df, lower.tail=FALSE)
+        } else {
+            stats::pf(
+                table[i, 'F'],
+                df1=reference_df,
+                df2=residual_df,
+                lower.tail=FALSE
+            )
+        }
     }
     table
 }
@@ -182,6 +204,8 @@
         .sparse_effective_df(object)
     } else object$edf
     residual_df <- length(object$y) - total_edf
+    fixed_dispersion <- object$family$family %in% c('binomial', 'poisson')
+    coefficient_reference <- if (fixed_dispersion) 'z' else 't'
     covariance_at_scale <- function(indices) covariance(indices) * scale_ratio
     parametric <- .cdrgam_parametric_indices(object)
     p_table <- if (length(parametric)) {
@@ -189,19 +213,31 @@
             object,
             parametric,
             covariance_at_scale(parametric),
-            residual_df
+            residual_df,
+            reference=coefficient_reference
         )
     } else NULL
     s_table <- .cdrgam_smooth_table(
         object,
         smooth_edf,
         covariance_at_scale,
-        residual_df
+        residual_df,
+        chi_square=fixed_dispersion
     )
     weights <- object$prior.weights
     mean_response <- sum(weights * object$y) / sum(weights)
-    deviance <- sum(weights * object$residuals^2)
-    null_deviance <- sum(weights * (object$y - mean_response)^2)
+    deviance <- if (is.null(object$deviance)) {
+        sum(weights * object$residuals^2)
+    } else object$deviance
+    null_deviance <- if (identical(object$family$family, 'gaussian')) {
+        sum(weights * (object$y - mean_response)^2)
+    } else {
+        sum(object$family$dev.resids(
+            object$y,
+            rep.int(mean_response, length(object$y)),
+            weights
+        ))
+    }
     formulas <- .cdrgam_summary_formulas(object)
     output <- list(
         call=object$call,
@@ -210,13 +246,14 @@
         formulas=formulas,
         formula_strings=.cdrgam_formula_strings(formulas),
         p.coeff=if (length(parametric)) p_table[, 'Estimate'] else numeric(),
-        p.t=if (length(parametric)) p_table[, 't value'] else numeric(),
-        p.pv=if (length(parametric)) p_table[, 'Pr(>|t|)'] else numeric(),
+        p.t=if (length(parametric)) p_table[, 3L] else numeric(),
+        p.pv=if (length(parametric)) p_table[, 4L] else numeric(),
         p.table=p_table,
         s.table=s_table,
         se=if (length(parametric)) p_table[, 'Std. Error'] else numeric(),
         chi.sq=if (is.null(s_table)) numeric() else
-            s_table[, 'F'] * s_table[, 'Ref.df'],
+            if ('Chi.sq' %in% colnames(s_table)) s_table[, 'Chi.sq'] else
+                s_table[, 'F'] * s_table[, 'Ref.df'],
         s.pv=if (is.null(s_table)) numeric() else s_table[, 'p-value'],
         pTerms.pv=numeric(),
         pTerms.chi.sq=numeric(),
@@ -226,9 +263,12 @@
         residual.df=residual_df,
         scale=scale,
         dispersion=scale,
-        r.sq=1 - stats::var(sqrt(weights) * object$residuals) *
-            (length(object$y) - 1) /
-            (stats::var(sqrt(weights) * (object$y - mean_response)) * residual_df),
+        r.sq=if (identical(object$family$family, 'gaussian')) {
+            1 - stats::var(sqrt(weights) * object$residuals) *
+                (length(object$y) - 1) /
+                (stats::var(sqrt(weights) *
+                    (object$y - mean_response)) * residual_df)
+        } else NA_real_,
         dev.expl=if (null_deviance > 0) 1 - deviance / null_deviance else NA_real_,
         method='-REML',
         sp.criterion=object$reml,
@@ -250,7 +290,8 @@
             object,
             indices,
             coefficient_covariance,
-            residual_df
+            residual_df,
+            reference=coefficient_reference
         )
     }
     output
@@ -283,7 +324,7 @@
             x$s.table, digits=digits, signif.stars=signif.stars,
             has.Pvalue=TRUE, na.print='NA', cs.ind=1L, ...
         )
-        if (anyNA(x$s.table[, 'F'])) {
+        if (anyNA(x$s.table[, 3L])) {
             cat(
                 'Term-level tests are omitted for fully penalized',
                 'random-effect and grouped-deviation terms.\n',

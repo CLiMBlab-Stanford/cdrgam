@@ -1504,11 +1504,12 @@
         rank_penalty=NULL,
         initial_log_sp=NULL,
         initial_source=NULL,
+        setup_only=FALSE,
         ...
 ) {
     family <- .as_family(family)
-    if (!identical(family$family, 'gaussian') ||
-            !identical(family$link, 'identity')) {
+    if (!isTRUE(setup_only) && (!identical(family$family, 'gaussian') ||
+            !identical(family$link, 'identity'))) {
         stop('The sparse backend currently supports only gaussian(identity)')
     }
     if (!is.null(method) && !(method %in% c('REML', 'fREML'))) {
@@ -2023,6 +2024,25 @@
     exact_trace_rhs <- .sparse_trace_rhs_count(penalty_supports)
     gradient_penalty_count <- length(penalty_components)
     blocks <- unname(blocks_by_key)
+    if (isTRUE(setup_only)) {
+        return(list(
+            setup=setup,
+            matrices=matrices,
+            penalty_components=penalty_components,
+            penalty_supports=penalty_supports,
+            blocks=blocks,
+            sp_names=sp_names,
+            dimension=dimension,
+            observation_count=observation_count,
+            term_metadata=term_metadata,
+            smooth=smooths,
+            random_prediction=random_prediction,
+            coefficient_names=coefficient_names,
+            alias_resolution=alias_resolution,
+            supernodal=supernodal,
+            crossprod_chunk_size=crossprod_chunk_size
+        ))
+    }
     y <- setup$y - setup$offset
     weights <- setup$w
     if (is.null(weights)) weights <- rep.int(1, length(y))
@@ -3595,6 +3615,240 @@
     out
 }
 
+.fit_sparse_generalized <- function(
+        design, family, method, checkpoint=NULL, trace=FALSE,
+        sparse_control=list(), rank_action='error', rank_tol=NULL,
+        rank_penalty=NULL, ...
+) {
+    family <- .as_family(family)
+    canonical <- (identical(family$family, 'binomial') &&
+            identical(family$link, 'logit')) ||
+        (identical(family$family, 'poisson') &&
+            identical(family$link, 'log'))
+    estimated_gamma <- identical(family$family, 'Gamma') &&
+        identical(family$link, 'log')
+    if (!canonical && !estimated_gamma) {
+        stop(
+            'The generalized sparse backend currently supports ',
+            'binomial(logit), poisson(log), and Gamma(log)'
+        )
+    }
+    if (!is.null(method) && !(method %in% c('REML', 'fREML'))) {
+        stop('The generalized sparse backend currently supports only REML')
+    }
+    if (!is.null(checkpoint)) {
+        stop('Generalized sparse-backend checkpoints are not yet supported')
+    }
+    if (!identical(rank_action, 'error') || !is.null(rank_tol) ||
+            !is.null(rank_penalty)) {
+        stop('Generalized sparse rank controls are not yet supported')
+    }
+    allowed_control <- c(
+        'crossprod_chunk_size', 'supernodal', 'optimizer_maxit',
+        'optimizer_gradient_tolerance', 'optimizer_trust_radius'
+    )
+    unknown <- setdiff(names(sparse_control), allowed_control)
+    if (length(unknown)) {
+        stop(
+            'Unsupported generalized sparse_control entries: ',
+            paste(unknown, collapse=', ')
+        )
+    }
+    control <- function(name, default) {
+        value <- sparse_control[[name, exact=TRUE]]
+        if (is.null(value)) default else value
+    }
+    max_iterations <- as.integer(control('optimizer_maxit', 100L))
+    gradient_tolerance <- control('optimizer_gradient_tolerance', 1e-4)
+    trust_radius <- control('optimizer_trust_radius', 2)
+    if (!is.finite(max_iterations) || max_iterations < 1L ||
+            !is.finite(gradient_tolerance) || gradient_tolerance <= 0 ||
+            !is.finite(trust_radius) || trust_radius <= 0) {
+        stop('Invalid generalized sparse optimizer control')
+    }
+    reporter <- .new_solver_reporter(trace, 'sparse')
+    reporter$phase('model and sparse-pattern setup')
+    assembly <- .fit_sparse_gaussian(
+        design=design,
+        family=family,
+        method='REML',
+        trace=FALSE,
+        sparse_control=sparse_control[intersect(
+            names(sparse_control),
+            c('crossprod_chunk_size', 'supernodal')
+        )],
+        setup_only=TRUE,
+        ...
+    )
+    reporter$phase(
+        'generalized smoothing-parameter optimization',
+        smoothing_parameters=length(assembly$penalty_components),
+        gradient='exact',
+        inner_solver='streamed sparse PIRLS'
+    )
+    optimized <- .cdrgam_optimize_streamed_sparse_laml(
+        assembly,
+        family,
+        max_iterations=max_iterations,
+        gradient_tolerance=gradient_tolerance,
+        trust_radius=trust_radius
+    )
+    retained <- optimized$retained
+    solution <- retained$solution
+    coefficients <- stats::setNames(
+        solution$coefficients,
+        assembly$coefficient_names
+    )
+    sp <- stats::setNames(retained$sp, assembly$sp_names)
+    penalty_trace <- vapply(seq_along(sp), function(i) {
+        .sparse_logdet_score(
+            solution$factor,
+            sp[[i]] * assembly$penalty_components[[i]],
+            chunk_size=256L
+        )
+    }, numeric(1))
+    effective_df <- assembly$dimension - sum(penalty_trace)
+    reported_scale <- if (estimated_gamma) {
+        .cdrgam_gamma_reported_scale(
+            assembly$setup$y,
+            solution$fitted_values,
+            solution$prior_weights,
+            effective_df
+        )
+    } else retained$scale
+    convergence <- list(
+        converged=identical(optimized$optimization$convergence, 0L) &&
+            isTRUE(solution$converged),
+        code=optimized$optimization$convergence,
+        message=optimized$optimization$message,
+        gradient=optimized$optimization$gradient,
+        projected_gradient_max=max(abs(optimized$optimization$gradient)),
+        hessian_positive_definite=NA,
+        boundary=numeric()
+    )
+    identifiability <- design$identifiability
+    identifiability$global <- list(
+        dimension=assembly$dimension,
+        rank=assembly$dimension,
+        condition_indicator=.cdr_factor_condition_indicator(solution$factor),
+        parametric=assembly$alias_resolution$info,
+        resolution='identified'
+    )
+    output <- list(
+        coefficients=coefficients,
+        fitted.values=solution$fitted_values,
+        residuals=solution$residuals,
+        linear.predictors=solution$linear_predictors,
+        family=family,
+        sp=sp,
+        scale=reported_scale,
+        sig2=reported_scale,
+        reml.scale=retained$scale,
+        method='REML',
+        smooth=assembly$smooth,
+        paraPen=assembly$setup$paraPen,
+        full.sp=assembly$setup$full.sp,
+        outer.info=list(
+            hess=NULL, conv=convergence$converged,
+            message=convergence$message
+        ),
+        converged=convergence$converged,
+        df.residual=assembly$observation_count - effective_df,
+        y=assembly$setup$y,
+        prior.weights=solution$prior_weights,
+        working.weights=solution$working_weights,
+        offset=assembly$setup$offset,
+        deviance=solution$deviance,
+        reml=retained$criterion,
+        optimizer=optimized$optimization
+    )
+    output$sparse <- list(
+        control=list(
+            gradient='exact',
+            outer_optimizer=if (estimated_gamma) 'lbfgsb' else 'bfgs_trust',
+            crossprod_chunk_size=assembly$crossprod_chunk_size,
+            supernodal=assembly$supernodal,
+            optimizer_maxit=max_iterations,
+            optimizer_gradient_tolerance=gradient_tolerance,
+            optimizer_trust_radius=trust_radius
+        ),
+        factor=solution$factor,
+        dimension=assembly$dimension,
+        nnzero=sum(vapply(
+            assembly$matrices, .sparse_component_nnzero, numeric(1)
+        )),
+        system_nnzero=Matrix::nnzero(solution$system),
+        numeric_updates=solution$numeric_updates,
+        effective_df=effective_df,
+        deferred_hessian=NULL,
+        factor_class=class(solution$factor)[[1L]],
+        supernodal=assembly$supernodal,
+        factor_nonzeros=.cdr_factor_nonzeros(solution$factor),
+        condition_indicator=.cdr_factor_condition_indicator(solution$factor),
+        crossprod_chunks=solution$chunks,
+        crossprod_chunk_size=assembly$crossprod_chunk_size,
+        convergence=convergence,
+        penalty_components=assembly$penalty_components,
+        penalty_trace=penalty_trace,
+        observation_count=assembly$observation_count
+    )
+    output$cdrgam <- list(
+        schema_version=1L,
+        engine='sparse',
+        backend='sparse',
+        formula=list(
+            user=design$formula,
+            normalized=design$normalized_formula,
+            effective=design$effective_formula,
+            mgcv=.sparse_expanded_formula(design)
+        ),
+        preparation=list(
+            configuration=design$configuration,
+            plan=design$plan,
+            stream=design$stream,
+            specification=design$specification,
+            simplifications=design$simplifications,
+            scaling=design$scaling,
+            identifiability=design$identifiability
+        ),
+        scaling=design$scaling,
+        identifiability=identifiability,
+        rank=list(
+            action='error',
+            parametric=assembly$alias_resolution$info,
+            resolution='identified',
+            regularization=0,
+            tolerance=.rank_tolerance(NULL)
+        ),
+        term_labels=names(design$terms),
+        terms=assembly$term_metadata,
+        prediction=list(
+            setup=.cdr_prediction_setup(assembly$setup),
+            random_effects=assembly$random_prediction
+        ),
+        solver=if (estimated_gamma) {
+            paste(
+                'sparse generalized LAML solver',
+                '(streamed PIRLS, exact score, L-BFGS-B)'
+            )
+        } else {
+            paste(
+                'sparse generalized LAML solver',
+                '(streamed PIRLS, exact score, safeguarded trust-region BFGS)'
+            )
+        }
+    )
+    class(output) <- c('cdrgam_sparse', 'cdrgam')
+    reporter$emit(
+        1L,
+        'fit complete',
+        criterion=format(retained$criterion, digits=10),
+        converged=convergence$converged,
+        iterations=solution$iterations
+    )
+    output
+}
+
 #' @export
 coef.cdrgam_sparse <- function(object, ...) object$coefficients
 
@@ -3606,6 +3860,7 @@ residuals.cdrgam_sparse <- function(object, ...) object$residuals
 
 #' @export
 deviance.cdrgam_sparse <- function(object, ...) {
+    if (!is.null(object$deviance)) return(object$deviance)
     sum(object$prior.weights * object$residuals^2)
 }
 
@@ -3615,11 +3870,33 @@ nobs.cdrgam_sparse <- function(object, ...) length(object$y)
 #' @export
 logLik.cdrgam_sparse <- function(object, ...) {
     n <- length(object$y)
-    value <- -0.5 * (
-        n * log(2 * pi * object$scale) +
-            deviance.cdrgam_sparse(object) / object$scale
-    )
-    attr(value, 'df') <- .sparse_effective_df(object) + 1
+    gaussian <- identical(object$family$family, 'gaussian') &&
+        identical(object$family$link, 'identity')
+    value <- if (gaussian) {
+        -0.5 * (
+            n * log(2 * pi * object$scale) +
+                deviance.cdrgam_sparse(object) / object$scale
+        )
+    } else if (identical(object$family$family, 'Gamma')) {
+        .cdrgam_gamma_loglik(
+            object$y,
+            object$fitted.values,
+            object$prior.weights,
+            object$scale
+        )
+    } else {
+        -0.5 * object$family$aic(
+            object$y,
+            rep.int(1, n),
+            object$fitted.values,
+            object$prior.weights,
+            deviance.cdrgam_sparse(object)
+        )
+    }
+    estimated_dispersion <- gaussian ||
+        identical(object$family$family, 'Gamma')
+    attr(value, 'df') <- .sparse_effective_df(object) +
+        as.integer(estimated_dispersion)
     attr(value, 'nobs') <- n
     class(value) <- 'logLik'
     value

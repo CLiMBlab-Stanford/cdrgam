@@ -9,6 +9,7 @@ cdrgam(
   impulses,
   responses,
   window = NULL,
+  knots_l = NULL,
   k_l = NULL,
   k_t = NULL,
   k_p = NULL,
@@ -61,6 +62,9 @@ optional \code{irf()} terms. An implicit
 term that does not supply its own window. \code{NULL} retains the term-level
 default \code{c(0, Inf)}. Every impulse in the applicable series and window is
 included in the response-level design.}
+\item{knots_l}{Optional model-level default for \code{irf()} lag-basis
+construction points. A term-level value, including \code{NULL}, takes
+precedence.}
 \item{k_l, k_t, k_p}{Optional model-level defaults for the corresponding
 \code{irf()} axis dimensions. An argument supplied by an individual term,
 including an explicit \code{NULL}, overrides its model-level default.}
@@ -86,13 +90,15 @@ The default matches \code{mgcv::gam()}. Retained levels remain part of the
 fitted factor vocabulary. For \code{cdrgam.fit()}, use \code{NULL} to inherit
 the choice already compiled into \code{design}; a supplied value must match
 it.}
-\item{family}{An \pkg{mgcv} family.}
+\item{family}{A standard family object or a family name accepted by
+\code{cdrgam_family()}.}
 \item{method}{Smoothing-parameter estimation method.}
 \item{engine}{Either \code{"bam"} or \code{"gam"}.}
 \item{backend}{Fitting backend. \code{"mgcv"} uses native fitting,
-\code{"block"} selects the dense Gaussian REML reference solver, and
-\code{"sparse"} uses sparse penalized normal equations. Select the
-trust-region optimizer with
+\code{"block"} selects the dense reference solver (Gaussian REML or
+generalized LAML), and \code{"sparse"} uses streamed sparse Gaussian or
+supported generalized optimization. Select the Gaussian trust-region
+optimizer with
 \code{sparse_control=list(gradient="exact", outer_optimizer="bfgs_trust")}.}
 \item{checkpoint}{Optional checkpoint path for a custom backend. Checkpoints
 are written atomically after periodic REML evaluations and contain validated
@@ -115,6 +121,11 @@ Automatic selection uses the same process memory budget as the post-fit
 Hessian calculation.
 A function receives the progress events as named lists.}
 \item{sparse_control}{Named control list for the sparse backend. The
+generalized sparse solver currently accepts
+\code{crossprod_chunk_size}, \code{supernodal}, \code{optimizer_maxit},
+\code{optimizer_gradient_tolerance}, and \code{optimizer_trust_radius}; its
+exact gradient and safeguarded trust-region optimizer are fixed. The
+remaining controls below apply to Gaussian sparse fits.
 \code{gradient} entry may be \code{"auto"} (the default), \code{"finite"},
 \code{"exact"}, \code{"stochastic"}, or \code{"hybrid"}.
 \code{gradient_probes} controls the fixed Rademacher trace probes used by the

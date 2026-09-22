@@ -110,6 +110,116 @@ for (basis in c('cr', 'cs', 'cc', 'tp', 'ts', 'ps')) {
     stopifnot(ncol(candidate$terms[[1L]]$X) > 0L)
 }
 
+focused_knots <- c(0, 0.05, 0.15, 0.4, 1, 2)
+custom_dense <- prepare_cdrgam(
+    response ~ irf(A, k_l=6, knots_l=focused_knots) - irf(1),
+    simulation$impulses,
+    simulation$responses,
+    window=c(0, 2),
+    history='dense',
+    rescale_predictors=TRUE,
+    quiet=TRUE
+)
+custom_ragged <- prepare_cdrgam(
+    response ~ irf(A, k_l=6, knots_l=focused_knots) - irf(1),
+    simulation$impulses,
+    simulation$responses,
+    window=c(0, 2),
+    history='ragged',
+    rescale_predictors=TRUE,
+    quiet=TRUE
+)
+stopifnot(
+    identical(custom_dense$specification[[1L]]$knots_l, focused_knots),
+    max(abs(custom_dense$terms[[1L]]$knots *
+        custom_dense$terms[[1L]]$lag_scale - focused_knots)) < 1e-12,
+    max(abs(custom_dense$terms[[1L]]$X - custom_ragged$terms[[1L]]$X)) < 1e-10,
+    max(abs(custom_dense$terms[[1L]]$S[[1L]] -
+        custom_ragged$terms[[1L]]$S[[1L]])) < 1e-10
+)
+custom_fit <- cdrgam.fit(custom_ragged, backend='mgcv', engine='gam', method='REML')
+custom_block <- cdrgam.fit(custom_ragged, backend='block', method='REML')
+custom_sparse <- cdrgam.fit(
+    custom_ragged,
+    backend='sparse',
+    method='REML',
+    sparse_control=list(gradient='finite')
+)
+custom_estimate <- estimate_irf(custom_fit, term=1, n=17, se=FALSE)
+stopifnot(
+    max(abs(fitted(custom_fit) - fitted(custom_block))) < 2e-5,
+    max(abs(fitted(custom_fit) - fitted(custom_sparse))) < 2e-5,
+    min(custom_estimate$lag) == min(focused_knots),
+    max(custom_estimate$lag) == max(focused_knots),
+    grepl(
+        'knots_l = c(0, 0.05, 0.15, 0.4, 1, 2)',
+        gsub('[[:space:]]+', ' ', paste(
+            deparse(custom_ragged$normalized_formula), collapse=' '
+        )),
+        fixed=TRUE
+    )
+)
+
+for (basis in c('cr', 'cs', 'cc', 'tp', 'ts')) {
+    custom_basis <- prepare_cdrgam(
+        stats::as.formula(paste0(
+            'response ~ irf(A, k_l=6, knots_l=focused_knots, bs_l="',
+            basis, '") - irf(1)'
+        )),
+        simulation$impulses,
+        simulation$responses,
+        window=c(0, 2),
+        history='ragged',
+        quiet=TRUE
+    )
+    stopifnot(max(abs(custom_basis$terms[[1L]]$knots - focused_knots)) < 1e-12)
+}
+
+invalid_ps_knots <- tryCatch({
+    irf(A, k_l=6, bs_l='ps', knots_l=focused_knots)
+    NULL
+}, error=identity)
+stopifnot(
+    inherits(invalid_ps_knots, 'error'),
+    grepl('not supported', conditionMessage(invalid_ps_knots), fixed=TRUE)
+)
+stopifnot(
+    inherits(try(
+        irf(A, k_l=6, knots_l=focused_knots[-1L]),
+        silent=TRUE
+    ), 'try-error'),
+    inherits(try(
+        irf(A, k_l=6, knots_l=rev(focused_knots)),
+        silent=TRUE
+    ), 'try-error'),
+    inherits(try(
+        prepare_cdrgam(
+            response ~ irf(A, k_l=6, knots_l=c(0.1, 0.2, 0.4, 0.8, 1.2, 1.8)) -
+                irf(1),
+            simulation$impulses,
+            simulation$responses,
+            window=c(0, 2),
+            quiet=TRUE
+        ),
+        silent=TRUE
+    ), 'try-error')
+)
+
+default_knots <- prepare_cdrgam(
+    response ~ irf(A) - irf(1),
+    simulation$impulses,
+    simulation$responses,
+    window=c(0, 2),
+    knots_l=focused_knots,
+    k_l=6,
+    history='ragged',
+    quiet=TRUE
+)
+stopifnot(
+    identical(default_knots$specification[[1L]]$knots_l, focused_knots),
+    identical(default_knots$configuration$knots_l, focused_knots)
+)
+
 override <- prepare_cdrgam(
     response ~ irf(A, window=c(0, 1), k_l=5) - irf(1),
     simulation$impulses,

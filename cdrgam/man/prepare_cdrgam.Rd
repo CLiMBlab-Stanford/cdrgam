@@ -8,6 +8,7 @@ prepare_cdrgam(
   impulses,
   responses,
   window = NULL,
+  knots_l = NULL,
   k_l = NULL,
   k_t = NULL,
   k_p = NULL,
@@ -33,6 +34,9 @@ prepare_cdrgam(
 term that does not supply its own window. \code{NULL} retains the term-level
 default \code{c(0, Inf)}. Every impulse in the applicable series and window is
 included in the response-level design.}
+\item{knots_l}{Optional model-level default for \code{irf()} lag-basis
+construction points. A term-level value, including \code{NULL}, takes
+precedence.}
 \item{k_l, k_t, k_p}{Optional model-level defaults for the corresponding
 \code{irf()} axis dimensions. An argument supplied by an individual term,
 including an explicit \code{NULL}, overrides its model-level default.}

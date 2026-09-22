@@ -2,7 +2,7 @@ library(cdrgam)
 
 exports <- getNamespaceExports('cdrgam')
 stopifnot(
-    all(c('cdrgam', 'cdrgam.fit') %in% exports),
+    all(c('cdrgam', 'cdrgam.fit', 'cdrgam_family') %in% exports),
     !any(c(
         'fit_cdrgam', 'fit_compressed_cdr_gam', 'predict_cdrgam',
         'cdr_formula', 'mgcv_formula', 'compress_cdr_smooth'
@@ -215,11 +215,14 @@ stopifnot(all(is.finite(coef(block_fit))))
 stopifnot(all(is.finite(vcov(block_fit))))
 stopifnot(inherits(summary(block_fit), 'summary.cdrgam_block'))
 
-poisson_error <- tryCatch(
+noncanonical_error <- tryCatch(
     {
-        cdrgam.fit(dense, backend='block', family=poisson())
+        cdrgam.fit(dense, backend='block', family=binomial(link='probit'))
         NA_character_
     },
     error=function(e) conditionMessage(e)
 )
-stopifnot(!is.na(poisson_error), grepl('only gaussian', poisson_error))
+stopifnot(
+    !is.na(noncanonical_error),
+    grepl('currently supports', noncanonical_error, fixed=TRUE)
+)

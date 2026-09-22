@@ -7,6 +7,7 @@ irf(
   predictor,
   ...,
   window = NULL,
+  knots_l = NULL,
   k_l = 10,
   k_t = NULL,
   k_p = NULL,
@@ -30,6 +31,9 @@ predictors define one interaction IRF.}
 response time minus impulse time. Negative lags include impulses after the
 response time. \code{NULL} inherits the model-level \code{window}; without
 either, the default is \code{c(0, Inf)}.}
+\item{knots_l}{Optional strictly increasing lag-basis construction points in
+the original lag units. Supply exactly \code{k_l} values spanning the linked
+training lags. This control is unavailable for \code{bs_l = "ps"}.}
 \item{k_l}{Lag-basis dimension. This axis is always smooth and cannot be
 \code{NULL}.}
 \item{k_t}{Optional response-time basis dimension. \code{NULL} makes the IRF

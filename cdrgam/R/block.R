@@ -1,12 +1,3 @@
-.as_family <- function(family) {
-    if (is.character(family)) {
-        family <- get(family, mode='function', envir=parent.frame())()
-    } else if (is.function(family)) {
-        family <- family()
-    }
-    family
-}
-
 .embed_penalties <- function(setup, smoothing_parameters) {
     p <- ncol(setup$X)
     total <- matrix(0, p, p)
@@ -747,6 +738,220 @@
     out
 }
 
+.fit_block_generalized <- function(
+        design,
+        family,
+        method,
+        checkpoint=NULL,
+        trace=FALSE,
+        rank_action='error',
+        rank_tol=NULL,
+        rank_penalty=NULL,
+        ...
+) {
+    family <- .as_family(family)
+    canonical <- (identical(family$family, 'binomial') &&
+            identical(family$link, 'logit')) ||
+        (identical(family$family, 'poisson') &&
+            identical(family$link, 'log'))
+    estimated_gamma <- identical(family$family, 'Gamma') &&
+        identical(family$link, 'log')
+    if (!canonical && !estimated_gamma) {
+        stop(
+            'The generalized block backend currently supports ',
+            'binomial(logit), poisson(log), and Gamma(log)'
+        )
+    }
+    if (!is.null(method) && !(method %in% c('REML', 'fREML'))) {
+        stop('The generalized block backend currently supports only REML')
+    }
+    if (!is.null(checkpoint)) {
+        stop('Generalized block-backend checkpoints are not yet supported')
+    }
+    reporter <- .new_solver_reporter(trace, 'block')
+    reporter$phase('model setup')
+    setup <- .fit_compressed_mgcv(
+        y=design$responses[[design$response_name]],
+        terms=design$terms,
+        family=family,
+        method='REML',
+        engine='gam',
+        base_formula=design$ordinary_formula,
+        response_data=design$responses,
+        user_formula=design$formula,
+        preparation=list(
+            configuration=design$configuration,
+            plan=design$plan,
+            stream=design$stream,
+            specification=design$specification,
+            simplifications=design$simplifications,
+            scaling=design$scaling
+        ),
+        setup_only=TRUE,
+        ...
+    )
+    tolerance <- .rank_tolerance(rank_tol)
+    penalty_strength <- .rank_penalty(rank_penalty)
+    alias_resolution <- .drop_parametric_aliases(setup, tolerance)
+    setup <- alias_resolution$setup
+    unit_penalty <- .embed_penalties(setup, rep.int(1, length(setup$S)))
+    rank_resolution <- .rank_regularization(
+        crossprod(setup$X) + unit_penalty,
+        rank_action,
+        tolerance,
+        penalty_strength
+    )
+    fixed_ridge <- rank_resolution$value
+    reporter$phase(
+        'smoothing-parameter optimization',
+        smoothing_parameters=length(setup$S),
+        gradient='finite',
+        inner_solver='penalized IRLS'
+    )
+    result <- .cdrgam_dense_laml(
+        setup,
+        family,
+        fixed_ridge=fixed_ridge
+    )
+    solution <- result$solution
+    coefficients <- solution$coefficients
+    names(coefficients) <- colnames(setup$X)
+    inverse_system <- chol2inv(solution$factor)
+    information <- crossprod(setup$X * sqrt(solution$working_weights))
+    influence <- diag(inverse_system %*% information)
+    edf <- sum(influence)
+    reported_scale <- if (estimated_gamma) {
+        .cdrgam_gamma_reported_scale(
+            setup$y,
+            solution$fitted_values,
+            solution$prior_weights,
+            edf
+        )
+    } else solution$scale
+    covariance <- inverse_system * reported_scale
+    dimnames(covariance) <- list(names(coefficients), names(coefficients))
+    term_metadata <- lapply(seq_along(design$terms), function(i) {
+        term <- design$terms[[i]]
+        smooth_index <- which(vapply(
+            setup$smooth,
+            function(smooth) paste(smooth$term, collapse=',') ==
+                paste0('cdr_term_', i),
+            logical(1)
+        ))
+        coefficient_index <- if (length(smooth_index) == 1L) {
+            seq.int(
+                setup$smooth[[smooth_index]]$first.para,
+                setup$smooth[[smooth_index]]$last.para
+            )
+        } else integer()
+        list(
+            name=term$name,
+            type=term$type,
+            knots=term$knots,
+            predictor_knots=term$predictor_knots,
+            axis=term$axis,
+            linear_predictors=term$linear_predictors,
+            linear_predictor_summaries=term$linear_predictor_summaries,
+            basis=term$basis,
+            transform=term$transform,
+            group=term$group,
+            group_levels=term$group_levels,
+            base_dimension=term$base_dimension,
+            rank=term$rank,
+            null.space.dim=term$null.space.dim,
+            S.scale=term$S.scale,
+            lag_scale=if (is.null(term$lag_scale)) 1 else term$lag_scale,
+            predictor_scale=if (is.null(term$predictor_scale)) 1 else
+                term$predictor_scale,
+            amplitude_scale=if (is.null(term$amplitude_scale)) 1 else
+                term$amplitude_scale,
+            coefficient_index=coefficient_index
+        )
+    })
+    identifiability <- design$identifiability
+    identifiability$global <- list(
+        dimension=ncol(setup$X),
+        rank=ncol(setup$X),
+        condition_indicator=tryCatch(rcond(solution$system),
+            error=function(error) NA_real_),
+        parametric=alias_resolution$info,
+        resolution=rank_resolution$resolution
+    )
+    output <- list(
+        coefficients=coefficients,
+        fitted.values=solution$fitted_values,
+        residuals=solution$residuals,
+        linear.predictors=solution$linear_predictors,
+        family=family,
+        sp=stats::setNames(solution$sp, names(setup$sp)),
+        scale=reported_scale,
+        sig2=reported_scale,
+        reml.scale=solution$scale,
+        method='REML',
+        smooth=setup$smooth,
+        paraPen=setup$paraPen,
+        full.sp=setup$full.sp,
+        outer.info=NULL,
+        Vp=covariance,
+        Vc=NULL,
+        edf=edf,
+        coefficient.edf=influence,
+        df.residual=nrow(setup$X) - edf,
+        y=setup$y,
+        prior.weights=solution$prior_weights,
+        working.weights=solution$working_weights,
+        X=setup$X,
+        offset=setup$offset,
+        deviance=solution$deviance,
+        reml=solution$criterion,
+        optimizer=result$optimization,
+        converged=isTRUE(solution$converged) &&
+            identical(result$optimization$convergence, 0L),
+        cdrgam=list(
+            schema_version=1L,
+            engine='block',
+            backend='block',
+            formula=list(
+                user=design$formula,
+                normalized=design$normalized_formula,
+                effective=design$effective_formula,
+                mgcv=setup$formula
+            ),
+            preparation=list(
+                configuration=design$configuration,
+                plan=design$plan,
+                stream=design$stream,
+                specification=design$specification,
+                simplifications=design$simplifications,
+                scaling=design$scaling,
+                identifiability=design$identifiability
+            ),
+            scaling=design$scaling,
+            identifiability=identifiability,
+            term_labels=names(design$terms),
+            terms=term_metadata,
+            prediction=list(setup=.cdr_prediction_setup(setup)),
+            rank=list(
+                action=rank_action,
+                parametric=alias_resolution$info,
+                resolution=rank_resolution$resolution,
+                regularization=fixed_ridge,
+                tolerance=tolerance
+            ),
+            solver='dense generalized LAML reference solver'
+        )
+    )
+    class(output) <- c('cdrgam_block', 'cdrgam')
+    reporter$emit(
+        1L,
+        'fit complete',
+        criterion=format(solution$criterion, digits=10),
+        evaluations=result$evaluations,
+        converged=output$converged
+    )
+    output
+}
+
 #' @export
 coef.cdrgam_block <- function(object, ...) object$coefficients
 
@@ -758,6 +963,7 @@ residuals.cdrgam_block <- function(object, ...) object$residuals
 
 #' @export
 deviance.cdrgam_block <- function(object, ...) {
+    if (!is.null(object$deviance)) return(object$deviance)
     sum(object$prior.weights * object$residuals^2)
 }
 
@@ -767,11 +973,32 @@ nobs.cdrgam_block <- function(object, ...) length(object$y)
 #' @export
 logLik.cdrgam_block <- function(object, ...) {
     n <- length(object$y)
-    value <- -0.5 * (
-        n * log(2 * pi * object$scale) +
-            deviance.cdrgam_block(object) / object$scale
-    )
-    attr(value, 'df') <- object$edf + 1
+    gaussian <- identical(object$family$family, 'gaussian') &&
+        identical(object$family$link, 'identity')
+    value <- if (gaussian) {
+        -0.5 * (
+            n * log(2 * pi * object$scale) +
+                deviance.cdrgam_block(object) / object$scale
+        )
+    } else if (identical(object$family$family, 'Gamma')) {
+        .cdrgam_gamma_loglik(
+            object$y,
+            object$fitted.values,
+            object$prior.weights,
+            object$scale
+        )
+    } else {
+        -0.5 * object$family$aic(
+            object$y,
+            rep.int(1, n),
+            object$fitted.values,
+            object$prior.weights,
+            deviance.cdrgam_block(object)
+        )
+    }
+    estimated_dispersion <- gaussian ||
+        identical(object$family$family, 'Gamma')
+    attr(value, 'df') <- object$edf + as.integer(estimated_dispersion)
     attr(value, 'nobs') <- n
     class(value) <- 'logLik'
     value
@@ -807,7 +1034,7 @@ predict.cdrgam_block <- function(object, newdata=NULL, ...) {
 #' @export
 print.cdrgam_block <- function(x, ...) {
     cat('Continuous-time deconvolutional GAM\n')
-    cat('  backend: block (dense Gaussian REML reference solver)\n')
+    cat('  backend:', x$cdrgam$solver, '\n')
     cat('  IRF terms:', paste(x$cdrgam$term_labels, collapse=', '), '\n')
     cat('  coefficients:', length(x$coefficients), '\n')
     cat('  REML criterion:', format(x$reml, digits=7), '\n')

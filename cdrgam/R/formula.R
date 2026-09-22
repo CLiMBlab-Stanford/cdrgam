@@ -14,6 +14,10 @@
 #'   response time. `NULL` inherits the model-level `window`; without either,
 #'   the default is `c(0, Inf)`. The minimum must be finite; the maximum may be
 #'   infinite.
+#' @param knots_l Optional strictly increasing lag-basis construction points in
+#'   the original lag units. Supply exactly `k_l` values spanning the linked
+#'   training lags. This control is unavailable for `bs_l="ps"`, whose knot
+#'   contract differs from the other supported numeric marginals.
 #' @param k_l Lag-basis dimension. This axis is always smooth and cannot be
 #'   `NULL`.
 #' @param k_t Optional response-time basis dimension. `NULL` makes the IRF
@@ -42,6 +46,7 @@ irf <- function(
         predictor,
         ...,
         window=NULL,
+        knots_l=NULL,
         k_l=10,
         k_t=NULL,
         k_p=NULL,
@@ -85,6 +90,22 @@ irf <- function(
         }
         as.integer(value)
     }
+    validate_knots <- function(value, k, basis, window) {
+        if (is.null(value)) return(NULL)
+        if (!is.numeric(value) || length(value) != k ||
+                any(!is.finite(value)) || any(diff(value) <= 0)) {
+            stop('knots_l must contain exactly k_l strictly increasing finite values')
+        }
+        if (identical(basis, 'ps')) {
+            stop('knots_l is not supported with bs_l="ps"')
+        }
+        value <- as.numeric(value)
+        if (!is.null(window) && (value[[1L]] < window[[1L]] ||
+                value[[length(value)]] > window[[2L]])) {
+            stop('knots_l values must lie inside the IRF window')
+        }
+        value
+    }
     validate_bs <- function(value, argument) {
         if (!is.character(value) || length(value) != 1L || is.na(value) ||
                 !nzchar(value)) {
@@ -112,7 +133,8 @@ irf <- function(
 
     legacy <- !is.null(k) || !is.null(bs) || !is.null(nonlinear) ||
         !missing(varying)
-    new_supplied <- !missing(k_l) || !missing(k_t) || !missing(k_p) ||
+    new_supplied <- !missing(knots_l) || !missing(k_l) || !missing(k_t) ||
+        !missing(k_p) ||
         !missing(bs_l) || !missing(bs_t) || !missing(bs_p)
     time_name <- NULL
     if (legacy) {
@@ -192,12 +214,14 @@ irf <- function(
             bs_p <- lapply(bs_p, validate_bs, argument='bs_p')
         }
     }
+    knots_l <- validate_knots(knots_l, k_l, bs_l, window)
     out <- list(
         predictors=predictors,
         predictor=if (constant) '1' else if (length(predictors) == 1L)
             predictors[[1L]] else paste(predictors, collapse=':'),
         constant=constant,
         window=window,
+        knots_l=knots_l,
         k_l=k_l,
         k_t=k_t,
         k_p=k_p,
@@ -230,6 +254,8 @@ irf <- function(
     arguments <- c(
         predictors,
         paste0('window=', format_vector(spec$window)),
+        paste0('knots_l=', if (is.null(spec$knots_l)) 'NULL' else
+            format_vector(spec$knots_l)),
         paste0('k_l=', spec$k_l),
         paste0('k_t=', format_nullable(spec$k_t)),
         paste0('k_p=', if (!length(spec$k_p)) 'NULL' else paste0(
@@ -312,6 +338,11 @@ irf <- function(
             spec$window <- if (is.null(inherited_window)) c(0, Inf) else
                 inherited_window
         }
+        if (!is.null(spec$knots_l) &&
+                (spec$knots_l[[1L]] < spec$window[[1L]] ||
+                spec$knots_l[[length(spec$knots_l)]] > spec$window[[2L]])) {
+            stop('knots_l values must lie inside the IRF window')
+        }
         spec
     })
     is_fixed_rate <- function(spec) {
@@ -345,7 +376,9 @@ irf <- function(
             }
             rate_spec <- evaluate_irf(
                 rate_call,
-                irf_defaults[intersect(names(irf_defaults), c('k_l', 'bs_l'))]
+                irf_defaults[intersect(
+                    names(irf_defaults), c('knots_l', 'k_l', 'bs_l')
+                )]
             )
         } else {
             rate_spec <- evaluate_irf(call(
@@ -353,7 +386,7 @@ irf <- function(
                 window=if (is.null(inherited_window)) c(0, Inf) else
                     inherited_window
             ), irf_defaults[intersect(
-                names(irf_defaults), c('k_l', 'bs_l')
+                names(irf_defaults), c('knots_l', 'k_l', 'bs_l')
             )])
         }
         rate_spec$implicit <- TRUE
@@ -509,6 +542,7 @@ irf <- function(
         n,
         k,
         bs,
+        knots=NULL,
         chunk_size,
         name,
         response_multiplier=NULL
@@ -529,11 +563,16 @@ irf <- function(
     if (length(values) < k) {
         stop('An IRF has fewer unique delays than its basis dimension k')
     }
-    knots <- as.numeric(stats::quantile(
-        values,
-        seq(0, 1, length.out=k),
-        names=FALSE
-    ))
+    knots <- if (is.null(knots)) {
+        as.numeric(stats::quantile(
+            values,
+            seq(0, 1, length.out=k),
+            names=FALSE
+        ))
+    } else as.numeric(knots)
+    if (length(knots) != k || any(!is.finite(knots))) {
+        stop('Lag knots must contain exactly k finite numeric values')
+    }
     if (any(diff(knots) <= 0)) {
         stop('Computed IRF knots are not strictly increasing')
     }
@@ -834,11 +873,13 @@ irf <- function(
                 'its basis dimension'
             )
         }
-        values <- as.numeric(stats::quantile(
-            unique_values,
-            seq(0, 1, length.out=max(axis$k, min(20L, length(unique_values)))),
-            names=FALSE
-        ))
+        values <- if (is.null(axis$knots)) {
+            as.numeric(stats::quantile(
+                unique_values,
+                seq(0, 1, length.out=max(axis$k, min(20L, length(unique_values)))),
+                names=FALSE
+            ))
+        } else as.numeric(axis$knots)
         unique(values)
     })
     names(representatives) <- internal_names
@@ -855,9 +896,14 @@ irf <- function(
         representatives,
         list(KEEP.OUT.ATTRS=FALSE, stringsAsFactors=FALSE)
     ))
+    supplied_knots <- stats::setNames(lapply(seq_along(axes), function(index) {
+        axes[[index]]$knots
+    }), internal_names)
+    supplied_knots <- supplied_knots[!vapply(supplied_knots, is.null, logical(1))]
     tensor <- mgcv::smoothCon(
         specification,
         data=construction_data,
+        knots=if (length(supplied_knots)) supplied_knots else NULL,
         absorb.cons=FALSE,
         scale.penalty=FALSE,
         n=nrow(construction_data)
@@ -1158,6 +1204,9 @@ irf <- function(
 #'   that does not define its own `window`. `NULL` retains the term-level
 #'   default `c(0, Inf)`. Every impulse in the applicable series and window is
 #'   included in the response-level design.
+#' @param knots_l Optional model-level default for [irf()] lag-basis
+#'   construction points. Term-level `knots_l`, including `NULL`, takes
+#'   precedence.
 #' @param k_l,k_t,k_p Optional model-level defaults for the corresponding
 #'   [irf()] axis dimensions. An argument supplied by an individual term,
 #'   including an explicit `NULL`, overrides its model-level default.
@@ -1189,6 +1238,7 @@ prepare_cdrgam <- function(
         impulses,
         responses,
         window=NULL,
+        knots_l=NULL,
         k_l=NULL,
         k_t=NULL,
         k_p=NULL,
@@ -1217,6 +1267,7 @@ prepare_cdrgam <- function(
         responses <- droplevels(responses)
     }
     irf_defaults <- list()
+    if (!missing(knots_l)) irf_defaults['knots_l'] <- list(knots_l)
     if (!missing(k_l)) irf_defaults['k_l'] <- list(k_l)
     if (!missing(k_t)) irf_defaults['k_t'] <- list(k_t)
     if (!missing(k_p)) irf_defaults['k_p'] <- list(k_p)
@@ -1316,7 +1367,16 @@ prepare_cdrgam <- function(
         term_name <- if (isTRUE(spec$constant)) 'irf(1)' else
             paste(predictors, collapse=':')
         delay_count <- length(unique(model_links$delay))
-        if (delay_count >= 3L && spec$k_l > delay_count) {
+        if (!is.null(spec$knots_l) && spec$k_l > delay_count) {
+            stop(
+                'knots_l defines ', spec$k_l, ' lag basis points for ',
+                term_name, ', but its training history has only ', delay_count,
+                ' distinct linked lags',
+                call.=FALSE
+            )
+        }
+        if (is.null(spec$knots_l) && delay_count >= 3L &&
+                spec$k_l > delay_count) {
             requested_k <- spec$k_l
             spec$k_l <- as.integer(delay_count)
             record_simplification(
@@ -1402,9 +1462,26 @@ prepare_cdrgam <- function(
                 model_links$impulse_index
             ]
         }
+        model_knots_l <- if (is.null(spec$knots_l)) NULL else
+            spec$knots_l / scaling$time_divisor
+        if (!is.null(model_knots_l)) {
+            linked_range <- range(model_links$delay)
+            tolerance <- max(1, max(abs(c(linked_range, model_knots_l)))) *
+                sqrt(.Machine$double.eps)
+            if (model_knots_l[[1L]] > linked_range[[1L]] + tolerance ||
+                    model_knots_l[[length(model_knots_l)]] <
+                    linked_range[[2L]] - tolerance) {
+                stop(
+                    'knots_l for ', term_name,
+                    ' must span all linked training lags',
+                    call.=FALSE
+                )
+            }
+        }
         axes <- list(list(
             role='lag', variable=NA_character_, label='lag',
-            values=model_links$delay, k=spec$k_l, bs=spec$bs_l
+            values=model_links$delay, k=spec$k_l, bs=spec$bs_l,
+            knots=model_knots_l
         ))
         if (!is.null(spec$k_t)) {
             axes[[length(axes) + 1L]] <- list(
@@ -1463,11 +1540,13 @@ prepare_cdrgam <- function(
             if (!width) {
                 stop('No impulses fall within the requested IRF window')
             }
-            knots <- as.numeric(stats::quantile(
-                unique(model_links$delay),
-                seq(0, 1, length.out=spec$k_l),
-                names=FALSE
-            ))
+            knots <- if (is.null(model_knots_l)) {
+                as.numeric(stats::quantile(
+                    unique(model_links$delay),
+                    seq(0, 1, length.out=spec$k_l),
+                    names=FALSE
+                ))
+            } else model_knots_l
             delay_matrix <- matrix(knots[[1L]], nrow=nrow(responses), ncol=width)
             weight_matrix <- matrix(0, nrow=nrow(responses), ncol=width)
             positions <- sequence(model_links$counts)
@@ -1492,6 +1571,7 @@ prepare_cdrgam <- function(
                 n=nrow(responses),
                 k=spec$k_l,
                 bs=spec$bs_l,
+                knots=model_knots_l,
                 chunk_size=chunk_size,
                 name=term_name,
                 response_multiplier=by_values
@@ -1729,12 +1809,14 @@ prepare_cdrgam <- function(
 #' compiled design will be reused across fits.
 #'
 #' @inheritParams prepare_cdrgam
-#' @param family An `mgcv` family.
+#' @param family A standard family object or a family name accepted by
+#'   [cdrgam_family()].
 #' @param method Smoothing-parameter estimation method.
 #' @param engine Either `"bam"` or `"gam"` for the native backend.
 #' @param backend Fitting backend. `"mgcv"` uses native fitting, `"block"`
-#'   selects the dense Gaussian REML reference solver, and `"sparse"` uses
-#'   sparse penalized normal equations. Select the trust-region optimizer with
+#'   selects the dense reference solver (Gaussian REML or fixed-dispersion
+#'   generalized LAML), and `"sparse"` uses streamed sparse Gaussian or
+#'   supported generalized optimization. Select the Gaussian trust-region optimizer with
 #'   `sparse_control=list(gradient="exact", outer_optimizer="bfgs_trust")`.
 #' @param checkpoint Optional checkpoint path for a custom backend. Checkpoints
 #'   are written atomically after periodic REML evaluations and contain
@@ -1757,6 +1839,11 @@ prepare_cdrgam <- function(
 #'   Hessian calculation.
 #'   A function receives the same progress events as named lists.
 #' @param sparse_control Named control list for the sparse backend. The
+#'   generalized sparse solver currently accepts
+#'   `crossprod_chunk_size`, `supernodal`, `optimizer_maxit`,
+#'   `optimizer_gradient_tolerance`, and `optimizer_trust_radius`; its exact
+#'   gradient and safeguarded trust-region optimizer are fixed. The remaining
+#'   controls below apply to Gaussian sparse fits.
 #'   `gradient` entry may be `"auto"` (the default), `"finite"`, `"exact"`,
 #'   `"stochastic"`, or `"hybrid"`; `gradient_probes` controls the fixed
 #'   Rademacher trace probes used by the latter two methods; `"hybrid"` uses
@@ -1808,6 +1895,10 @@ prepare_cdrgam <- function(
 #'   large-core runtime. `crossprod_chunk_size` bounds the
 #'   number of response rows used while accumulating sparse normal equations;
 #'   `restarts` requests additional deterministic smoothing-parameter starts.
+#'   Generalized sparse fits currently accept `crossprod_chunk_size`,
+#'   `supernodal`, `optimizer_maxit`, `optimizer_gradient_tolerance`, and
+#'   `optimizer_trust_radius`; their exact score and safeguarded trust optimizer
+#'   are mandatory.
 #' @param rank_action Policy for scientifically meaningful nonidentifiability
 #'   in a custom backend: `"error"` (the default), `"minimum_norm"`, `"drop"`,
 #'   or `"penalize"`. Exact aliases among ordinary unpenalized parametric
@@ -1840,6 +1931,7 @@ cdrgam <- function(
         impulses,
         responses,
         window=NULL,
+        knots_l=NULL,
         k_l=NULL,
         k_t=NULL,
         k_p=NULL,
@@ -1885,6 +1977,7 @@ cdrgam <- function(
         drop.unused.levels=drop.unused.levels
     )
     if (!missing(k_l)) preparation['k_l'] <- list(k_l)
+    if (!missing(knots_l)) preparation['knots_l'] <- list(knots_l)
     if (!missing(k_t)) preparation['k_t'] <- list(k_t)
     if (!missing(k_p)) preparation['k_p'] <- list(k_p)
     if (!missing(bs_l)) preparation['bs_l'] <- list(bs_l)
@@ -1943,6 +2036,7 @@ cdrgam.fit <- function(
     if (!inherits(design, 'cdrgam_design')) {
         stop('design must be a cdrgam_design returned by prepare_cdrgam()')
     }
+    family <- .as_family(family)
     prepared_drop <- design$configuration$drop.unused.levels
     if (!is.null(drop.unused.levels)) {
         if (length(drop.unused.levels) != 1L ||
@@ -1966,23 +2060,39 @@ cdrgam.fit <- function(
             stop('sparse_control applies only to backend="sparse"')
         }
         design <- .materialize_cdr_design(design, sparse=FALSE)
-        fit <- .fit_block_gaussian(
-            design=design,
-            family=family,
-            method=method,
-            checkpoint=checkpoint,
-            trace=solver_trace,
-            rank_action=rank_action,
-            rank_tol=rank_tol,
+        fitting_function <- if (identical(family$family, 'gaussian') &&
+                identical(family$link, 'identity')) {
+            .fit_block_gaussian
+        } else {
+            .fit_block_generalized
+        }
+        fit <- fitting_function(
+            design=design, family=family, method=method,
+            checkpoint=checkpoint, trace=solver_trace,
+            rank_action=rank_action, rank_tol=rank_tol,
             rank_penalty=rank_penalty,
-            drop.unused.levels=design$configuration$drop.unused.levels,
-            ...
+            drop.unused.levels=design$configuration$drop.unused.levels, ...
         )
         fit$call <- call
         fit$cdrgam$call <- call
         return(fit)
     }
     if (identical(backend, 'sparse')) {
+        generalized <- !identical(family$family, 'gaussian') ||
+            !identical(family$link, 'identity')
+        if (generalized) {
+            fit <- .fit_sparse_generalized(
+                design=design, family=family, method=method,
+                checkpoint=checkpoint, trace=solver_trace,
+                sparse_control=sparse_control, rank_action=rank_action,
+                rank_tol=rank_tol, rank_penalty=rank_penalty,
+                drop.unused.levels=design$configuration$drop.unused.levels,
+                ...
+            )
+            fit$call <- call
+            fit$cdrgam$call <- call
+            return(fit)
+        }
         fit <- .fit_sparse_gaussian(
             design=design,
             family=family,

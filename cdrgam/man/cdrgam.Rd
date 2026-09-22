@@ -55,7 +55,10 @@ cdrgam.fit(
 \arguments{
 \item{formula}{An extended formula containing ordinary \pkg{mgcv} terms and
 optional \code{irf()} terms. An implicit
-\code{irf(1)} is added unless suppressed with \code{- irf(1)}.}
+\code{irf(1)} is added unless suppressed with \code{- irf(1)}. For
+\code{family="gaulss"}, this may instead be a named list with \code{location}
+and \code{scale} formulas. The location formula supplies the response; the
+scale formula may be one-sided.}
 \item{impulses}{Data frame with one row per impulse.}
 \item{responses}{Data frame with one row per response.}
 \item{window}{Default inclusive lag window inherited by each \code{irf()}

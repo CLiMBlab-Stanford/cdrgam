@@ -12,7 +12,14 @@
 }
 
 .cdrgam_formula_strings <- function(formulas) {
-    lapply(formulas, function(formula) paste(deparse(formula), collapse=' '))
+    stringify <- function(formula) {
+        if (inherits(formula, 'formula')) {
+            return(paste(deparse(formula), collapse=' '))
+        }
+        if (is.list(formula)) return(lapply(formula, stringify))
+        paste(deparse(formula), collapse=' ')
+    }
+    lapply(formulas, stringify)
 }
 
 .cdrgam_parametric_indices <- function(object) {
@@ -308,7 +315,15 @@
         effective='Effective formula')
     for (name in names(labels)) {
         cat(labels[[name]], ':\n', sep='')
-        cat(paste(deparse(x$formulas[[name]]), collapse='\n'), '\n')
+        value <- x$formulas[[name]]
+        if (is.list(value) && !inherits(value, 'formula')) {
+            for (parameter in names(value)) {
+                cat('  ', parameter, ': ', sep='')
+                cat(paste(deparse(value[[parameter]]), collapse='\n    '), '\n')
+            }
+        } else {
+            cat(paste(deparse(value), collapse='\n'), '\n')
+        }
     }
     if (length(x$p.coeff)) {
         cat('\nParametric coefficients:\n')

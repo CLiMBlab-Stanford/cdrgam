@@ -589,7 +589,22 @@ summary.cdrgam <- function(
 #'   `fit` and `se.fit`.
 #' @export
 predict.cdrgam <- function(object, newdata=NULL, ...) {
+    if (is.null(newdata) && isTRUE(object$cdrgam$distributional)) {
+        return(mgcv::predict.gam(
+            object,
+            newdata=as.list(object$model),
+            ...
+        ))
+    }
     if (is.list(newdata) && all(c('impulses', 'responses') %in% names(newdata))) {
+        if (isTRUE(object$cdrgam$distributional)) {
+            return(.predict_cdrgam_distributional_streams(
+                object,
+                impulses=newdata$impulses,
+                responses=newdata$responses,
+                ...
+            ))
+        }
         return(.predict_cdrgam_streams(
             object,
             impulses=newdata$impulses,

@@ -3,7 +3,9 @@
 #' `cdrgam_family()` is the validated family registry used by the command-line
 #' harness. Family objects may still be passed directly to [cdrgam()] and
 #' [cdrgam.fit()]. The native `mgcv` backend supports every combination
-#' returned here. The dense block backend supports `gaussian(identity)` plus
+#' returned here. `gaulss` selects mgcv's two-predictor Gaussian
+#' location--scale family and currently requires the native backend. The dense
+#' block backend supports `gaussian(identity)` plus
 #' `binomial(logit)`, `poisson(log)`, and estimated-dispersion `Gamma(log)`.
 #' The sparse backend supports the same combinations with streamed PIRLS and
 #' an exact Laplace score.
@@ -14,7 +16,7 @@
 #' @return A standard R family object.
 #' @export
 cdrgam_family <- function(
-        family=c('gaussian', 'binomial', 'poisson', 'Gamma'),
+        family=c('gaussian', 'binomial', 'poisson', 'Gamma', 'gaulss'),
         link=NULL
 ) {
     if (missing(family)) family <- 'gaussian'
@@ -31,7 +33,8 @@ cdrgam_family <- function(
         gaussian=stats::gaussian,
         binomial=stats::binomial,
         poisson=stats::poisson,
-        Gamma=stats::Gamma
+        Gamma=stats::Gamma,
+        gaulss=mgcv::gaulss
     )
     constructor <- constructors[[family, exact=TRUE]]
     if (is.null(constructor)) {
@@ -41,6 +44,9 @@ cdrgam_family <- function(
         )
     }
     if (is.null(link)) return(constructor())
+    if (identical(family, 'gaulss')) {
+        stop('gaulss uses its fixed identity and log-scale links')
+    }
     if (!is.character(link) || length(link) != 1L || is.na(link) ||
             !nzchar(link)) {
         stop('link must be a nonempty link name')

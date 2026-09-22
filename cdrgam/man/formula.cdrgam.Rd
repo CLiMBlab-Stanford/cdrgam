@@ -21,7 +21,8 @@
 is available for fitted models.}
 \item{...}{Unused.}
 }
-\value{The selected formula.}
+\value{The selected formula, or a parameter-named formula list for a
+distributional model.}
 \description{
 Returns the user formula, the normalized CDR formula with structural defaults,
 the effective formula after automatic simplification, or the translated

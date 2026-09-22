@@ -1200,6 +1200,9 @@ irf <- function(
 #'
 #' @param formula Extended model formula containing ordinary `mgcv` terms and
 #'   optional [irf()] terms. An implicit `irf(1)` is added unless suppressed.
+#'   For `family="gaulss"`, this may instead be a named list with `location`
+#'   and `scale` formulas. The location formula supplies the response; the
+#'   scale formula may be one-sided.
 #' @param window Default inclusive lag window inherited by every [irf()] term
 #'   that does not define its own `window`. `NULL` retains the term-level
 #'   default `c(0, Inf)`. Every impulse in the applicable series and window is
@@ -1254,6 +1257,29 @@ prepare_cdrgam <- function(
         quiet=FALSE,
         drop.unused.levels=TRUE
 ) {
+    if (is.list(formula) && !inherits(formula, 'formula')) {
+        arguments <- list(
+            impulses=impulses,
+            responses=responses,
+            window=window,
+            series=series,
+            impulse_time=impulse_time,
+            response_time=response_time,
+            history=history,
+            chunk_size=chunk_size,
+            rescale_predictors=rescale_predictors,
+            quiet=quiet,
+            drop.unused.levels=drop.unused.levels
+        )
+        if (!missing(knots_l)) arguments['knots_l'] <- list(knots_l)
+        if (!missing(k_l)) arguments['k_l'] <- list(k_l)
+        if (!missing(k_t)) arguments['k_t'] <- list(k_t)
+        if (!missing(k_p)) arguments['k_p'] <- list(k_p)
+        if (!missing(bs_l)) arguments['bs_l'] <- list(bs_l)
+        if (!missing(bs_t)) arguments['bs_t'] <- list(bs_t)
+        if (!missing(bs_p)) arguments['bs_p'] <- list(bs_p)
+        return(.prepare_cdrgam_distributional(formula, arguments))
+    }
     if (!is.data.frame(impulses) || !is.data.frame(responses)) {
         stop('impulses and responses must be data frames')
     }
@@ -1962,7 +1988,11 @@ cdrgam <- function(
         'cdrgam',
         c('impulses', 'responses')
     )
-    if (!inherits(formula, 'formula')) stop('formula must be a formula')
+    formula_collection <- is.list(formula) && !inherits(formula, 'formula')
+    if (!inherits(formula, 'formula') && !formula_collection) {
+        stop('formula must be a formula or named distributional formula list')
+    }
+    if (formula_collection && missing(engine)) engine <- 'gam'
     preparation <- list(
         formula=formula,
         impulses=impulses,
@@ -2037,6 +2067,38 @@ cdrgam.fit <- function(
         stop('design must be a cdrgam_design returned by prepare_cdrgam()')
     }
     family <- .as_family(family)
+    if (inherits(design, 'cdrgam_distributional_design')) {
+        if (missing(engine)) engine <- 'gam'
+        prepared_drop <- design$configuration$drop.unused.levels
+        if (!is.null(drop.unused.levels) &&
+                !identical(drop.unused.levels, prepared_drop)) {
+            stop(
+                'drop.unused.levels is fixed by prepare_cdrgam(); ',
+                'reprepare the design with the requested value'
+            )
+        }
+        backend <- match.arg(backend)
+        engine <- match.arg(engine)
+        if (!identical(backend, 'mgcv')) {
+            stop('Distributional designs currently require backend="mgcv"')
+        }
+        if (!identical(family$family, 'gaulss')) {
+            stop('The initial distributional design requires family="gaulss"')
+        }
+        if (!is.null(checkpoint) ||
+                .solver_trace_level(solver_trace)$level > 0L ||
+                length(sparse_control) ||
+                !identical(match.arg(rank_action), 'error') ||
+                !is.null(rank_tol) || !is.null(rank_penalty)) {
+            stop('Custom-backend controls do not apply to distributional fits')
+        }
+        fit <- .fit_distributional_mgcv(
+            design, family=family, method=method, engine=engine, ...
+        )
+        fit$call <- call
+        fit$cdrgam$call <- call
+        return(fit)
+    }
     prepared_drop <- design$configuration$drop.unused.levels
     if (!is.null(drop.unused.levels)) {
         if (length(drop.unused.levels) != 1L ||
@@ -2292,7 +2354,8 @@ cdrgam.fit <- function(
 #'   CDR formula after automatic simplification. Fitted models also support
 #'   `"mgcv"`, the translated formula used by the fitting backend.
 #' @param ... Unused.
-#' @return A formula.
+#' @return A formula, or a parameter-named formula list for a distributional
+#'   model.
 #' @rdname formula.cdrgam
 #' @export
 formula.cdrgam_design <- function(

@@ -139,6 +139,13 @@
 .fit_distributional_mgcv <- function(
         design, family, method=NULL, engine=c('bam', 'gam'), ...
 ) {
+    dots <- list(...)
+    if (!is.null(dots$weights) && any(dots$weights != 1)) {
+        stop(
+            'gaulss does not support non-unit prior weights; mgcv accepts ',
+            'but ignores them'
+        )
+    }
     engine <- match.arg(engine)
     if (identical(engine, 'bam')) {
         stop('mgcv does not support general families such as gaulss in bam')
@@ -191,7 +198,7 @@
     }
     arguments <- c(
         list(formula=unname(translated), family=family, data=data),
-        list(...)
+        dots
     )
     if (!is.null(method)) arguments$method <- method
     fit <- if (identical(engine, 'bam')) {

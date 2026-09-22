@@ -1836,13 +1836,16 @@ prepare_cdrgam <- function(
 #'
 #' @inheritParams prepare_cdrgam
 #' @param family A standard family object or a family name accepted by
-#'   [cdrgam_family()].
+#'   [cdrgam_family()]. `gaulss` rejects non-unit prior weights because mgcv's
+#'   family accepts but does not use them.
 #' @param method Smoothing-parameter estimation method.
 #' @param engine Either `"bam"` or `"gam"` for the native backend.
 #' @param backend Fitting backend. `"mgcv"` uses native fitting, `"block"`
-#'   selects the dense reference solver (Gaussian REML or fixed-dispersion
-#'   generalized LAML), and `"sparse"` uses streamed sparse Gaussian or
-#'   supported generalized optimization. Select the Gaussian trust-region optimizer with
+#'   selects the dense reference solver (Gaussian REML, generalized LAML, or
+#'   joint Gaussian location--scale LAML), and `"sparse"` uses streamed sparse
+#'   Gaussian, supported generalized, or joint Gaussian location--scale
+#'   optimization. The distributional sparse solver uses an exact outer score.
+#'   Select the Gaussian trust-region optimizer with
 #'   `sparse_control=list(gradient="exact", outer_optimizer="bfgs_trust")`.
 #' @param checkpoint Optional checkpoint path for a custom backend. Checkpoints
 #'   are written atomically after periodic REML evaluations and contain
@@ -1851,7 +1854,7 @@ prepare_cdrgam <- function(
 #'   and criterion so interruption resumes the same optimization trajectory;
 #'   older checkpoints without that state remain parameter-only warm starts.
 #'   Reusing the path resumes an interrupted fit or skips an already completed
-#'   outer optimization.
+#'   outer optimization. Distributional fits do not yet support checkpoints.
 #' @param solver_trace Custom-backend progress reporting. `FALSE` or `0` is
 #'   silent; `TRUE` or `1` reports phases, improving solutions, and
 #'   trust-optimizer diagnostics; `2` reports every objective evaluation; and
@@ -1865,11 +1868,14 @@ prepare_cdrgam <- function(
 #'   Hessian calculation.
 #'   A function receives the same progress events as named lists.
 #' @param sparse_control Named control list for the sparse backend. The
-#'   generalized sparse solver currently accepts
+#'   single-predictor generalized sparse solver accepts
 #'   `crossprod_chunk_size`, `supernodal`, `optimizer_maxit`,
 #'   `optimizer_gradient_tolerance`, and `optimizer_trust_radius`; its exact
 #'   gradient and safeguarded trust-region optimizer are fixed. The remaining
-#'   controls below apply to Gaussian sparse fits.
+#'   controls below apply to Gaussian sparse fits. The distributional sparse
+#'   solver accepts `crossprod_chunk_size`, `supernodal`, `optimizer_maxit`,
+#'   `optimizer_gradient_tolerance`, `inner_tolerance`, and `inner_maxit`; its
+#'   exact score and L-BFGS-B optimizer are fixed.
 #'   `gradient` entry may be `"auto"` (the default), `"finite"`, `"exact"`,
 #'   `"stochastic"`, or `"hybrid"`; `gradient_probes` controls the fixed
 #'   Rademacher trace probes used by the latter two methods; `"hybrid"` uses
@@ -2079,22 +2085,42 @@ cdrgam.fit <- function(
         }
         backend <- match.arg(backend)
         engine <- match.arg(engine)
-        if (!identical(backend, 'mgcv')) {
-            stop('Distributional designs currently require backend="mgcv"')
-        }
         if (!identical(family$family, 'gaulss')) {
             stop('The initial distributional design requires family="gaulss"')
         }
         if (!is.null(checkpoint) ||
-                .solver_trace_level(solver_trace)$level > 0L ||
-                length(sparse_control) ||
                 !identical(match.arg(rank_action), 'error') ||
                 !is.null(rank_tol) || !is.null(rank_penalty)) {
-            stop('Custom-backend controls do not apply to distributional fits')
+            stop(
+                'Checkpoint and rank controls do not yet apply to ',
+                'distributional fits'
+            )
         }
-        fit <- .fit_distributional_mgcv(
-            design, family=family, method=method, engine=engine, ...
-        )
+        fit <- if (identical(backend, 'sparse')) {
+            .fit_distributional_sparse(
+                design,
+                family=family,
+                method=method,
+                trace=solver_trace,
+                sparse_control=sparse_control,
+                ...
+            )
+        } else if (identical(backend, 'block')) {
+            .fit_distributional_block(
+                design,
+                family=family,
+                method=method,
+                trace=solver_trace,
+                ...
+            )
+        } else {
+            if (length(sparse_control)) {
+                stop('sparse_control applies only to backend="sparse"')
+            }
+            .fit_distributional_mgcv(
+                design, family=family, method=method, engine=engine, ...
+            )
+        }
         fit$call <- call
         fit$cdrgam$call <- call
         return(fit)

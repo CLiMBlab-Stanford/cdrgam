@@ -11,7 +11,8 @@ Description: Fits continuous-time deconvolutional regression models as
     from irregularly sampled impulse histories in bounded-memory chunks,
     then fitted with either 'mgcv' or custom dense and sparse backends.
     Custom backends provide Gaussian restricted maximum likelihood and
-    Poisson, binomial, and Gamma Laplace marginal-likelihood fitting.
+    Poisson, binomial, and Gamma Laplace marginal-likelihood fitting, plus
+    Gaussian location-scale regression.
     Fitted objects provide standard model methods and retain their translated
     'mgcv' representation.
 License: MIT + file LICENSE

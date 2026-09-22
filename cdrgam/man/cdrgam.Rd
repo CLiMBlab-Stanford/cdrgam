@@ -94,13 +94,16 @@ fitted factor vocabulary. For \code{cdrgam.fit()}, use \code{NULL} to inherit
 the choice already compiled into \code{design}; a supplied value must match
 it.}
 \item{family}{A standard family object or a family name accepted by
-\code{cdrgam_family()}.}
+\code{cdrgam_family()}. \code{gaulss} rejects non-unit prior weights because
+mgcv's family accepts but does not use them.}
 \item{method}{Smoothing-parameter estimation method.}
 \item{engine}{Either \code{"bam"} or \code{"gam"}.}
 \item{backend}{Fitting backend. \code{"mgcv"} uses native fitting,
-\code{"block"} selects the dense reference solver (Gaussian REML or
-generalized LAML), and \code{"sparse"} uses streamed sparse Gaussian or
-supported generalized optimization. Select the Gaussian trust-region
+\code{"block"} selects the dense reference solver (Gaussian REML,
+generalized LAML, or joint Gaussian location--scale LAML), and
+\code{"sparse"} uses streamed sparse Gaussian, supported generalized, or
+joint Gaussian location--scale optimization. The distributional sparse solver
+uses an exact outer score. Select the Gaussian trust-region
 optimizer with
 \code{sparse_control=list(gradient="exact", outer_optimizer="bfgs_trust")}.}
 \item{checkpoint}{Optional checkpoint path for a custom backend. Checkpoints
@@ -110,7 +113,7 @@ curvature approximation, trust radius, counters, parameters, score, and
 criterion so interruption resumes the same optimization trajectory; older
 checkpoints without that state remain parameter-only warm starts. Reusing the
 path resumes an interrupted fit or skips an already completed outer
-optimization.}
+optimization. Distributional fits do not yet support checkpoints.}
 \item{solver_trace}{Custom-backend progress reporting. \code{FALSE} or
 \code{0} is silent; \code{TRUE} or \code{1} reports phases, improving
 solutions, and trust-optimizer diagnostics; \code{2} reports every objective
@@ -124,11 +127,15 @@ Automatic selection uses the same process memory budget as the post-fit
 Hessian calculation.
 A function receives the progress events as named lists.}
 \item{sparse_control}{Named control list for the sparse backend. The
-generalized sparse solver currently accepts
+single-predictor generalized sparse solver accepts
 \code{crossprod_chunk_size}, \code{supernodal}, \code{optimizer_maxit},
 \code{optimizer_gradient_tolerance}, and \code{optimizer_trust_radius}; its
 exact gradient and safeguarded trust-region optimizer are fixed. The
-remaining controls below apply to Gaussian sparse fits.
+remaining controls below apply to Gaussian sparse fits. The distributional
+sparse solver accepts \code{crossprod_chunk_size}, \code{supernodal},
+\code{optimizer_maxit}, \code{optimizer_gradient_tolerance},
+\code{inner_tolerance}, and \code{inner_maxit}; its exact score and L-BFGS-B
+optimizer are fixed.
 \code{gradient} entry may be \code{"auto"} (the default), \code{"finite"},
 \code{"exact"}, \code{"stochastic"}, or \code{"hybrid"}.
 \code{gradient_probes} controls the fixed Rademacher trace probes used by the

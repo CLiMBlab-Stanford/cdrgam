@@ -1,5 +1,20 @@
 library(cdrgam)
 
+process_memory <- max(c(
+    cdrgam:::.cdrgam_proc_memory('VmRSS'),
+    cdrgam:::.cdrgam_r_memory()
+), na.rm=TRUE)
+previous_memory_limit <- getOption('cdrgam.memory_limit_bytes')
+options(cdrgam.memory_limit_bytes=process_memory + 1024^2)
+memory_probe <- cdrgam:::.cdrgam_memory_availability()
+options(cdrgam.memory_limit_bytes=previous_memory_limit)
+stopifnot(
+    is.finite(process_memory),
+    identical(memory_probe$source, 'option'),
+    is.finite(memory_probe$available_bytes),
+    memory_probe$available_bytes > 0
+)
+
 simulation <- simulate_cdr(
     list(x=function(lag) exp(-lag)),
     n_impulses=60,
@@ -99,7 +114,9 @@ stopifnot(
     identical(automatic$sparse$outer_optimizer, 'bfgs_trust'),
     identical(automatic$sparse$hessian_requested, 'none'),
     identical(automatic$sparse$hessian, 'none'),
-    automatic$sparse$control$gradient_cores == 4L,
+    automatic$sparse$control$gradient_cores == if (
+        .Platform$OS.type == 'windows'
+    ) 1L else 4L,
     is.list(automatic$sparse$optimizer_selection),
     automatic$sparse$optimizer_selection$policy_version == 1L
 )

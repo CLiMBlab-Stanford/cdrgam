@@ -61,9 +61,7 @@
             stream$series,
             stream$impulse_time,
             stream$response_time,
-            specification$window,
-            history_length=if (is.null(stream$history_length)) Inf else
-                stream$history_length
+            specification$window
         )
         scaling <- object$cdrgam$scaling
         if (is.null(scaling)) scaling <- object$cdrgam$preparation$scaling
@@ -90,7 +88,7 @@
                 for (start in seq.int(1L, length(links$delay), by=chunk_size)) {
                     end <- min(length(links$delay), start + chunk_size - 1L)
                     rows <- start:end
-                    axis_data <- setNames(lapply(info$axis, function(axis) {
+                    axis_data <- stats::setNames(lapply(info$axis, function(axis) {
                         switch(
                             axis$role,
                             lag=links$delay[rows],

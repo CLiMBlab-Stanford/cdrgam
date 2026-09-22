@@ -279,7 +279,7 @@ effect_catalog <- function(object, impulses=NULL, responses=NULL) {
 
 .cdr_effect_basis <- function(info, grid) {
     metadata <- .cdr_effect_axes(info)
-    internal <- setNames(lapply(metadata, function(axis) {
+    internal <- stats::setNames(lapply(metadata, function(axis) {
         grid[[.cdr_effect_axis_name(axis)]] / if (is.null(axis$scale)) 1 else axis$scale
     }), vapply(metadata, `[[`, character(1), 'internal'))
     basis <- mgcv::PredictMat(info$basis, internal, n=nrow(grid))

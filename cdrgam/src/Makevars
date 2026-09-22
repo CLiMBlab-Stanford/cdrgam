@@ -1,4 +1,2 @@
-# This extension contains C code only. R's shared LAPACK and BLAS libraries
-# carry their own Fortran runtime dependencies; adding FLIBS here would require
-# an unversioned compiler-runtime development library on the installation host.
-PKG_LIBS = $(LAPACK_LIBS) $(BLAS_LIBS)
+C_STD = C99
+PKG_LIBS = $(LAPACK_LIBS) $(BLAS_LIBS) $(FLIBS)

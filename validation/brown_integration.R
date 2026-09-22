@@ -227,19 +227,11 @@ save_fits <- identical(Sys.getenv('CDRGAM_BROWN_SAVE_FITS', '0'), '1')
 use_checkpoints <- identical(Sys.getenv('CDRGAM_BROWN_CHECKPOINT', '1'), '1')
 solver_trace <- as.integer(Sys.getenv('CDRGAM_BROWN_SOLVER_TRACE', '1'))
 fit_backend <- Sys.getenv('CDRGAM_BROWN_BACKEND', 'sparse')
-if (!fit_backend %in% c('sparse', 'sparse_trust')) {
-    stop('CDRGAM_BROWN_BACKEND must be sparse or sparse_trust')
+if (!identical(fit_backend, 'sparse')) {
+    stop('CDRGAM_BROWN_BACKEND must be sparse')
 }
-gradient_default <- if (identical(fit_backend, 'sparse_trust')) {
-    'exact'
-} else {
-    'auto'
-}
-outer_optimizer_default <- if (identical(fit_backend, 'sparse_trust')) {
-    'bfgs_trust'
-} else {
-    'lbfgsb'
-}
+gradient_default <- 'auto'
+outer_optimizer_default <- 'lbfgsb'
 
 fits <- list()
 metrics <- vector('list', length(requested))
@@ -291,7 +283,7 @@ for (i in seq_along(requested)) {
         )
     ) else NULL
     fit_elapsed <- system.time({
-        fit <- fit_cdrgam(
+        fit <- cdrgam.fit(
             design,
             backend=fit_backend,
             family=stats::gaussian(),
@@ -303,6 +295,10 @@ for (i in seq_along(requested)) {
                     'CDRGAM_BROWN_GRADIENT',
                     gradient_default
                 ),
+                hessian=Sys.getenv(
+                    'CDRGAM_BROWN_HESSIAN',
+                    'gradient'
+                ),
                 outer_optimizer=Sys.getenv(
                     'CDRGAM_BROWN_OUTER_OPTIMIZER',
                     outer_optimizer_default
@@ -313,8 +309,15 @@ for (i in seq_along(requested)) {
                 )),
                 optimizer_gradient_tolerance=as.numeric(Sys.getenv(
                     'CDRGAM_BROWN_OPTIMIZER_GRADIENT_TOLERANCE',
-                    if (identical(fit_backend, 'sparse_trust')) '2e-4' else
-                        '1e-4'
+                    '1e-4'
+                )),
+                boundary_action=Sys.getenv(
+                    'CDRGAM_BROWN_BOUNDARY_ACTION',
+                    'report'
+                ),
+                boundary_log_sp=as.numeric(Sys.getenv(
+                    'CDRGAM_BROWN_BOUNDARY_LOG_SP',
+                    '12'
                 )),
                 gradient_probes=as.integer(Sys.getenv(
                     'CDRGAM_BROWN_GRADIENT_PROBES',
@@ -350,8 +353,7 @@ for (i in seq_along(requested)) {
     prediction_elapsed <- system.time({
         prediction <- predict(
             fit,
-            list(impulses=impulses, responses=validation_predictors),
-            allow_new_levels=TRUE
+            list(impulses=impulses, responses=validation_predictors)
         )
     })[['elapsed']]
     residual <- validation$fdur - prediction
@@ -559,7 +561,7 @@ for (i in seq_along(requested)) {
                 lag=sort(unique(population$lag)),
                 predictor=if (all(is.na(population$predictor))) NULL else
                     sort(unique(population$predictor)),
-                level=selected_levels(info),
+                group=selected_levels(info),
                 se=FALSE
             )
             key <- paste(

@@ -1,4 +1,4 @@
-# Synthetic random-intercept and random-IRF recovery validation.
+# Synthetic random-intercept and grouped-IRF recovery validation.
 # Run from the repository root with:
 #   Rscript validation/mixed_recovery.R
 
@@ -56,8 +56,8 @@ run_mixed_recovery <- function(output_dir='validation/output') {
         chunk_size=300
     )
     fits <- list(
-        mgcv=fit_cdrgam(design, backend='mgcv', engine='gam', method='REML'),
-        block=fit_cdrgam(design, backend='block', method='REML')
+        mgcv=cdrgam.fit(design, backend='mgcv', engine='gam', method='REML'),
+        block=cdrgam.fit(design, backend='block', method='REML')
     )
     lag <- seq(0, 2, length.out=301)
     selected_groups <- groups[c(1, 3, 5, 8, 10, 12)]
@@ -68,7 +68,7 @@ run_mixed_recovery <- function(output_dir='validation/output') {
                 fit,
                 term='x|subject',
                 lag=lag,
-                level=selected_groups
+                group=selected_groups
             )
         )
     })
@@ -141,7 +141,7 @@ run_mixed_recovery <- function(output_dir='validation/output') {
         type='n',
         xlab='Lag',
         ylab='Total impulse response',
-        main='Population + subject-specific random IRFs'
+        main='Population + subject-specific grouped IRF deviations'
     )
     marker_index <- seq.int(1L, length(lag), by=25L)
     for (i in seq_along(selected_groups)) {

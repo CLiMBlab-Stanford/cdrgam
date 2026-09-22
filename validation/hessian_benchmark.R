@@ -100,7 +100,7 @@ stopifnot(
 run_fit <- function(method, replicate, order) {
     events <- list()
     elapsed <- system.time({
-        fit <- fit_cdrgam(
+        fit <- cdrgam.fit(
             design,
             backend='sparse',
             method='REML',

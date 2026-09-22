@@ -103,7 +103,7 @@ for (name in selected) {
         saveRDS(list(log_sp=log(warm$sp), criterion=warm$reml), checkpoint)
     }
     elapsed <- system.time({
-        fit <- fit_cdrgam(
+        fit <- cdrgam.fit(
             design,
             backend='sparse',
             method='REML',

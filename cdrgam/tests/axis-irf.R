@@ -120,6 +120,55 @@ override <- prepare_cdrgam(
 )
 stopifnot(identical(override$specification[[1L]]$window, c(0, 1)))
 
+defaults <- prepare_cdrgam(
+    response ~ irf(A, B) +
+        irf(A, k_l=5, k_t=NULL, k_p=NULL, bs_l='cr', bs_p='tp') -
+        irf(1),
+    simulation$impulses,
+    simulation$responses,
+    window=c(0, 2),
+    k_l=7,
+    k_t=4,
+    k_p=3,
+    bs_l='tp',
+    bs_t='ps',
+    bs_p='cs',
+    history='ragged',
+    quiet=TRUE
+)
+stopifnot(
+    identical(defaults$specification[[1L]]$k_l, 7L),
+    identical(defaults$specification[[1L]]$k_t, 4L),
+    identical(defaults$specification[[1L]]$k_p, list(3L, 3L)),
+    identical(defaults$specification[[1L]]$bs_l, 'tp'),
+    identical(defaults$specification[[1L]]$bs_t, 'ps'),
+    identical(defaults$specification[[1L]]$bs_p, list('cs', 'cs')),
+    identical(defaults$specification[[2L]]$k_l, 5L),
+    is.null(defaults$specification[[2L]]$k_t),
+    identical(defaults$specification[[2L]]$k_p, list(NULL)),
+    identical(defaults$specification[[2L]]$bs_l, 'cr'),
+    identical(defaults$specification[[2L]]$bs_p, list('tp')),
+    identical(defaults$configuration$k_l, 7),
+    identical(defaults$configuration$k_t, 4),
+    identical(defaults$configuration$k_p, 3)
+)
+implicit_rate_defaults <- prepare_cdrgam(
+    response ~ irf(A),
+    simulation$impulses,
+    simulation$responses,
+    window=c(0, 2),
+    k_l=7,
+    k_t=4,
+    history='ragged',
+    quiet=TRUE
+)
+stopifnot(
+    isTRUE(implicit_rate_defaults$specification[[1L]]$constant),
+    is.null(implicit_rate_defaults$specification[[1L]]$k_t),
+    identical(implicit_rate_defaults$specification[[1L]]$k_l, 7L),
+    identical(implicit_rate_defaults$specification[[2L]]$k_t, 4L)
+)
+
 # Centering removes the stationary lag-only subspace from a nonstationary
 # tensor, so the two terms remain jointly identifiable.
 hierarchy <- prepare_cdrgam(

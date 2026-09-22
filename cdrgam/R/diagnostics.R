@@ -107,7 +107,7 @@ estimate_irf <- function(
                     grid_values,
                     list(KEEP.OUT.ATTRS=FALSE, stringsAsFactors=FALSE)
                 ))
-                axis_data <- setNames(lapply(seq_along(info$axis), function(index) {
+                axis_data <- stats::setNames(lapply(seq_along(info$axis), function(index) {
                     axis <- info$axis[[index]]
                     value <- if (index == 1L) evaluation_grid$lag else
                         evaluation_grid[[axis$variable]]

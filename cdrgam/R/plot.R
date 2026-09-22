@@ -108,7 +108,7 @@ Predict.matrix.cdr.rescaled.smooth <- function(object, data) {
         if (is.null(predictor)) stop('A surface term requires predictor values')
         grid <- expand.grid(lag=lag, predictor=predictor)
         if (!is.null(info$axis)) {
-            axis_data <- setNames(lapply(seq_along(info$axis), function(index) {
+            axis_data <- stats::setNames(lapply(seq_along(info$axis), function(index) {
                 axis <- info$axis[[index]]
                 if (index == 1L) return(grid$lag / axis$scale)
                 if (index == 2L) return(grid$predictor / axis$scale)

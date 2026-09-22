@@ -19,5 +19,6 @@ Imports:
     mgcv
 Encoding: UTF-8
 NeedsCompilation: yes
+SystemRequirements: C99
 Roxygen: list(markdown = TRUE)
 RoxygenNote: 7.3.2

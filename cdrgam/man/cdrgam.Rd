@@ -9,11 +9,16 @@ cdrgam(
   impulses,
   responses,
   window = NULL,
+  k_l = NULL,
+  k_t = NULL,
+  k_p = NULL,
+  bs_l = NULL,
+  bs_t = NULL,
+  bs_p = NULL,
   series = character(),
   impulse_time = "time",
   response_time = "time",
   history = c("auto", "dense", "ragged"),
-  history_length = Inf,
   chunk_size = 10000,
   rescale_predictors = FALSE,
   family = stats::gaussian(),
@@ -54,14 +59,18 @@ optional \code{irf()} terms. An implicit
 \item{responses}{Data frame with one row per response.}
 \item{window}{Default inclusive lag window inherited by each \code{irf()}
 term that does not supply its own window. \code{NULL} retains the term-level
-default \code{c(0, Inf)}.}
+default \code{c(0, Inf)}. Every impulse in the applicable series and window is
+included in the response-level design.}
+\item{k_l, k_t, k_p}{Optional model-level defaults for the corresponding
+\code{irf()} axis dimensions. An argument supplied by an individual term,
+including an explicit \code{NULL}, overrides its model-level default.}
+\item{bs_l, bs_t, bs_p}{Optional model-level defaults for the corresponding
+\code{irf()} marginal basis names. Term-level arguments take precedence.}
 \item{series}{Character vector naming independent-series columns.}
 \item{impulse_time}{Name of the impulse-time column.}
 \item{response_time}{Name of the response-time column.}
 \item{history}{History layout: \code{"auto"}, \code{"dense"}, or
 \code{"ragged"}.}
-\item{history_length}{Maximum number of most-recent impulses retained within
-each IRF lag window; \code{Inf} retains all impulses.}
 \item{chunk_size}{Maximum responses or impulse-response links transformed in
 one chunk.}
 \item{rescale_predictors}{If \code{TRUE}, divide continuous numeric
@@ -113,8 +122,9 @@ latter two methods; \code{"hybrid"} uses stochastic scores for a warm start
 and then refines with exact scores. \code{"auto"} compares predicted
 exact-score time and memory with the cost of finite differences after the
 first objective factorization. \code{gradient_cores} evaluates central
-finite-difference directions in parallel on non-Windows systems; a
-single-threaded BLAS should be used when it exceeds one.
+finite-difference directions in parallel on systems that support process
+forking and falls back to one core on Windows; a single-threaded BLAS should
+be used when it exceeds one.
 \code{finite_difference_step} defaults to \code{1e-3}.
 \code{outer_optimizer} may be \code{"auto"} (the default), \code{"lbfgsb"},
 or the experimental safeguarded \code{"bfgs_trust"}. Automatic selection uses
@@ -134,9 +144,11 @@ calculation that differences the profiled scalar criterion,
 \code{"defer"} retains the sparse workspace and computes
 the gradient-based Hessian on the first unconditional-inference request, and
 \code{"none"} skips smoothing-parameter uncertainty. The automatic memory
-check honors the effective Linux cgroup or SLURM allocation when available;
-the \code{cdrgam.memory_limit_bytes} option can impose a smaller process
-limit. \code{hessian_step} controls the finite-difference step and defaults
+check honors the effective Linux cgroup or SLURM allocation when available.
+On other systems, automatic selection uses the gradient Hessian when available
+memory cannot be determined; the \code{cdrgam.memory_limit_bytes} option can
+provide an explicit process limit. \code{hessian_step} controls the
+finite-difference step and defaults
 to \code{1e-2}.
 \code{supernodal} optionally overrides the automatically selected CHOLMOD
 factorization form. \code{trace_method} may be \code{"auto"} (the default),

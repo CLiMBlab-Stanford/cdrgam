@@ -373,6 +373,13 @@
     )
 }
 
+.cdrgam_r_memory <- function() {
+    usage <- tryCatch(gc(), error=function(error) NULL)
+    if (is.null(usage) || ncol(usage) < 2L) return(NA_real_)
+    bytes <- sum(usage[, 2L]) * 1024^2
+    if (is.finite(bytes) && bytes >= 0) bytes else NA_real_
+}
+
 .cdrgam_cgroup_memory_directories <- function() {
     directories <- '/sys/fs/cgroup'
     entries <- tryCatch(
@@ -413,10 +420,15 @@
     }
 
     process_rss <- .cdrgam_proc_memory('VmRSS')
+    process_memory <- if (is.finite(process_rss)) {
+        process_rss
+    } else {
+        .cdrgam_r_memory()
+    }
     override <- getOption('cdrgam.memory_limit_bytes', NA_real_)
     if (is.numeric(override) && length(override) == 1L &&
-            is.finite(override) && override > 0 && is.finite(process_rss)) {
-        add_candidate('option', as.numeric(override), process_rss)
+            is.finite(override) && override > 0 && is.finite(process_memory)) {
+        add_candidate('option', as.numeric(override), process_memory)
     }
 
     for (directory in .cdrgam_cgroup_memory_directories()) {
@@ -1552,7 +1564,11 @@
         as.integer(value)
     }
     if (.Platform$OS.type == 'windows' && gradient_cores > 1L) {
-        stop('Parallel finite gradients are not supported on Windows')
+        warning(
+            'Parallel finite gradients are not available on Windows; using one core',
+            call.=FALSE
+        )
+        gradient_cores <- 1L
     }
     finite_difference_step <- if (
         is.null(control('finite_difference_step'))

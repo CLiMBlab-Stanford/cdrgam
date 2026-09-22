@@ -35,10 +35,10 @@ either, the default is \code{c(0, Inf)}.}
 \item{k_t}{Optional response-time basis dimension. \code{NULL} makes the IRF
 stationary; a number models nonstationarity against the configured response
 time.}
-\item{k_p}{Predictor-axis dimensions, one per predictor. \code{NULL} means
-linear and a number gives a smooth marginal. Use a list such as
-\code{list(NULL, 4)} for mixed axes because R reduces \code{c(NULL, 4)} to
-\code{4}.}
+\item{k_p}{Predictor-axis dimensions. Supply one value to recycle it or one
+entry per predictor. \code{NULL} means linear and a number gives a smooth
+marginal. Use a list such as \code{list(NULL, 4)} for mixed axes because R
+reduces \code{c(NULL, 4)} to \code{4}.}
 \item{bs_l, bs_t}{Lag and response-time marginal basis names accepted by
 \pkg{mgcv}.}
 \item{bs_p}{Predictor marginal basis names; one value is recycled or supply

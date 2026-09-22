@@ -12,9 +12,11 @@ gradient <- Sys.getenv('CDRGAM_OPT_GRADIENT', 'finite')
 probes <- as.integer(Sys.getenv('CDRGAM_OPT_PROBES', '12'))
 gradient_cores <- as.integer(Sys.getenv('CDRGAM_OPT_GRADIENT_CORES', '1'))
 hessian <- Sys.getenv('CDRGAM_OPT_HESSIAN', 'profiled')
-outer_optimizer <- Sys.getenv('CDRGAM_OPT_OUTER', 'lbfgsb')
+outer_optimizer <- Sys.getenv('CDRGAM_OPT_OUTER', 'auto')
+trace_method <- Sys.getenv('CDRGAM_OPT_TRACE_METHOD', 'auto')
 simulation_seed <- as.integer(Sys.getenv('CDRGAM_OPT_SEED', '9201'))
 restarts <- as.integer(Sys.getenv('CDRGAM_OPT_RESTARTS', '0'))
+optimizer_maxit <- as.integer(Sys.getenv('CDRGAM_OPT_MAXIT', '100'))
 
 truth <- stats::setNames(lapply(seq_len(predictor_count), function(i) {
     force(i)
@@ -69,7 +71,7 @@ design <- prepare_cdrgam(
 )
 
 elapsed <- system.time({
-    fit <- fit_cdrgam(
+    fit <- cdrgam.fit(
         design,
         backend='sparse',
         method='REML',
@@ -79,6 +81,8 @@ elapsed <- system.time({
             gradient_cores=gradient_cores,
             hessian=hessian,
             outer_optimizer=outer_optimizer,
+            optimizer_maxit=optimizer_maxit,
+            trace_method=trace_method,
             restarts=restarts,
             schur='always'
         )
@@ -86,11 +90,27 @@ elapsed <- system.time({
 })[['elapsed']]
 
 result <- data.frame(
-    gradient=gradient,
-    probes=if (gradient %in% c('stochastic', 'hybrid')) probes else 0L,
+    gradient_requested=fit$sparse$gradient_requested,
+    gradient=fit$sparse$gradient,
+    probes=if (fit$sparse$gradient %in% c(
+        'stochastic', 'hybrid'
+    )) probes else 0L,
     gradient_cores=gradient_cores,
     hessian=hessian,
-    outer_optimizer=outer_optimizer,
+    outer_optimizer_requested=fit$sparse$outer_optimizer_requested,
+    outer_optimizer=fit$sparse$outer_optimizer,
+    trace_method=fit$sparse$trace_method,
+    selection_reason=fit$sparse$optimizer_selection$reason,
+    probe_objective_seconds=
+        fit$sparse$optimizer_selection$objective_seconds,
+    predicted_exact_seconds=
+        fit$sparse$optimizer_selection$predicted_exact_seconds,
+    predicted_finite_seconds=
+        fit$sparse$optimizer_selection$predicted_finite_seconds,
+    median_exact_seconds=
+        fit$sparse$optimizer_selection$median_exact_seconds,
+    exact_core_mib=
+        fit$sparse$optimizer_selection$exact_core_bytes / 1024^2,
     simulation_seed=simulation_seed,
     restarts=restarts,
     observations=nrow(simulation$responses),

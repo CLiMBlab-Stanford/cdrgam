@@ -18,10 +18,11 @@
 #'   `NULL`.
 #' @param k_t Optional response-time basis dimension. `NULL` makes the IRF
 #'   stationary; a number models nonstationarity against `response_time`.
-#' @param k_p Predictor-axis dimensions. Supply one entry per predictor;
-#'   `NULL` means that predictor enters linearly, while a number gives a smooth
-#'   marginal. Use a list, such as `list(NULL, 4)`, when mixing linear and
-#'   smooth predictors because base R reduces `c(NULL, 4)` to `4`.
+#' @param k_p Predictor-axis dimensions. Supply one value to recycle it or one
+#'   entry per predictor. `NULL` means that predictor enters linearly, while a
+#'   number gives a smooth marginal. Use a list, such as `list(NULL, 4)`, when
+#'   mixing linear and smooth predictors because base R reduces `c(NULL, 4)`
+#'   to `4`.
 #' @param bs_l,bs_t Lag and response-time marginal basis names accepted by
 #'   `mgcv`.
 #' @param bs_p Predictor marginal basis names. Supply one value to recycle it
@@ -168,6 +169,9 @@ irf <- function(
                 }
             } else {
                 k_p <- as.list(k_p)
+                if (length(k_p) == 1L && predictor_count > 1L) {
+                    k_p <- rep(k_p, predictor_count)
+                }
             }
             if (length(k_p) != predictor_count) {
                 stop('k_p must have one entry per IRF predictor')
@@ -258,7 +262,7 @@ irf <- function(
     )
 }
 
-.parse_cdr_formula <- function(formula, window=NULL) {
+.parse_cdr_formula <- function(formula, window=NULL, irf_defaults=list()) {
     if (!inherits(formula, 'formula') || length(formula) != 3L) {
         stop('formula must be a two-sided formula')
     }
@@ -276,11 +280,27 @@ irf <- function(
     included_text <- special_text[included]
     included_terms <- special_terms[included]
 
-    specs <- lapply(included_text, function(text) {
-        call <- str2lang(text)
+    evaluate_irf <- function(call, defaults=irf_defaults) {
+        call_names <- names(call)
+        if (is.null(call_names)) call_names <- rep.int('', length(call))
+        legacy <- any(c('k', 'bs', 'nonlinear', 'varying') %in% call_names)
+        predictor <- if ('predictor' %in% call_names) {
+            call[['predictor']]
+        } else if (length(call) >= 2L) {
+            call[[2L]]
+        } else NULL
+        constant <- is.numeric(predictor) && length(predictor) == 1L &&
+            isTRUE(all.equal(as.numeric(predictor), 1))
+        inherited <- if (legacy) character() else names(defaults)
+        if (constant) inherited <- setdiff(inherited, c('k_p', 'bs_p'))
+        for (field in setdiff(inherited, call_names)) {
+            value <- defaults[[field]]
+            call[[field]] <- if (is.null(value)) quote(NULL) else value
+        }
         call[[1L]] <- irf
         eval(call, envir=environment(formula), enclos=parent.frame())
-    })
+    }
+    specs <- lapply(included_text, function(text) evaluate_irf(str2lang(text)))
     if (!is.null(window) && (length(window) != 2L || !is.numeric(window) ||
             !is.finite(window[[1L]]) || is.na(window[[2L]]) ||
             window[[2L]] < window[[1L]])) {
@@ -316,18 +336,25 @@ irf <- function(
                 min(vapply(specs, function(spec) spec$window[[1L]], numeric(1))),
                 max(vapply(specs, function(spec) spec$window[[2L]], numeric(1)))
             )
-            rate_spec <- irf(
-                1,
-                window=rate_window,
-                k_l=max(lag_k),
-                bs_l=specs[[1L]]$bs_l
+            rate_call <- call('irf', 1, window=rate_window)
+            if (!('k_l' %in% names(irf_defaults))) {
+                rate_call$k_l <- max(lag_k)
+            }
+            if (!('bs_l' %in% names(irf_defaults))) {
+                rate_call$bs_l <- specs[[1L]]$bs_l
+            }
+            rate_spec <- evaluate_irf(
+                rate_call,
+                irf_defaults[intersect(names(irf_defaults), c('k_l', 'bs_l'))]
             )
         } else {
-            rate_spec <- irf(
-                1,
+            rate_spec <- evaluate_irf(call(
+                'irf', 1,
                 window=if (is.null(inherited_window)) c(0, Inf) else
                     inherited_window
-            )
+            ), irf_defaults[intersect(
+                names(irf_defaults), c('k_l', 'bs_l')
+            )])
         }
         rate_spec$implicit <- TRUE
         specs <- c(list(rate_spec), specs)
@@ -383,8 +410,7 @@ irf <- function(
         series,
         impulse_time,
         response_time,
-        window,
-        history_length=Inf
+        window
 ) {
     impulse_keys <- .stream_keys(impulses, series)
     response_keys <- .stream_keys(responses, series)
@@ -414,9 +440,6 @@ irf <- function(
         upper <- response_times[response_rows] - window[[1L]]
         starts <- findInterval(lower, times, left.open=TRUE) + 1L
         ends <- findInterval(upper, times)
-        if (is.finite(history_length)) {
-            starts <- pmax.int(starts, ends - history_length + 1L)
-        }
         counts[response_rows] <- pmax.int(0L, ends - starts + 1L)
         group_cache[[key]] <- list(
             response_rows=response_rows,
@@ -842,7 +865,7 @@ irf <- function(
     margin_dimensions <- vapply(tensor$margin, function(margin) {
         ncol(mgcv::PredictMat(
             margin,
-            setNames(list(representatives[[margin$term]]), margin$term),
+            stats::setNames(list(representatives[[margin$term]]), margin$term),
             n=length(representatives[[margin$term]])
         ))
     }, integer(1))
@@ -857,7 +880,9 @@ irf <- function(
             rows <- start:end
             mean_basis <- mean_basis + colSums(mgcv::PredictMat(
                 tensor$margin[[target]],
-                setNames(list(axes[[target]]$values[rows]), internal_names[[target]]),
+                stats::setNames(
+                    list(axes[[target]]$values[rows]), internal_names[[target]]
+                ),
                 n=length(rows)
             ))
         }
@@ -895,7 +920,7 @@ irf <- function(
     for (start in seq.int(1L, link_count, by=chunk_size)) {
         end <- min(link_count, start + chunk_size - 1L)
         rows <- start:end
-        newdata <- setNames(lapply(axes, function(axis) axis$values[rows]),
+        newdata <- stats::setNames(lapply(axes, function(axis) axis$values[rows]),
             internal_names)
         basis <- mgcv::PredictMat(tensor, newdata, n=length(rows)) %*%
             transform
@@ -1131,16 +1156,19 @@ irf <- function(
 #'   optional [irf()] terms. An implicit `irf(1)` is added unless suppressed.
 #' @param window Default inclusive lag window inherited by every [irf()] term
 #'   that does not define its own `window`. `NULL` retains the term-level
-#'   default `c(0, Inf)`.
+#'   default `c(0, Inf)`. Every impulse in the applicable series and window is
+#'   included in the response-level design.
+#' @param k_l,k_t,k_p Optional model-level defaults for the corresponding
+#'   [irf()] axis dimensions. An argument supplied by an individual term,
+#'   including an explicit `NULL`, overrides its model-level default.
+#' @param bs_l,bs_t,bs_p Optional model-level defaults for the corresponding
+#'   [irf()] marginal basis names. Term-level arguments take precedence.
 #' @param impulses Data frame with one row per impulse.
 #' @param responses Data frame with one row per response.
 #' @param series Character vector of columns identifying independent series.
 #' @param impulse_time Name of the impulse-time column.
 #' @param response_time Name of the response-time column.
 #' @param history One of `"auto"`, `"dense"`, or `"ragged"`.
-#' @param history_length Maximum number of most-recent impulses retained per
-#'   response and series inside each IRF's lag window. The default is
-#'   unlimited.
 #' @param chunk_size Maximum history links transformed at once in ragged mode,
 #'   or responses transformed at once in dense mode.
 #' @param rescale_predictors Divide continuous numeric predictors and internal
@@ -1161,11 +1189,16 @@ prepare_cdrgam <- function(
         impulses,
         responses,
         window=NULL,
+        k_l=NULL,
+        k_t=NULL,
+        k_p=NULL,
+        bs_l=NULL,
+        bs_t=NULL,
+        bs_p=NULL,
         series=character(),
         impulse_time='time',
         response_time='time',
         history=c('auto', 'dense', 'ragged'),
-        history_length=Inf,
         chunk_size=10000,
         rescale_predictors=FALSE,
         quiet=FALSE,
@@ -1183,12 +1216,16 @@ prepare_cdrgam <- function(
         impulses <- droplevels(impulses)
         responses <- droplevels(responses)
     }
-    if (length(history_length) != 1L || !is.numeric(history_length) ||
-            is.na(history_length) || history_length <= 0 ||
-            (is.finite(history_length) && history_length != as.integer(history_length))) {
-        stop('history_length must be a positive integer or Inf')
-    }
-    parsed <- .parse_cdr_formula(formula, window=window)
+    irf_defaults <- list()
+    if (!missing(k_l)) irf_defaults['k_l'] <- list(k_l)
+    if (!missing(k_t)) irf_defaults['k_t'] <- list(k_t)
+    if (!missing(k_p)) irf_defaults['k_p'] <- list(k_p)
+    if (!missing(bs_l)) irf_defaults['bs_l'] <- list(bs_l)
+    if (!missing(bs_t)) irf_defaults['bs_t'] <- list(bs_t)
+    if (!missing(bs_p)) irf_defaults['bs_p'] <- list(bs_p)
+    parsed <- .parse_cdr_formula(
+        formula, window=window, irf_defaults=irf_defaults
+    )
     parsed$irfs <- lapply(parsed$irfs, function(specification) {
         if (!is.null(specification$k_t) && is.null(specification$time)) {
             specification$time <- response_time
@@ -1272,8 +1309,7 @@ prepare_cdrgam <- function(
             series,
             impulse_time,
             response_time,
-            spec$window,
-            history_length=history_length
+            spec$window
         )
         model_links <- links
         model_links$delay <- links$delay / scaling$time_divisor
@@ -1637,7 +1673,6 @@ prepare_cdrgam <- function(
             impulse_time=impulse_time,
             response_time=response_time,
             history=history,
-            history_length=history_length,
             chunk_size=chunk_size,
             rescale_predictors=rescale_predictors,
             drop.unused.levels=drop.unused.levels
@@ -1645,10 +1680,10 @@ prepare_cdrgam <- function(
         stream=list(
             series=series,
             impulse_time=impulse_time,
-            response_time=response_time,
-            history_length=history_length
+            response_time=response_time
         )
     )
+    out$configuration[names(irf_defaults)] <- irf_defaults
     class(out) <- 'cdrgam_design'
     if (!quiet) {
         if (isTRUE(scaling$enabled)) {
@@ -1729,8 +1764,9 @@ prepare_cdrgam <- function(
 #'   `"auto"` compares predicted exact-score time and memory with the cost of
 #'   finite differences after the first objective factorization;
 #'   `gradient_cores` evaluates central finite-difference directions in
-#'   parallel on non-Windows systems (use single-threaded BLAS when greater
-#'   than one); `finite_difference_step` defaults to `1e-3`;
+#'   parallel on systems that support process forking and falls back to one
+#'   core on Windows (use single-threaded BLAS when greater than one);
+#'   `finite_difference_step` defaults to `1e-3`;
 #'   `outer_optimizer` may be `"auto"` (the default), `"lbfgsb"`, or
 #'   `"bfgs_trust"`; automatic selection uses safeguarded trust-region BFGS
 #'   for exact gradients and L-BFGS-B otherwise; explicitly requesting
@@ -1747,8 +1783,10 @@ prepare_cdrgam <- function(
 #'   `"defer"` retains the sparse workspace and computes the gradient-based
 #'   Hessian on the first unconditional-inference request, and `"none"` skips
 #'   smoothing-parameter uncertainty; the automatic memory check honors the
-#'   effective Linux cgroup or SLURM allocation when available and the
-#'   `cdrgam.memory_limit_bytes` option can impose a smaller process limit;
+#'   effective Linux cgroup or SLURM allocation when available. On other
+#'   systems, automatic selection uses the gradient Hessian when available
+#'   memory cannot be determined; `cdrgam.memory_limit_bytes` can provide an
+#'   explicit process limit;
 #'   `hessian_step` controls the
 #'   finite-difference step and defaults to `1e-2`;
 #'   `supernodal` optionally overrides the automatically selected CHOLMOD
@@ -1802,11 +1840,16 @@ cdrgam <- function(
         impulses,
         responses,
         window=NULL,
+        k_l=NULL,
+        k_t=NULL,
+        k_p=NULL,
+        bs_l=NULL,
+        bs_t=NULL,
+        bs_p=NULL,
         series=character(),
         impulse_time='time',
         response_time='time',
         history=c('auto', 'dense', 'ragged'),
-        history_length=Inf,
         chunk_size=10000,
         rescale_predictors=FALSE,
         family=stats::gaussian(),
@@ -1828,7 +1871,7 @@ cdrgam <- function(
         c('impulses', 'responses')
     )
     if (!inherits(formula, 'formula')) stop('formula must be a formula')
-    design <- prepare_cdrgam(
+    preparation <- list(
         formula=formula,
         impulses=impulses,
         responses=responses,
@@ -1837,11 +1880,17 @@ cdrgam <- function(
         impulse_time=impulse_time,
         response_time=response_time,
         history=history,
-        history_length=history_length,
         chunk_size=chunk_size,
         rescale_predictors=rescale_predictors,
         drop.unused.levels=drop.unused.levels
     )
+    if (!missing(k_l)) preparation['k_l'] <- list(k_l)
+    if (!missing(k_t)) preparation['k_t'] <- list(k_t)
+    if (!missing(k_p)) preparation['k_p'] <- list(k_p)
+    if (!missing(bs_l)) preparation['bs_l'] <- list(bs_l)
+    if (!missing(bs_t)) preparation['bs_t'] <- list(bs_t)
+    if (!missing(bs_p)) preparation['bs_p'] <- list(bs_p)
+    design <- do.call(prepare_cdrgam, preparation)
     fit <- cdrgam.fit(
         design=design,
         family=family,

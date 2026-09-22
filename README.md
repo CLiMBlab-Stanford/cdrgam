@@ -166,6 +166,15 @@ R CMD INSTALL cdrgam
 The package requires R, `Matrix`, `methods`, and `mgcv`. It compiles a small C
 extension for the optional Schur-complement factorization path.
 
+The fitting and prediction APIs are intended to run on Linux, macOS, and
+Windows. Platform-specific acceleration is optional. Parallel finite-gradient
+evaluation uses process forking where R supports it and runs serially on
+Windows. Automatic Hessian selection reads Linux cgroup and Slurm limits when
+available; elsewhere it chooses the lower-memory gradient calculation unless
+`options(cdrgam.memory_limit_bytes=...)` supplies a process limit. Threaded
+BLAS acceleration depends on the R distribution and is not required for
+correctness.
+
 ## Tests
 
 Run the standalone test scripts from the repository root:

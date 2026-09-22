@@ -92,7 +92,7 @@ elapsed <- system.time({
         cholmod=NA,
         stop('CDRGAM_SCALE_SUPERNODAL must be true, false, or cholmod')
     )
-    fit <- fit_cdrgam(
+    fit <- cdrgam.fit(
         design,
         backend='sparse',
         method='REML',
@@ -150,6 +150,6 @@ estimate <- estimate_irf(
     fit,
     term='x|subject',
     lag=lag,
-    level=selected
+    group=selected
 )
 stopifnot(all(is.finite(estimate$estimate)), all(is.finite(estimate$se)))

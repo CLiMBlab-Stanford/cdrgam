@@ -8,11 +8,16 @@ prepare_cdrgam(
   impulses,
   responses,
   window = NULL,
+  k_l = NULL,
+  k_t = NULL,
+  k_p = NULL,
+  bs_l = NULL,
+  bs_t = NULL,
+  bs_p = NULL,
   series = character(),
   impulse_time = "time",
   response_time = "time",
   history = c("auto", "dense", "ragged"),
-  history_length = Inf,
   chunk_size = 10000,
   rescale_predictors = FALSE,
   quiet = FALSE,
@@ -26,13 +31,17 @@ prepare_cdrgam(
 \item{responses}{Data frame with one row per response.}
 \item{window}{Default inclusive lag window inherited by each \code{irf()}
 term that does not supply its own window. \code{NULL} retains the term-level
-default \code{c(0, Inf)}.}
+default \code{c(0, Inf)}. Every impulse in the applicable series and window is
+included in the response-level design.}
+\item{k_l, k_t, k_p}{Optional model-level defaults for the corresponding
+\code{irf()} axis dimensions. An argument supplied by an individual term,
+including an explicit \code{NULL}, overrides its model-level default.}
+\item{bs_l, bs_t, bs_p}{Optional model-level defaults for the corresponding
+\code{irf()} marginal basis names. Term-level arguments take precedence.}
 \item{series}{Character vector naming independent-series columns.}
 \item{impulse_time}{Name of the impulse-time column.}
 \item{response_time}{Name of the response-time column.}
 \item{history}{One of \code{"auto"}, \code{"dense"}, or \code{"ragged"}.}
-\item{history_length}{Maximum number of most-recent impulses retained within
-each IRF lag window; \code{Inf} retains all impulses.}
 \item{chunk_size}{Maximum responses or links transformed in a chunk.}
 \item{rescale_predictors}{If \code{TRUE}, divide continuous numeric
 predictors by their training-data standard deviations without centering.

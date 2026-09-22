@@ -99,8 +99,8 @@ run_synthetic_case <- function(name, case, output_dir) {
         quiet=FALSE
     )
     fits <- list(
-        mgcv=fit_cdrgam(design, backend='mgcv', engine='gam', method='REML'),
-        block=fit_cdrgam(design, backend='block', method='REML')
+        mgcv=cdrgam.fit(design, backend='mgcv', engine='gam', method='REML'),
+        block=cdrgam.fit(design, backend='block', method='REML')
     )
     lag <- seq(0, window, length.out=301)
     predictor_slices <- c(-1.5, -0.75, 0, 0.75, 1.5)

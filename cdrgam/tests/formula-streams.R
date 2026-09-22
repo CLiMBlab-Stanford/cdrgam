@@ -79,22 +79,21 @@ automatic <- prepare_cdrgam(
     history='auto',
     quiet=TRUE
 )
-limited <- prepare_cdrgam(
-    user_formula,
-    impulses,
-    responses,
-    series='document',
-    history='ragged',
-    history_length=3,
-    quiet=TRUE
-)
-
 stopifnot(inherits(dense, 'cdrgam_design'))
 stopifnot(dense$plan[[1]]$selected == 'dense')
 stopifnot(ragged$plan[[1]]$selected == 'ragged')
 stopifnot(automatic$plan[[1]]$selected %in% c('dense', 'ragged'))
-stopifnot(all(vapply(limited$plan, `[[`, numeric(1), 'maximum_history') <= 3))
-stopifnot(identical(limited$stream$history_length, 3))
+expected_links <- sum(vapply(seq_len(nrow(responses)), function(i) {
+    same_series <- impulses$document == responses$document[[i]]
+    delay <- responses$time[[i]] - impulses$time
+    sum(same_series & delay >= 0 & delay <= 1.25)
+}, integer(1)))
+stopifnot(
+    identical(dense$plan[[1]]$links, expected_links),
+    !('history_length' %in% names(formals(prepare_cdrgam))),
+    !('history_length' %in% names(formals(cdrgam)))
+)
+stopifnot(!('history_length' %in% names(dense$stream)))
 stopifnot(isTRUE(all.equal(
     dense$terms[[1]]$X,
     ragged$terms[[1]]$X,

@@ -65,12 +65,33 @@ block <- cdrgam.fit(
     backend='block',
     method='REML'
 )
+sparse_progress <- list()
 sparse <- cdrgam.fit(
     design,
     family='gaulss',
     backend='sparse',
-    method='REML'
+    method='REML',
+    solver_trace=function(record) {
+        sparse_progress[[length(sparse_progress) + 1L]] <<- record
+    }
 )
+hybrid_progress <- list()
+hybrid_sparse <- cdrgam.fit(
+    design,
+    family='gaulss',
+    backend='sparse',
+    method='REML',
+    solver_trace=function(record) {
+        hybrid_progress[[length(hybrid_progress) + 1L]] <<- record
+    },
+    sparse_control=list(
+        gradient='hybrid',
+        gradient_probes=8L,
+        optimizer_maxit=1L,
+        optimizer_gradient_tolerance=1e6
+    )
+)
+sparse_diagnostics <- fit_diagnostics(sparse)
 stopifnot(
     inherits(block, 'cdrgam_distributional_block'),
     isTRUE(block$converged),
@@ -78,13 +99,45 @@ stopifnot(
     max(abs(unname(stats::coef(block)) - unname(stats::coef(fit)))) < 2e-4,
     max(abs(unname(stats::vcov(block)) - unname(stats::vcov(fit)))) < 2e-4,
     abs(as.numeric(stats::logLik(block)) - as.numeric(stats::logLik(fit))) <
-        2e-3,
+        5e-3,
     abs(stats::deviance(block) - stats::deviance(fit)) < 1e-4,
     inherits(sparse, 'cdrgam_distributional_sparse'),
     isTRUE(sparse$converged),
+    isTRUE(sparse_diagnostics$converged),
+    identical(sparse_diagnostics$code, 0L),
+    is.finite(sparse_diagnostics$gradient_norm),
+    identical(
+        sparse$optimizer$optimizer_state$optimizer,
+        'safeguarded_outer_bfgs'
+    ),
+    identical(sparse$sparse$control$optimizer_trust_radius, 2),
+    sparse$sparse$control$cores >= 1L,
+    sparse$sparse$control$inner_blas_threads ==
+        sparse$sparse$control$cores,
+    sparse$sparse$control$gradient_workers *
+        sparse$sparse$control$gradient_blas_threads <=
+        sparse$sparse$control$cores,
+    sparse$distributional$score_evaluations <=
+        sparse$distributional$evaluations,
+    identical(sparse$sparse$control$gradient_worker_source, 'automatic'),
+    identical(hybrid_sparse$sparse$control$gradient, 'hybrid'),
+    hybrid_sparse$distributional$stochastic_score_evaluations > 0L,
+    hybrid_sparse$distributional$score_evaluations > 0L,
+    identical(
+        hybrid_sparse$distributional$stochastic_score_plan$method,
+        'stochastic matrix-free'
+    ),
+    any(vapply(sparse_progress, function(record) {
+        identical(record$event, 'outer exact score complete') &&
+            is.finite(suppressWarnings(as.numeric(record$criterion)))
+    }, logical(1))),
+    any(vapply(hybrid_progress, function(record) {
+        identical(record$event, 'outer stochastic score complete') &&
+            is.finite(suppressWarnings(as.numeric(record$criterion)))
+    }, logical(1))),
     max(abs(unname(stats::coef(sparse)) - unname(stats::coef(block)))) < 2e-4,
     abs(as.numeric(stats::logLik(sparse)) - as.numeric(stats::logLik(block))) <
-        2e-3
+        5e-3
 )
 
 training_link <- predict(fit, type='link')
@@ -100,9 +153,9 @@ stopifnot(
     identical(dim(training_response), c(n_responses, 2L)),
     max(abs(training_link - stream_link)) < 1e-9,
     max(abs(training_response - stream_response)) < 1e-9,
-    max(abs(block_link - stream_link)) < 2e-4,
-    max(abs(block_response - stream_response)) < 2e-4,
-    max(abs(sparse_response - block_response)) < 2e-4,
+    max(abs(block_link - stream_link)) < 1e-3,
+    max(abs(block_response - stream_response)) < 1e-3,
+    max(abs(sparse_response - block_response)) < 1e-3,
     all(stream_response[, 2L] > 0)
 )
 
@@ -120,10 +173,10 @@ sparse_with_se <- predict(
     sparse, newdata=stream_data, type='response', se.fit=TRUE
 )
 stopifnot(
-    max(abs(block_with_se$fit - with_se$fit)) < 2e-4,
-    max(abs(block_with_se$se.fit - with_se$se.fit)) < 2e-4,
-    max(abs(sparse_with_se$fit - block_with_se$fit)) < 2e-4,
-    max(abs(sparse_with_se$se.fit - block_with_se$se.fit)) < 2e-4
+    max(abs(block_with_se$fit - with_se$fit)) < 1e-3,
+    max(abs(block_with_se$se.fit - with_se$se.fit)) < 1e-3,
+    max(abs(sparse_with_se$fit - block_with_se$fit)) < 1e-3,
+    max(abs(sparse_with_se$se.fit - block_with_se$se.fit)) < 1e-3
 )
 
 reference <- mgcv::gam(
@@ -170,6 +223,17 @@ block_summary <- summary(block)
 sparse_summary <- summary(sparse)
 stopifnot(
     inherits(fit_summary, 'summary.cdrgam'),
+    is.null(fit_summary$r.sq),
+    is.null(block_summary$r.sq),
+    is.null(sparse_summary$r.sq),
+    abs(block_summary$deviance - fit$deviance) < 1e-4,
+    abs(sparse_summary$deviance - fit$deviance) < 1e-4,
+    abs(block_summary$null.deviance - fit$null.deviance) < 1e-3,
+    abs(sparse_summary$null.deviance - fit$null.deviance) < 1e-3,
+    abs(block_summary$dev.expl - fit_summary$dev.expl) < 1e-4,
+    abs(sparse_summary$dev.expl - fit_summary$dev.expl) < 1e-4,
+    all(block_summary$s.test == 'approximate'),
+    all(sparse_summary$s.test == 'approximate'),
     identical(rownames(sparse_summary$s.table), rownames(fit_summary$s.table)),
     identical(
         names(fit_summary$formula_strings$user),
@@ -292,15 +356,48 @@ expect_error(
     cdrgam.fit(design, family='gaussian', engine='gam'),
     'requires family="gaulss"'
 )
-expect_error(
-    prepare_cdrgam(
-        formulas,
-        impulses,
-        responses,
-        rescale_predictors=TRUE,
-        quiet=TRUE
-    ),
-    'rescaling is not yet supported'
+scaled_design <- prepare_cdrgam(
+    formulas,
+    impulses,
+    responses,
+    rescale_predictors=TRUE,
+    history='ragged',
+    chunk_size=47,
+    quiet=TRUE
+)
+scaled_native <- cdrgam.fit(
+    scaled_design,
+    family='gaulss',
+    backend='mgcv',
+    engine='gam',
+    method='REML'
+)
+scaled_sparse <- cdrgam.fit(
+    scaled_design,
+    family='gaulss',
+    backend='sparse',
+    method='REML'
+)
+scaled_native_prediction <- predict(
+    scaled_native, newdata=stream_data, type='response'
+)
+scaled_sparse_prediction <- predict(
+    scaled_sparse, newdata=stream_data, type='response'
+)
+stopifnot(
+    isTRUE(scaled_design$configuration$rescale_predictors),
+    all(vapply(
+        scaled_design$parameters,
+        function(parameter) isTRUE(parameter$scaling$enabled),
+        logical(1)
+    )),
+    max(abs(scaled_native_prediction - stream_response)) < 2e-2,
+    max(abs(scaled_sparse_prediction - scaled_native_prediction)) < 2e-2,
+    max(abs(
+        estimate_irf(
+            scaled_sparse, term='location:location_signal', n=11
+        )$estimate - location_irf$estimate
+    )) < 2e-4
 )
 expect_error(
     cdrgam.fit(

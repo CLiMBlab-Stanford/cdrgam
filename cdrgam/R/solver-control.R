@@ -71,6 +71,55 @@
     )
 }
 
+.hybrid_rejection_policy <- function(
+        rejected_solves,
+        rejected_seconds,
+        reference_seconds,
+        exact_fit_equivalents=4,
+        maximum_rejected_solves=12L
+) {
+    reference_seconds <- reference_seconds[
+        is.finite(reference_seconds) & reference_seconds > 0
+    ]
+    seconds_limit <- if (length(reference_seconds)) {
+        exact_fit_equivalents * stats::median(reference_seconds)
+    } else Inf
+    time_exhausted <- is.finite(seconds_limit) &&
+        rejected_seconds >= seconds_limit
+    count_exhausted <- rejected_solves >= maximum_rejected_solves
+    reason <- if (time_exhausted) {
+        'rejected conditional-fit time reached the exact-score cost budget'
+    } else if (count_exhausted) {
+        'rejected conditional-fit count reached its safety limit'
+    } else NULL
+    list(
+        transition=!is.null(reason),
+        reason=reason,
+        rejected_solves=as.integer(rejected_solves),
+        rejected_seconds=as.numeric(rejected_seconds),
+        reference_seconds=if (length(reference_seconds)) {
+            stats::median(reference_seconds)
+        } else NA_real_,
+        seconds_limit=seconds_limit,
+        maximum_rejected_solves=as.integer(maximum_rejected_solves)
+    )
+}
+
+.hybrid_transition_condition <- function(policy) {
+    structure(
+        c(
+            list(
+                message=paste0(
+                    'Stochastic warm-up stopped: ', policy$reason
+                ),
+                call=NULL
+            ),
+            policy
+        ),
+        class=c('cdrgam_hybrid_transition', 'error', 'condition')
+    )
+}
+
 .checkpoint_read <- function(path) {
     if (is.null(path) || !file.exists(path)) return(NULL)
     tryCatch(
@@ -363,6 +412,130 @@
 }
 
 # Experimental bounded, safeguarded dense-BFGS outer optimizer. Unlike
+.outer_directional_derivative_check <- function(
+        parameters,
+        criterion,
+        gradient,
+        fn,
+        lower,
+        upper,
+        step=1e-3,
+        objective_noise=0,
+        objective_validity=NULL
+) {
+    values <- c(parameters, criterion, gradient, lower, upper, step)
+    if (any(!is.finite(values)) || step <= 0 ||
+            length(parameters) != length(gradient) ||
+            length(lower) != length(parameters) ||
+            length(upper) != length(parameters)) {
+        return(list(
+            valid=FALSE,
+            message='directional derivative check had invalid inputs'
+        ))
+    }
+    direction <- -gradient
+    direction[parameters <= lower + 1e-10 & direction < 0] <- 0
+    direction[parameters >= upper - 1e-10 & direction > 0] <- 0
+    direction_scale <- max(abs(direction))
+    if (!is.finite(direction_scale) || direction_scale == 0) {
+        return(list(
+            valid=FALSE,
+            message='directional derivative check had no feasible direction'
+        ))
+    }
+    direction <- direction / direction_scale
+    feasible_step <- function(candidate_direction) {
+        limits <- ifelse(
+            candidate_direction > 0,
+            (upper - parameters) / candidate_direction,
+            ifelse(
+                candidate_direction < 0,
+                (lower - parameters) / candidate_direction,
+                Inf
+            )
+        )
+        max(0, min(limits))
+    }
+    forward_step <- min(step, feasible_step(direction))
+    backward_step <- min(step, feasible_step(-direction))
+    forward <- if (forward_step > 0) {
+        fn(parameters + forward_step * direction)
+    } else NA_real_
+    backward <- if (backward_step > 0) {
+        fn(parameters - backward_step * direction)
+    } else NA_real_
+    probe_valid <- function(probe_parameters, value) {
+        if (!is.numeric(value) || length(value) != 1L || !is.finite(value)) {
+            return(FALSE)
+        }
+        if (is.null(objective_validity)) return(TRUE)
+        isTRUE(tryCatch(
+            objective_validity(probe_parameters, value),
+            error=function(error) FALSE
+        ))
+    }
+    forward_valid <- forward_step > 0 && probe_valid(
+        parameters + forward_step * direction, forward
+    )
+    backward_valid <- backward_step > 0 && probe_valid(
+        parameters - backward_step * direction, backward
+    )
+    finite_difference <- if (forward_valid && backward_valid) {
+        (forward - backward) / (forward_step + backward_step)
+    } else if (forward_valid) {
+        (forward - criterion) / forward_step
+    } else if (backward_valid) {
+        (criterion - backward) / backward_step
+    } else NA_real_
+    analytic <- sum(gradient * direction)
+    scale <- max(forward_step + backward_step, forward_step, backward_step)
+    numerical_floor <- 100 * .Machine$double.eps * (1 + abs(criterion)) /
+        max(scale, .Machine$double.eps)
+    noise_floor <- if (is.finite(objective_noise) && objective_noise > 0) {
+        10 * objective_noise / max(scale, .Machine$double.eps)
+    } else 0
+    tolerance <- max(
+        numerical_floor,
+        noise_floor,
+        0.05 * max(abs(c(analytic, finite_difference)), na.rm=TRUE)
+    )
+    discrepancy <- abs(finite_difference - analytic)
+    consistent <- is.finite(discrepancy) && discrepancy <= tolerance
+    improvement_floor <- max(
+        if (is.finite(objective_noise)) objective_noise else 0,
+        100 * .Machine$double.eps * (1 + abs(criterion))
+    )
+    recover <- consistent && analytic < 0 && forward_valid &&
+        forward < criterion - improvement_floor
+    recovery_step <- if (recover) forward_step * direction else NULL
+    list(
+        valid=is.finite(finite_difference),
+        analytic=analytic,
+        finite_difference=finite_difference,
+        discrepancy=discrepancy,
+        tolerance=tolerance,
+        consistent=consistent,
+        step=step,
+        forward_step=forward_step,
+        backward_step=backward_step,
+        forward_criterion=forward,
+        backward_criterion=backward,
+        forward_valid=forward_valid,
+        backward_valid=backward_valid,
+        objective_noise=objective_noise,
+        recover=recover,
+        recovery_radius=if (recover) sqrt(sum(recovery_step^2)) else NULL,
+        restart_hessian=if (recover) {
+            diag(max(1, max(abs(gradient))), length(gradient))
+        } else NULL,
+        message=if (consistent) {
+            'directional finite difference agreed with the exact outer score'
+        } else {
+            'directional finite difference did not agree with the exact outer score'
+        }
+    )
+}
+
 # stats::optim() with a numerical score, an accepted iteration needs one
 # objective factorization; the exact score is then assembled from the retained
 # factor using sparse solves. The dense approximation is only q-by-q, where q
@@ -380,8 +553,10 @@
         progress=NULL,
         state=NULL,
         convergence_assessment=NULL,
+        stagnation_diagnostic=NULL,
         maximum_recovery_resets=2L,
-        minimum_radius=1e-8
+        minimum_radius=1e-8,
+        objective_validity=NULL
 ) {
     par <- pmin(upper, pmax(lower, as.numeric(par)))
     dimension <- length(par)
@@ -404,6 +579,14 @@
     }
     scalar_finite <- function(value) {
         is.numeric(value) && length(value) == 1L && is.finite(value)
+    }
+    valid_objective <- function(parameters, value) {
+        if (!scalar_finite(value)) return(FALSE)
+        if (is.null(objective_validity)) return(TRUE)
+        isTRUE(tryCatch(
+            objective_validity(parameters, value),
+            error=function(error) FALSE
+        ))
     }
     state_counters <- if (is.list(state)) c(
         state$function_evaluations,
@@ -597,10 +780,62 @@
             emit_progress(recovery)
             return(list(action='recovered'))
         }
+        diagnostic <- if (!can_recover && !is.null(stagnation_diagnostic)) {
+            tryCatch(
+                stagnation_diagnostic(
+                    par,
+                    value,
+                    gradient,
+                    objective_noise=observed_objective_noise()
+                ),
+                error=function(error) list(
+                    message=paste(
+                        'stagnation diagnostic failed:',
+                        conditionMessage(error)
+                    )
+                )
+            )
+        } else NULL
+        directional_recovery <- !can_recover &&
+            recovery_resets == maximum_recovery_resets &&
+            is.list(diagnostic) && isTRUE(diagnostic$recover) &&
+            is.matrix(diagnostic$restart_hessian) &&
+            identical(dim(diagnostic$restart_hessian), c(dimension, dimension)) &&
+            all(is.finite(diagnostic$restart_hessian)) &&
+            is.numeric(diagnostic$recovery_radius) &&
+            length(diagnostic$recovery_radius) == 1L &&
+            is.finite(diagnostic$recovery_radius) &&
+            diagnostic$recovery_radius > minimum_radius
+        if (directional_recovery) {
+            hessian <<- (
+                diagnostic$restart_hessian + t(diagnostic$restart_hessian)
+            ) / 2
+            radius <<- min(maximum_radius, diagnostic$recovery_radius)
+            consecutive_rejections <<- 0L
+            consecutive_small <<- 0L
+            recovery_resets <<- recovery_resets + 1L
+            curvature_resets <<- curvature_resets + 1L
+            recovery <- record
+            recovery$event <- 'directional_recovery'
+            recovery$trust_radius <- radius
+            recovery$consecutive_rejections <- 0L
+            recovery$consecutive_small_steps <- 0L
+            recovery$curvature_resets <- curvature_resets
+            recovery$curvature_reset <- TRUE
+            recovery$step_type <- 'directional_hessian_reset'
+            recovery$recovery_resets <- recovery_resets
+            recovery$stagnation_reason <- reason
+            recovery$diagnostic <- diagnostic
+            emit_progress(recovery)
+            return(list(action='recovered'))
+        }
         detail <- if (is.list(assessment) && !is.null(assessment$message)) {
             assessment$message
         } else {
             'no analytic recovery was available'
+        }
+        if (is.list(diagnostic) && !is.null(diagnostic$message)) {
+            detail <- paste(detail, diagnostic$message, sep='; ')
         }
         list(action='failed', message=paste0(reason, '; ', detail))
     }
@@ -740,7 +975,8 @@
         candidate_value <- fn(candidate)
         function_count <- function_count + 1L
         actual <- value - candidate_value
-        ratio <- if (is.finite(candidate_value) && predicted > 0) {
+        candidate_valid <- valid_objective(candidate, candidate_value)
+        ratio <- if (candidate_valid && predicted > 0) {
             actual / predicted
         } else {
             -Inf
@@ -748,7 +984,7 @@
         accepted <- is.finite(ratio) && ratio > 1e-4 && actual > 0
         candidate_gradient <- NULL
         objective_floor <- max(1e-10, 1e-10 * (1 + abs(value)))
-        noise_limited <- !accepted && is.finite(candidate_value) &&
+        noise_limited <- !accepted && candidate_valid &&
             predicted > 0 && predicted <= objective_floor &&
             actual >= -objective_floor
         if (noise_limited) {

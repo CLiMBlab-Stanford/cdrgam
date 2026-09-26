@@ -1,3 +1,57 @@
+#' Report standardized fit convergence diagnostics
+#'
+#' @param object A fitted `cdrgam` model.
+#' @return A named list containing at least `converged`, `code`, and `message`.
+#'   Custom backends also report available objective counts, gradient norms,
+#'   boundary information, and Hessian diagnostics.
+#' @export
+fit_diagnostics <- function(object) {
+    if (!is_cdrgam(object)) stop('object must be a fitted cdrgam model')
+    if (inherits(object, 'cdrgam_distributional_sparse')) {
+        gradient_norm <- if (length(object$optimizer$gradient)) {
+            max(abs(object$optimizer$gradient))
+        } else NA_real_
+        return(list(
+            converged=isTRUE(object$converged),
+            code=object$optimizer$convergence,
+            message=if (isTRUE(object$converged)) {
+                'full convergence'
+            } else object$optimizer$message,
+            total_objective_evaluations=object$distributional$evaluations,
+            gradient_norm=gradient_norm,
+            inner_gradient_norm=object$distributional$gradient_norm
+        ))
+    }
+    if (inherits(object, 'cdrgam_sparse')) {
+        return(object$sparse$convergence)
+    }
+    if (inherits(object, 'cdrgam_block')) {
+        converged <- identical(object$optimizer$convergence, 0L)
+        return(list(
+            converged=converged,
+            code=object$optimizer$convergence,
+            message=if (converged) {
+                'full convergence'
+            } else if (is.null(object$optimizer$message)) {
+                'optimizer convergence was not reached'
+            } else object$optimizer$message
+        ))
+    }
+    outer_message <- object$outer.info$conv
+    converged <- if (!is.null(object$converged)) {
+        isTRUE(object$converged)
+    } else if (!is.null(outer_message)) {
+        tolower(outer_message) %in% c('full convergence', 'converged')
+    } else TRUE
+    list(
+        converged=converged,
+        code=if (converged) 0L else NA_integer_,
+        message=if (is.null(outer_message)) {
+            'native mgcv convergence state'
+        } else outer_message
+    )
+}
+
 #' Evaluate fitted impulse-response function terms
 #'
 #' @param object A fitted `cdrgam` model.

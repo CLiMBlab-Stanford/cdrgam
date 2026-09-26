@@ -356,6 +356,7 @@
 }
 
 .cdrgam_read_memory_value <- function(path, default_multiplier=1) {
+    if (!file.exists(path)) return(NA_real_)
     value <- tryCatch(readLines(path, n=1L, warn=FALSE), error=function(e) '')
     .cdrgam_memory_number(value, default_multiplier=default_multiplier)
 }
@@ -738,13 +739,13 @@
         objective_seconds,
         exact_trace_rhs,
         penalty_count,
-        gradient_cores,
+        gradient_workers,
         dimension,
         saved=NULL
 ) {
     finite_evaluations <- 2 * penalty_count
     predicted_finite_seconds <- objective_seconds * finite_evaluations /
-        max(1L, gradient_cores)
+        max(1L, gradient_workers)
     schur_trace <- identical(trace_method, 'schur_inverse') &&
         inherits(factor, 'cdrgam_schur_factor')
     core_dimension <- if (schur_trace) length(factor$core) else NA_integer_
@@ -876,7 +877,8 @@
         sp,
         supports=.sparse_penalty_supports(components),
         chunk_size=64L,
-        schur_plan=NULL
+        schur_plan=NULL,
+        workers=1L
 ) {
     count <- length(components)
     if (!count) return(numeric())
@@ -899,10 +901,14 @@
     }
 
     dimension <- nrow(components[[1L]])
+    workers <- min(
+        .cdrgam_positive_integer(workers, 'trace worker count'),
+        ceiling(dimension / chunk_size)
+    )
     for (group in groups) {
         support <- supports[[group[[1L]]]]
         if (!length(support)) next
-        if (length(group) == 1L) {
+        if (length(group) == 1L && workers == 1L) {
             i <- group[[1L]]
             scores[[i]] <- sp[[i]] * .sparse_logdet_score(
                 factor,
@@ -911,27 +917,132 @@
             )
             next
         }
-        for (start in seq.int(1L, length(support), by=chunk_size)) {
-            end <- min(length(support), start + chunk_size - 1L)
-            selected <- support[start:end]
-            selector <- Matrix::sparseMatrix(
-                i=selected,
-                j=seq_along(selected),
-                x=1,
-                dims=c(dimension, length(selected))
-            )
-            solved <- .cdr_factor_solve(factor, selector)
-            inverse_columns <- as.matrix(solved[support, , drop=FALSE])
-            for (i in group) {
-                derivative_columns <- as.matrix(
-                    components[[i]][support, selected, drop=FALSE]
+        starts <- seq.int(1L, length(support), by=chunk_size)
+        worker_count <- min(workers, length(starts))
+        assignments <- split(
+            seq_along(starts),
+            rep(seq_len(worker_count), length.out=length(starts))
+        )
+        evaluate <- function(indices) {
+            partial <- numeric(length(group))
+            for (start_index in indices) {
+                start <- starts[[start_index]]
+                end <- min(length(support), start + chunk_size - 1L)
+                selected <- support[start:end]
+                selector <- Matrix::sparseMatrix(
+                    i=selected,
+                    j=seq_along(selected),
+                    x=1,
+                    dims=c(dimension, length(selected))
                 )
-                scores[[i]] <- scores[[i]] + sp[[i]] *
-                    sum(inverse_columns * derivative_columns)
+                solved <- .cdr_factor_solve(factor, selector)
+                inverse_columns <- as.matrix(solved[support, , drop=FALSE])
+                for (position in seq_along(group)) {
+                    i <- group[[position]]
+                    derivative_columns <- as.matrix(
+                        components[[i]][support, selected, drop=FALSE]
+                    )
+                    partial[[position]] <- partial[[position]] + sp[[i]] *
+                        sum(inverse_columns * derivative_columns)
+                }
             }
+            partial
+        }
+        partials <- if (worker_count > 1L &&
+                .Platform$OS.type != 'windows') {
+            parallel::mclapply(
+                assignments, evaluate, mc.cores=worker_count,
+                mc.preschedule=FALSE
+            )
+        } else lapply(assignments, evaluate)
+        missing <- which(!vapply(
+            partials,
+            function(value) is.numeric(value) &&
+                length(value) == length(group) && all(is.finite(value)),
+            logical(1)
+        ))
+        if (length(missing)) {
+            stop(
+                'Exact trace worker ', missing[[1L]],
+                ' did not return a finite result; it may have exceeded ',
+                'its memory limit'
+            )
+        }
+        totals <- Reduce(`+`, partials)
+        for (position in seq_along(group)) {
+            scores[[group[[position]]]] <- totals[[position]]
         }
     }
     scores
+}
+
+.cdrgam_sparse_exact_score_batch <- function(
+        factor,
+        coefficients,
+        penalty_derivatives,
+        penalty_scores,
+        likelihood_derivatives,
+        quadratic_scale=1,
+        trace_workers=1L
+) {
+    if (!length(penalty_derivatives) ||
+            length(penalty_derivatives) != length(penalty_scores)) {
+        stop('Exact-score batches require matching penalty derivatives and scores')
+    }
+    started <- proc.time()[['elapsed']]
+    right_hand_sides <- do.call(cbind, lapply(penalty_derivatives, function(x) {
+        as.numeric(x %*% coefficients)
+    }))
+    rhs_seconds <- proc.time()[['elapsed']] - started
+    started <- proc.time()[['elapsed']]
+    coefficient_derivatives <- -as.matrix(.cdr_factor_solve(
+        factor,
+        right_hand_sides
+    ))
+    solve_seconds <- proc.time()[['elapsed']] - started
+    started <- proc.time()[['elapsed']]
+    likelihood <- likelihood_derivatives(coefficient_derivatives)
+    likelihood_seconds <- proc.time()[['elapsed']] - started
+    if (length(likelihood) != length(penalty_derivatives)) {
+        stop('The likelihood derivative kernel returned the wrong batch size')
+    }
+    system_derivatives <- Map(function(likelihood_part, penalty_part) {
+        Matrix::forceSymmetric(
+            likelihood_part + penalty_part,
+            uplo='U'
+        )
+    }, likelihood, penalty_derivatives)
+    dimension <- nrow(penalty_derivatives[[1L]])
+    trace_chunk_size <- .cdrgam_sparse_trace_chunk_size(
+        dimension, trace_workers
+    )
+    started <- proc.time()[['elapsed']]
+    determinant_scores <- .sparse_logdet_scores(
+        factor,
+        system_derivatives,
+        rep.int(1, length(system_derivatives)),
+        supports=rep(list(seq_len(dimension)), length(system_derivatives)),
+        chunk_size=trace_chunk_size,
+        workers=trace_workers
+    )
+    trace_seconds <- proc.time()[['elapsed']] - started
+    started <- proc.time()[['elapsed']]
+    output <- vapply(seq_along(penalty_derivatives), function(index) {
+        as.numeric(Matrix::crossprod(
+            coefficients,
+            penalty_derivatives[[index]] %*% coefficients
+        )) * quadratic_scale + determinant_scores[[index]] -
+            penalty_scores[[index]]
+    }, numeric(1))
+    attr(output, 'timing') <- c(
+        rhs=rhs_seconds,
+        coefficient_solve=solve_seconds,
+        likelihood_derivatives=likelihood_seconds,
+        selected_inverse_trace=trace_seconds,
+        trace_chunk_size=trace_chunk_size,
+        quadratic=proc.time()[['elapsed']] - started
+    )
+    output
 }
 
 .sparse_analytic_profiled_hessian <- function(
@@ -1526,7 +1637,7 @@
             'gradient', 'supernodal', 'trace_method', 'trace_chunk_size',
             'schur',
             'crossprod_chunk_size', 'restarts', 'gradient_probes',
-            'gradient_cores', 'finite_difference_step', 'hessian',
+            'cores', 'gradient_workers', 'finite_difference_step', 'hessian',
             'hessian_step', 'outer_optimizer', 'optimizer_maxit',
             'optimizer_gradient_tolerance', 'optimizer_trust_radius',
             'boundary_action', 'boundary_log_sp'
@@ -1554,22 +1665,13 @@
         }
         as.integer(value)
     }
-    gradient_cores <- if (is.null(control('gradient_cores'))) {
-        1L
-    } else {
-        value <- control('gradient_cores')
-        if (length(value) != 1L || !is.numeric(value) || !is.finite(value) ||
-                value < 1 || value != as.integer(value)) {
-            stop('sparse_control$gradient_cores must be a positive integer')
-        }
-        as.integer(value)
-    }
-    if (.Platform$OS.type == 'windows' && gradient_cores > 1L) {
-        warning(
-            'Parallel finite gradients are not available on Windows; using one core',
-            call.=FALSE
+    cores <- .cdrgam_available_cores(control('cores'))
+    gradient_workers_requested <- control('gradient_workers')
+    if (!is.null(gradient_workers_requested)) {
+        gradient_workers_requested <- .cdrgam_positive_integer(
+            gradient_workers_requested,
+            'sparse_control$gradient_workers'
         )
-        gradient_cores <- 1L
     }
     finite_difference_step <- if (
         is.null(control('finite_difference_step'))
@@ -2043,6 +2145,26 @@
             crossprod_chunk_size=crossprod_chunk_size
         ))
     }
+    gradient_plan <- .cdrgam_parallel_plan(
+        cores,
+        max(1L, 2L * gradient_penalty_count),
+        gradient_workers_requested
+    )
+    gradient_workers <- gradient_plan$workers
+    if (.Platform$OS.type == 'windows' &&
+            !is.null(gradient_workers_requested) &&
+            gradient_workers_requested > 1L) {
+        warning(
+            'Parallel finite gradients are not available on Windows; using one core',
+            call.=FALSE
+        )
+    }
+    previous_blas_threads <- .cdrgam_blas_threads()
+    on.exit(
+        RhpcBLASctl::blas_set_num_threads(previous_blas_threads),
+        add=TRUE
+    )
+    RhpcBLASctl::blas_set_num_threads(cores)
     y <- setup$y - setup$offset
     weights <- setup$w
     if (is.null(weights)) weights <- rep.int(1, length(y))
@@ -2190,7 +2312,7 @@
         gradient=gradient_requested,
         trace_method=trace_method_requested,
         gradient_probes=gradient_probes,
-        gradient_cores=gradient_cores,
+        gradient_workers=gradient_workers,
         finite_difference_step=finite_difference_step,
         optimizer_maxit=optimizer_maxit,
         optimizer_gradient_tolerance=optimizer_gradient_tolerance,
@@ -2724,24 +2846,28 @@
             retain=FALSE,
             record=FALSE
         )
-        values <- if (gradient_cores > 1L) {
-            results <- parallel::mclapply(
-                points,
-                worker,
-                mc.cores=min(gradient_cores, length(points)),
-                mc.preschedule=TRUE,
-                mc.set.seed=FALSE
-            )
-            valid <- vapply(
-                results,
-                function(value) is.numeric(value) && length(value) == 1L &&
-                    is.finite(value),
-                logical(1)
-            )
-            if (!all(valid)) {
-                stop('Parallel finite-difference gradient evaluation failed')
-            }
-            vapply(results, as.numeric, numeric(1))
+        values <- if (gradient_workers > 1L) {
+            .cdrgam_with_blas_threads(gradient_plan$blas_threads, {
+                results <- parallel::mclapply(
+                    points,
+                    worker,
+                    mc.cores=gradient_workers,
+                    mc.preschedule=TRUE,
+                    mc.set.seed=FALSE
+                )
+                valid <- vapply(
+                    results,
+                    function(value) is.numeric(value) &&
+                        length(value) == 1L && is.finite(value),
+                    logical(1)
+                )
+                if (!all(valid)) {
+                    stop(
+                        'Parallel finite-difference gradient evaluation failed'
+                    )
+                }
+                vapply(results, as.numeric, numeric(1))
+            })
         } else {
             vapply(points, worker, numeric(1))
         }
@@ -2758,7 +2884,8 @@
             1L,
             'finite gradient',
             evaluations=length(points),
-            cores=gradient_cores,
+            workers=gradient_workers,
+            blas_threads=gradient_plan$blas_threads,
             seconds=format(
                 proc.time()[['elapsed']] - gradient_started,
                 digits=5
@@ -2820,7 +2947,7 @@
         objective_seconds=utils::tail(objective_seconds, 1L),
         exact_trace_rhs=exact_trace_rhs,
         penalty_count=penalty_count,
-        gradient_cores=gradient_cores,
+        gradient_workers=gradient_workers,
         dimension=dimension,
         saved=checkpoint_state$optimizer_selection
     )
@@ -2886,7 +3013,8 @@
         optimization_arguments$gr <- exact_gradient
     } else if (gradient_method %in% c('stochastic', 'hybrid')) {
         optimization_arguments$gr <- stochastic_gradient
-    } else if (identical(gradient_method, 'finite') && gradient_cores > 1L) {
+    } else if (identical(gradient_method, 'finite') &&
+            gradient_workers > 1L) {
         optimization_arguments$gr <- finite_gradient
     }
     hessian_selection <- .sparse_select_hessian_method(
@@ -3467,7 +3595,11 @@
                 gradient_requested=gradient_requested,
                 gradient=gradient_method,
                 gradient_probes=gradient_probes,
-                gradient_cores=gradient_cores,
+                cores=cores,
+                serial_blas_threads=cores,
+                gradient_workers=gradient_workers,
+                gradient_blas_threads=gradient_plan$blas_threads,
+                gradient_core_source=gradient_plan$worker_source,
                 finite_difference_step=finite_difference_step,
                 hessian_requested=hessian_requested,
                 hessian=hessian_method,
@@ -3645,7 +3777,8 @@
     }
     allowed_control <- c(
         'crossprod_chunk_size', 'supernodal', 'optimizer_maxit',
-        'optimizer_gradient_tolerance', 'optimizer_trust_radius'
+        'optimizer_gradient_tolerance', 'optimizer_trust_radius', 'cores',
+        'score_workers', 'score_batch_size'
     )
     unknown <- setdiff(names(sparse_control), allowed_control)
     if (length(unknown)) {
@@ -3661,6 +3794,7 @@
     max_iterations <- as.integer(control('optimizer_maxit', 100L))
     gradient_tolerance <- control('optimizer_gradient_tolerance', 1e-4)
     trust_radius <- control('optimizer_trust_radius', 2)
+    cores <- .cdrgam_available_cores(sparse_control$cores)
     if (!is.finite(max_iterations) || max_iterations < 1L ||
             !is.finite(gradient_tolerance) || gradient_tolerance <= 0 ||
             !is.finite(trust_radius) || trust_radius <= 0) {
@@ -3680,10 +3814,42 @@
         setup_only=TRUE,
         ...
     )
+    score_tasks <- length(assembly$penalty_components)
+    score_plan <- .cdrgam_score_parallel_plan(
+        cores,
+        max(1L, score_tasks),
+        sparse_control$score_workers
+    )
+    if (.Platform$OS.type == 'windows' &&
+            !is.null(sparse_control$score_workers) &&
+            sparse_control$score_workers > 1L) {
+        warning(
+            'Parallel exact generalized scores require fork support; ',
+            'using one score worker on Windows',
+            call.=FALSE
+        )
+    }
+    score_batch_size <- if (is.null(sparse_control$score_batch_size)) {
+        NULL
+    } else .cdrgam_positive_integer(
+        sparse_control$score_batch_size,
+        'sparse_control$score_batch_size'
+    )
+    previous_blas_threads <- .cdrgam_blas_threads()
+    on.exit(
+        RhpcBLASctl::blas_set_num_threads(previous_blas_threads),
+        add=TRUE
+    )
+    RhpcBLASctl::blas_set_num_threads(cores)
     reporter$phase(
         'generalized smoothing-parameter optimization',
         smoothing_parameters=length(assembly$penalty_components),
         gradient='exact',
+        cores=cores,
+        inner_blas_threads=cores,
+        score_workers=score_plan$workers,
+        score_blas_threads=score_plan$blas_threads,
+        score_batching='memory-bounded shared traces',
         inner_solver='streamed sparse PIRLS'
     )
     optimized <- .cdrgam_optimize_streamed_sparse_laml(
@@ -3691,7 +3857,11 @@
         family,
         max_iterations=max_iterations,
         gradient_tolerance=gradient_tolerance,
-        trust_radius=trust_radius
+        trust_radius=trust_radius,
+        score_workers=score_plan$workers,
+        score_batch_size=score_batch_size,
+        score_blas_threads=score_plan$blas_threads,
+        reporter=reporter
     )
     retained <- optimized$retained
     solution <- retained$solution
@@ -3766,6 +3936,11 @@
         control=list(
             gradient='exact',
             outer_optimizer=if (estimated_gamma) 'lbfgsb' else 'bfgs_trust',
+            cores=cores,
+            serial_blas_threads=cores,
+            score_workers=score_plan$workers,
+            score_blas_threads=score_plan$blas_threads,
+            score_batch_size=score_batch_size,
             crossprod_chunk_size=assembly$crossprod_chunk_size,
             supernodal=assembly$supernodal,
             optimizer_maxit=max_iterations,
@@ -3790,7 +3965,12 @@
         convergence=convergence,
         penalty_components=assembly$penalty_components,
         penalty_trace=penalty_trace,
-        observation_count=assembly$observation_count
+        observation_count=assembly$observation_count,
+        warm_starts=optimized$warm_starts,
+        cold_fallbacks=optimized$cold_fallbacks,
+        score_plan=optimized$score_plan,
+        evaluations=optimized$evaluations,
+        score_evaluations=optimized$score_evaluations
     )
     output$cdrgam <- list(
         schema_version=1L,
@@ -3844,7 +4024,11 @@
         'fit complete',
         criterion=format(retained$criterion, digits=10),
         converged=convergence$converged,
-        iterations=solution$iterations
+        iterations=solution$iterations,
+        evaluations=optimized$evaluations,
+        score_evaluations=optimized$score_evaluations,
+        warm_starts=optimized$warm_starts,
+        cold_fallbacks=optimized$cold_fallbacks
     )
     output
 }

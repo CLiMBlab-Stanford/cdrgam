@@ -637,6 +637,13 @@ summary.cdrgam_distributional_block <- function(
         residual_df,
         chi_square=TRUE
     )
+    weights <- object$prior.weights
+    mean_response <- sum(weights * object$y) / sum(weights)
+    deviance <- object$deviance
+    null_deviance <- sum(
+        weights * ((object$y - mean_response) /
+            object$distributional$sigma)^2
+    )
     formulas <- .cdrgam_summary_formulas(object)
     output <- list(
         call=object$call,
@@ -649,6 +656,8 @@ summary.cdrgam_distributional_block <- function(
         p.pv=if (is.null(p_table)) numeric() else p_table[, 'Pr(>|z|)'],
         p.table=p_table,
         s.table=s_table,
+        s.test=if (is.null(s_table)) character() else
+            attr(s_table, 'test.status'),
         se=if (is.null(p_table)) numeric() else p_table[, 'Std. Error'],
         chi.sq=if (is.null(s_table)) numeric() else s_table[, 'Chi.sq'],
         s.pv=if (is.null(s_table)) numeric() else s_table[, 'p-value'],
@@ -660,8 +669,12 @@ summary.cdrgam_distributional_block <- function(
         residual.df=residual_df,
         scale=1,
         dispersion=1,
-        r.sq=NA_real_,
-        dev.expl=NA_real_,
+        r.sq=NULL,
+        deviance=deviance,
+        null.deviance=null_deviance,
+        dev.expl=if (null_deviance > 0) {
+            1 - deviance / null_deviance
+        } else NA_real_,
         method='-REML',
         sp.criterion=object$reml,
         rank=length(object$coefficients),

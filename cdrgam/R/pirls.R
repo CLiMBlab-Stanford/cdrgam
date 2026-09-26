@@ -322,10 +322,14 @@
         family,
         log_sp,
         initial_coefficients=NULL,
+        initial_solution=NULL,
         fixed_ridge=0,
         tolerance=1e-9,
         chunk_size=assembly$crossprod_chunk_size,
-        score=FALSE
+        score=FALSE,
+        score_workers=1L,
+        score_batch_size=NULL,
+        score_blas_threads=1L
 ) {
     family <- .as_family(family)
     canonical <- (identical(family$family, 'binomial') &&
@@ -355,7 +359,15 @@
         family,
         sp,
         fixed_ridge=fixed_ridge,
-        initial_coefficients=initial_coefficients,
+        initial_coefficients=if (!is.null(initial_solution)) {
+            initial_solution$coefficients
+        } else initial_coefficients,
+        initial_factor=if (!is.null(initial_solution)) {
+            initial_solution$factor
+        } else NULL,
+        initial_linear_predictors=if (!is.null(initial_solution)) {
+            initial_solution$linear_predictors
+        } else NULL,
         tolerance=tolerance,
         chunk_size=chunk_size
     )
@@ -381,16 +393,60 @@
         sp=sp,
         scale=dispersion,
         solution=solution,
+        saturated=saturated,
         penalty_logdet=penalty_determinant$value,
         penalty_rank=penalty_determinant$rank
     )
     if (!isTRUE(score)) return(output)
-    penalty_score <- .sparse_penalty_logdet_score(
-        assembly$blocks,
-        sp,
-        penalty_count
+    .cdrgam_streamed_sparse_laml_score(
+        assembly,
+        family,
+        output,
+        workers=score_workers,
+        batch_size=score_batch_size,
+        blas_threads=score_blas_threads
     )
-    beta <- solution$coefficients
+}
+
+.cdrgam_streamed_sparse_laml_score <- function(
+        assembly, family, evaluation, workers=1L, batch_size=NULL,
+        blas_threads=1L
+) {
+    scores <- .cdrgam_with_blas_threads(
+        blas_threads,
+        .cdrgam_streamed_sparse_score(
+            assembly,
+            evaluation$solution,
+            evaluation$sp,
+            family,
+            evaluation$scale,
+            workers=workers,
+            batch_size=batch_size
+        )
+    )
+    estimated_gamma <- identical(family$family, 'Gamma') &&
+        identical(family$link, 'log')
+    if (estimated_gamma) {
+        parameter_count <- length(assembly$penalty_components) + 1L
+        nullity <- assembly$dimension - evaluation$penalty_rank
+        scores[[parameter_count]] <-
+            -evaluation$solution$penalized_deviance / evaluation$scale -
+            2 * evaluation$saturated$derivative * evaluation$scale - nullity
+    }
+    evaluation$score_plan <- attr(scores, 'score_plan')
+    evaluation$score <- as.numeric(scores)
+    evaluation
+}
+
+.cdrgam_streamed_sparse_score <- function(
+        assembly, solution, sp, family, dispersion=1,
+        workers=1L, batch_size=NULL
+) {
+    count <- length(assembly$penalty_components)
+    if (!count) return(numeric())
+    penalty_scores <- .sparse_penalty_logdet_score(
+        assembly$blocks, sp, count
+    )
     mu <- solution$fitted_values
     prior_weights <- solution$prior_weights
     weight_derivative <- if (identical(family$family, 'poisson')) {
@@ -398,61 +454,102 @@
     } else if (identical(family$family, 'binomial')) {
         prior_weights * mu * (1 - mu) * (1 - 2 * mu)
     } else numeric(length(mu))
-    scores <- numeric(parameter_count)
-    zero_offset <- numeric(assembly$observation_count)
-    starts <- seq.int(
-        1L,
-        assembly$observation_count,
-        by=min(chunk_size, assembly$observation_count)
+    derivative_bytes <- max(
+        1,
+        16 * as.double(Matrix::nnzero(solution$system)) +
+            8 * as.double(assembly$observation_count)
     )
-    for (j in seq_len(penalty_count)) {
-        penalty_derivative <- sp[[j]] * assembly$penalty_components[[j]]
-        coefficient_derivative <- -as.numeric(.cdr_factor_solve(
+    plan <- .cdrgam_sparse_score_batch_plan(
+        count, workers, derivative_bytes, batch_size
+    )
+    groups <- plan$groups
+    workers <- plan$workers
+    evaluate <- function(indices) tryCatch({
+        derivatives <- lapply(indices, function(index) {
+            sp[[index]] * assembly$penalty_components[[index]]
+        })
+        values <- .cdrgam_sparse_exact_score_batch(
             solution$factor,
-            penalty_derivative %*% beta
-        ))
-        eta_derivative <- .cdrgam_sparse_linear_predictor(
-            assembly,
-            coefficient_derivative,
-            zero_offset,
-            chunk_size
+            solution$coefficients,
+            derivatives,
+            penalty_scores[indices],
+            likelihood_derivatives=function(coefficient_derivatives) {
+                output <- vector('list', ncol(coefficient_derivatives))
+                starts <- seq.int(
+                    1L, assembly$observation_count,
+                    by=min(
+                        assembly$crossprod_chunk_size,
+                        assembly$observation_count
+                    )
+                )
+                for (start in starts) {
+                    rows <- start:min(
+                        assembly$observation_count,
+                        start + assembly$crossprod_chunk_size - 1L
+                    )
+                    X <- .cdrgam_sparse_design_chunk(assembly, rows)
+                    eta_derivatives <- as.matrix(
+                        X %*% coefficient_derivatives
+                    )
+                    for (direction in seq_len(ncol(coefficient_derivatives))) {
+                        contribution <- Matrix::crossprod(
+                            X,
+                            Matrix::Diagonal(x=
+                                weight_derivative[rows] *
+                                eta_derivatives[, direction]
+                            ) %*% X
+                        )
+                        output[[direction]] <- if (is.null(
+                                output[[direction]])) {
+                            contribution
+                        } else output[[direction]] + contribution
+                    }
+                }
+                output
+            },
+            quadratic_scale=1 / dispersion,
+            trace_workers=workers
         )
-        curvature_derivative <- NULL
-        for (start in starts) {
-            rows <- start:min(
-                assembly$observation_count,
-                start + chunk_size - 1L
-            )
-            X <- .cdrgam_sparse_design_chunk(assembly, rows)
-            contribution <- Matrix::crossprod(
-                X,
-                Matrix::Diagonal(
-                    x=weight_derivative[rows] * eta_derivative[rows]
-                ) %*% X
-            )
-            curvature_derivative <- if (is.null(curvature_derivative)) {
-                contribution
-            } else curvature_derivative + contribution
-        }
-        system_derivative <- Matrix::forceSymmetric(
-            penalty_derivative + curvature_derivative,
-            uplo='U'
+        list(indices=indices, values=values, error=NULL)
+    }, error=function(error) {
+        list(indices=indices, values=NULL, error=conditionMessage(error))
+    })
+    results <- lapply(groups, evaluate)
+    missing <- which(!vapply(results, function(result) {
+        is.list(result) &&
+            all(c('indices', 'values', 'error') %in% names(result))
+    }, logical(1)))
+    if (length(missing)) {
+        stop(
+            'Exact generalized score worker ', missing[[1L]],
+            ' did not return a result; it may have exceeded its memory limit'
         )
-        scores[[j]] <- as.numeric(Matrix::crossprod(
-            beta,
-            penalty_derivative %*% beta
-        )) / dispersion + .sparse_logdet_score(
-            solution$factor,
-            system_derivative
-        ) - penalty_score[[j]]
     }
-    if (estimated_gamma) {
-        nullity <- assembly$dimension - penalty_determinant$rank
-        scores[[parameter_count]] <-
-            -solution$penalized_deviance / dispersion -
-            2 * saturated$derivative * dispersion - nullity
+    failed <- which(vapply(
+        results, function(result) !is.null(result$error), logical(1)
+    ))
+    if (length(failed)) {
+        first <- results[[failed[[1L]]]]
+        stop(
+            'Exact generalized score batch ',
+            paste(first$indices, collapse=', '),
+            ' failed: ', first$error
+        )
     }
-    output$score <- scores
+    output <- numeric(count)
+    for (result in results) output[result$indices] <- result$values
+    attr(output, 'score_plan') <- list(
+        workers=workers,
+        parallel_axis='inverse columns',
+        batches=length(groups),
+        batch_size=plan$batch_size,
+        derivative_bytes=plan$derivative_bytes,
+        memory_source=plan$memory$source,
+        memory_available_bytes=plan$memory$available_bytes,
+        batch_timings=lapply(results, function(result) {
+            attr(result$values, 'timing')
+        })
+    )
     output
 }
 
@@ -465,7 +562,11 @@
         chunk_size=assembly$crossprod_chunk_size,
         max_iterations=100L,
         gradient_tolerance=1e-4,
-        trust_radius=2
+        trust_radius=2,
+        score_workers=1L,
+        score_batch_size=NULL,
+        score_blas_threads=1L,
+        reporter=NULL
 ) {
     family <- .as_family(family)
     estimated_gamma <- identical(family$family, 'Gamma') &&
@@ -485,26 +586,96 @@
     }
     cached_parameters <- NULL
     cached_evaluation <- NULL
-    evaluate <- function(parameters) {
-        if (!is.null(cached_parameters) && identical(
-                as.numeric(parameters), cached_parameters)) {
-            return(cached_evaluation)
-        }
-        value <- .cdrgam_streamed_sparse_laml(
+    warm_solution <- NULL
+    warm_starts <- 0L
+    cold_fallbacks <- 0L
+    evaluations <- 0L
+    score_evaluations <- 0L
+    score_plan <- NULL
+    score_evaluation <- function(parameters, value) {
+        if (!is.null(value$score)) return(value)
+        score_evaluations <<- score_evaluations + 1L
+        started <- proc.time()[['elapsed']]
+        value <- .cdrgam_streamed_sparse_laml_score(
             assembly,
             family,
-            parameters,
-            fixed_ridge=fixed_ridge,
-            tolerance=tolerance,
-            chunk_size=chunk_size,
-            score=TRUE
+            value,
+            workers=score_workers,
+            batch_size=score_batch_size,
+            blas_threads=score_blas_threads
+        )
+        score_plan <<- value$score_plan
+        cached_parameters <<- as.numeric(parameters)
+        cached_evaluation <<- value
+        if (!is.null(reporter)) reporter$emit(
+            1L,
+            'outer exact score complete',
+            evaluation=evaluations,
+            score_evaluation=score_evaluations,
+            seconds=format(proc.time()[['elapsed']] - started, digits=5),
+            maximum_score=if (length(value$score)) {
+                format(max(abs(value$score)), digits=5)
+            } else 'none'
+        )
+        value
+    }
+    evaluate <- function(parameters, need_score=FALSE) {
+        if (!is.null(cached_parameters) && identical(
+                as.numeric(parameters), cached_parameters)) {
+            if (need_score) {
+                return(score_evaluation(parameters, cached_evaluation))
+            }
+            return(cached_evaluation)
+        }
+        evaluations <<- evaluations + 1L
+        evaluation_started <- proc.time()[['elapsed']]
+        solve <- function(initial) tryCatch(
+            list(value=.cdrgam_streamed_sparse_laml(
+                assembly,
+                family,
+                parameters,
+                initial_solution=initial,
+                fixed_ridge=fixed_ridge,
+                tolerance=tolerance,
+                chunk_size=chunk_size,
+                score=FALSE
+            ), error=NULL),
+            error=function(error) {
+                list(value=NULL, error=conditionMessage(error))
+            }
+        )
+        used_warm_start <- !is.null(warm_solution)
+        if (used_warm_start) warm_starts <<- warm_starts + 1L
+        solved <- solve(warm_solution)
+        if (used_warm_start && is.null(solved$value)) {
+            cold_fallbacks <<- cold_fallbacks + 1L
+            solved <- solve(NULL)
+        }
+        if (is.null(solved$value)) stop(solved$error)
+        value <- solved$value
+        warm_solution <<- value$solution
+        if (!is.null(reporter)) reporter$emit(
+            1L,
+            'outer inner solve complete',
+            evaluation=evaluations,
+            seconds=format(
+                proc.time()[['elapsed']] - evaluation_started,
+                digits=5
+            ),
+            iterations=value$solution$iterations,
+            warm_start=used_warm_start,
+            cold_fallback=used_warm_start &&
+                !isTRUE(value$solution$warm_started),
+            criterion=format(value$criterion, digits=10)
         )
         cached_parameters <<- as.numeric(parameters)
         cached_evaluation <<- value
-        value
+        if (need_score) score_evaluation(parameters, value) else value
     }
     objective <- function(parameters) evaluate(parameters)$criterion
-    gradient <- function(parameters) evaluate(parameters)$score
+    gradient <- function(parameters) {
+        evaluate(parameters, need_score=TRUE)$score
+    }
     optimization <- if (estimated_gamma) {
         value <- stats::optim(
             par=initial_log_sp,
@@ -529,8 +700,16 @@
             initial_radius=trust_radius
         )
     }
-    retained <- evaluate(optimization$par)
-    list(optimization=optimization, retained=retained)
+    retained <- evaluate(optimization$par, need_score=TRUE)
+    list(
+        optimization=optimization,
+        retained=retained,
+        evaluations=evaluations,
+        score_evaluations=score_evaluations,
+        warm_starts=warm_starts,
+        cold_fallbacks=cold_fallbacks,
+        score_plan=score_plan
+    )
 }
 
 .cdrgam_sparse_design_chunk <- function(assembly, rows) {
@@ -616,6 +795,8 @@
         smoothing_parameters,
         fixed_ridge=0,
         initial_coefficients=NULL,
+        initial_factor=NULL,
+        initial_linear_predictors=NULL,
         tolerance=1e-8,
         max_iterations=100L,
         maximum_halvings=25L,
@@ -644,7 +825,8 @@
         penalty <- penalty + smoothing_parameters[[i]] *
             assembly$penalty_components[[i]]
     }
-    coefficients <- if (is.null(initial_coefficients)) {
+    warm_started <- !is.null(initial_coefficients)
+    coefficients <- if (!warm_started) {
         numeric(assembly$dimension)
     } else {
         if (length(initial_coefficients) != assembly$dimension ||
@@ -653,10 +835,26 @@
         }
         as.numeric(initial_coefficients)
     }
-    eta <- family$linkfun(.cdrgam_initial_mu(family, y, prior_weights))
-    objective <- Inf
+    retained_predictor <- warm_started &&
+        length(initial_linear_predictors) == assembly$observation_count &&
+        all(is.finite(initial_linear_predictors))
+    eta <- if (retained_predictor) {
+        as.numeric(initial_linear_predictors)
+    } else if (warm_started) {
+        .cdrgam_sparse_linear_predictor(
+            assembly, coefficients, offset, chunk_size
+        )
+    } else family$linkfun(.cdrgam_initial_mu(family, y, prior_weights))
+    initial_mu <- family$linkinv(eta)
+    objective <- if (warm_started &&
+            .cdrgam_valid_family_state(family, eta, initial_mu)) {
+        sum(family$dev.resids(y, initial_mu, prior_weights)) +
+            as.numeric(Matrix::crossprod(
+                coefficients, penalty %*% coefficients
+            )) + fixed_ridge * sum(coefficients^2)
+    } else Inf
     converged <- FALSE
-    factor <- NULL
+    factor <- initial_factor
     numeric_updates <- 0L
     starts <- seq.int(
         1L,
@@ -814,7 +1012,8 @@
         iterations=iteration,
         numeric_updates=numeric_updates,
         chunks=length(starts),
-        converged=converged
+        converged=converged,
+        warm_started=warm_started
     )
 }
 
@@ -911,7 +1110,7 @@
             error=function(error) NULL
         )
         if (is.null(solution) || !isTRUE(solution$converged)) {
-            return(if (retain) NULL else .Machine$double.xmax / 100)
+            return(if (retain) NULL else 1e100)
         }
         penalty_determinant <- .positive_log_determinant(solution$penalty)
         log_system_determinant <- 2 * sum(log(diag(solution$factor)))
@@ -928,7 +1127,7 @@
                 nullity * log(2 * pi * dispersion)
         }
         if (!is.finite(criterion)) {
-            return(if (retain) NULL else .Machine$double.xmax / 100)
+            return(if (retain) NULL else 1e100)
         }
         if (!retain) return(criterion)
         solution$criterion <- criterion

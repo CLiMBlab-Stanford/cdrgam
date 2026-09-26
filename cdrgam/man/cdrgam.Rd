@@ -103,7 +103,8 @@ mgcv's family accepts but does not use them.}
 generalized LAML, or joint Gaussian location--scale LAML), and
 \code{"sparse"} uses streamed sparse Gaussian, supported generalized, or
 joint Gaussian location--scale optimization. The distributional sparse solver
-uses an exact outer score. Select the Gaussian trust-region
+ends with exact outer scores; large systems use matrix-free stochastic scores
+for a warm-up by default. Select the Gaussian trust-region
 optimizer with
 \code{sparse_control=list(gradient="exact", outer_optimizer="bfgs_trust")}.}
 \item{checkpoint}{Optional checkpoint path for a custom backend. Checkpoints
@@ -113,7 +114,9 @@ curvature approximation, trust radius, counters, parameters, score, and
 criterion so interruption resumes the same optimization trajectory; older
 checkpoints without that state remain parameter-only warm starts. Reusing the
 path resumes an interrupted fit or skips an already completed outer
-optimization. Distributional fits do not yet support checkpoints.}
+optimization. Sparse distributional fits checkpoint accepted outer states and
+resume from the best retained smoothing parameters; the joint factorization is
+reconstructed once on resume.}
 \item{solver_trace}{Custom-backend progress reporting. \code{FALSE} or
 \code{0} is silent; \code{TRUE} or \code{1} reports phases, improving
 solutions, and trust-optimizer diagnostics; \code{2} reports every objective
@@ -129,23 +132,52 @@ A function receives the progress events as named lists.}
 \item{sparse_control}{Named control list for the sparse backend. The
 single-predictor generalized sparse solver accepts
 \code{crossprod_chunk_size}, \code{supernodal}, \code{optimizer_maxit},
-\code{optimizer_gradient_tolerance}, and \code{optimizer_trust_radius}; its
-exact gradient and safeguarded trust-region optimizer are fixed. The
+\code{optimizer_gradient_tolerance}, \code{optimizer_trust_radius},
+\code{cores}, \code{score_workers}, and \code{score_batch_size}; its exact
+gradient and safeguarded trust-region optimizer are fixed. The
 remaining controls below apply to Gaussian sparse fits. The distributional
 sparse solver accepts \code{crossprod_chunk_size}, \code{supernodal},
 \code{optimizer_maxit}, \code{optimizer_gradient_tolerance},
-\code{inner_tolerance}, and \code{inner_maxit}; its exact score and L-BFGS-B
-optimizer are fixed.
+\code{inner_tolerance}, \code{inner_maxit}, \code{cores}, \code{gradient},
+\code{gradient_probes}, \code{gradient_workers}, and
+\code{score_batch_size}. Its \code{gradient} may be \code{"auto"} (the
+default), \code{"exact"}, or \code{"hybrid"}. Automatic selection uses exact
+scores for small joint systems and a deterministic matrix-free stochastic
+warm-up followed by exact-score refinement for large systems.
+Hybrid warm-up stops early when rejected conditional fits exhaust a budget
+based on recent fit times, then refines from the best valid point.
+\code{gradient_probes} defaults to 64. Both generalized solvers warm-start each inner fit from
+the preceding valid outer evaluation and retry cold if it fails.
+They compute the exact score only when the outer optimizer requests a gradient,
+so objective-only line-search probes do not perform trace solves.
+\code{cores} is the total process and BLAS core budget. By default it is
+inferred from scheduler, container, affinity, and operating-system limits.
+Serial factorization phases use that budget for BLAS threads. Independent
+score or finite-difference tasks divide it between processes and BLAS threads
+without nested oversubscription. \code{score_workers} for the single-predictor
+generalized solver and \code{gradient_workers} for the distributional solver
+optionally override the number of exact-score processes; the resolved value is capped by the
+core budget and trace-column count. By default, exact-score phases use the integer
+square root of the core budget as workers and give each worker the remaining
+BLAS threads. Workers partition the inverse columns required by each trace and
+reduce their partial scores. The family-specific curvature derivatives remain
+shared copy-on-write data. Process parallelism falls back to one worker on
+Windows. Exact score directions are evaluated together so they share design
+streaming, multi-right-hand-side solves, and inverse-column traversals.
+\code{score_batch_size} optionally caps that group size; by default the process
+uses its available-memory estimate to retain the largest safe shared batch.
+The inverse-column chunk width also grows with available memory, up to a fixed
+cap, to improve sparse-solve throughput.
 \code{gradient} entry may be \code{"auto"} (the default), \code{"finite"},
 \code{"exact"}, \code{"stochastic"}, or \code{"hybrid"}.
 \code{gradient_probes} controls the fixed Rademacher trace probes used by the
 latter two methods; \code{"hybrid"} uses stochastic scores for a warm start
 and then refines with exact scores. \code{"auto"} compares predicted
 exact-score time and memory with the cost of finite differences after the
-first objective factorization. \code{gradient_cores} evaluates central
-finite-difference directions in parallel on systems that support process
-forking and falls back to one core on Windows; a single-threaded BLAS should
-be used when it exceeds one.
+first objective factorization. \code{gradient_workers} optionally overrides the
+automatically selected number of central finite-difference worker processes.
+The resolved value is capped by \code{cores} and the number of directions and
+falls back to one on Windows.
 \code{finite_difference_step} defaults to \code{1e-3}.
 \code{outer_optimizer} may be \code{"auto"} (the default), \code{"lbfgsb"},
 or the experimental safeguarded \code{"bfgs_trust"}. Automatic selection uses

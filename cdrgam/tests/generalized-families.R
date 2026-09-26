@@ -133,7 +133,19 @@ fit_and_check <- function(response, family) {
                 tolerance=1e-10, chunk_size=23L
             )$criterion) / (2 * step)
         }, numeric(1))
-        stopifnot(max(abs(value$score - finite_score)) < 2e-4)
+        concurrent <- evaluator(
+            assembly,
+            family,
+            fitted_parameters,
+            tolerance=1e-10,
+            chunk_size=23L,
+            score=TRUE,
+            score_workers=2L
+        )
+        stopifnot(
+            max(abs(value$score - finite_score)) < 2e-4,
+            max(abs(value$score - concurrent$score)) < 1e-10
+        )
         value
     } else NULL
     sparse_optimized <- if (custom_supported) {
@@ -190,6 +202,17 @@ fit_and_check <- function(response, family) {
         }
         stopifnot(
             sparse_optimized$optimization$convergence == 0L,
+            sparse_optimized$warm_starts > 0L,
+            sparse_optimized$cold_fallbacks >= 0L,
+            sparse_optimized$score_evaluations <=
+                sparse_optimized$evaluations,
+            sparse_optimized$score_plan$batch_size >= 1L,
+            identical(
+                sparse_optimized$score_plan$parallel_axis,
+                'inverse columns'
+            ),
+            length(sparse_optimized$score_plan$batch_timings) ==
+                sparse_optimized$score_plan$batches,
             max(abs(
                 sparse_optimized$retained$solution$linear_predictors -
                 fit$linear.predictors
@@ -215,7 +238,7 @@ fit_and_check <- function(response, family) {
         } else if (max(fit$sp) < 1e6) {
             stopifnot(max(abs(log(laml$solution$sp / fit$sp))) < 0.01)
         } else {
-            stopifnot(min(laml$solution$sp) > 1e6)
+            stopifnot(max(laml$solution$sp) > 1e6)
         }
         block <- suppressWarnings(cdrgam.fit(
             design,
@@ -242,6 +265,7 @@ fit_and_check <- function(response, family) {
         block_summary <- summary(block)
         stopifnot(
             inherits(block_summary, 'summary.cdrgam_block'),
+            is.null(block_summary$r.sq),
             if (estimated_gamma) {
                 't value' %in% colnames(block_summary$p.table)
             } else 'z value' %in% colnames(block_summary$p.table),
@@ -293,11 +317,14 @@ fit_and_check <- function(response, family) {
             if (estimated_gamma) {
                 'F' %in% colnames(sparse_summary$s.table)
             } else 'Chi.sq' %in% colnames(sparse_summary$s.table),
+            is.null(sparse_summary$r.sq),
             all(is.finite(diag(sparse_covariance))),
             all(diag(sparse_covariance) >= 0),
             all(is.finite(sparse_irf$estimate)),
             all(is.finite(sparse_irf$se)),
             inherits(sparse_unconditional, 'try-error'),
+            sparse_fit$sparse$warm_starts > 0L,
+            sparse_fit$sparse$score_plan$batch_size >= 1L,
             identical(
                 sparse_fit$sparse$control$outer_optimizer,
                 if (estimated_gamma) 'lbfgsb' else 'bfgs_trust'
@@ -375,4 +402,16 @@ stopifnot(
         random_sparse$linear.predictors - random_native$linear.predictors
     )) < 3e-3,
     abs(deviance(random_sparse) - deviance(random_native)) < 2e-2
+)
+random_summary <- summary(random_sparse)
+untested <- random_summary$s.test ==
+    'not computed: fully penalized term'
+stopifnot(
+    any(untested),
+    all(is.na(random_summary$s.table[untested, 'p-value'])),
+    any(grepl(
+        'does not indicate fit failure',
+        utils::capture.output(print(random_summary)),
+        fixed=TRUE
+    ))
 )

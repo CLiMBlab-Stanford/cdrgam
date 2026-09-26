@@ -1844,7 +1844,9 @@ prepare_cdrgam <- function(
 #'   selects the dense reference solver (Gaussian REML, generalized LAML, or
 #'   joint Gaussian location--scale LAML), and `"sparse"` uses streamed sparse
 #'   Gaussian, supported generalized, or joint Gaussian location--scale
-#'   optimization. The distributional sparse solver uses an exact outer score.
+#'   optimization. The distributional sparse solver ends with exact outer
+#'   scores; large systems use matrix-free stochastic scores for a warm-up by
+#'   default, then use safeguarded trust-region BFGS for exact refinement.
 #'   Select the Gaussian trust-region optimizer with
 #'   `sparse_control=list(gradient="exact", outer_optimizer="bfgs_trust")`.
 #' @param checkpoint Optional checkpoint path for a custom backend. Checkpoints
@@ -1854,7 +1856,9 @@ prepare_cdrgam <- function(
 #'   and criterion so interruption resumes the same optimization trajectory;
 #'   older checkpoints without that state remain parameter-only warm starts.
 #'   Reusing the path resumes an interrupted fit or skips an already completed
-#'   outer optimization. Distributional fits do not yet support checkpoints.
+#'   outer optimization. Sparse distributional fits checkpoint accepted outer
+#'   states and resume from the best retained smoothing parameters; the joint
+#'   factorization is reconstructed once on resume.
 #' @param solver_trace Custom-backend progress reporting. `FALSE` or `0` is
 #'   silent; `TRUE` or `1` reports phases, improving solutions, and
 #'   trust-optimizer diagnostics; `2` reports every objective evaluation; and
@@ -1870,21 +1874,58 @@ prepare_cdrgam <- function(
 #' @param sparse_control Named control list for the sparse backend. The
 #'   single-predictor generalized sparse solver accepts
 #'   `crossprod_chunk_size`, `supernodal`, `optimizer_maxit`,
-#'   `optimizer_gradient_tolerance`, and `optimizer_trust_radius`; its exact
-#'   gradient and safeguarded trust-region optimizer are fixed. The remaining
-#'   controls below apply to Gaussian sparse fits. The distributional sparse
-#'   solver accepts `crossprod_chunk_size`, `supernodal`, `optimizer_maxit`,
-#'   `optimizer_gradient_tolerance`, `inner_tolerance`, and `inner_maxit`; its
-#'   exact score and L-BFGS-B optimizer are fixed.
+#'   `optimizer_gradient_tolerance`, `optimizer_trust_radius`, `cores`,
+#'   `score_workers`, and `score_batch_size`; its exact gradient and
+#'   safeguarded trust-region optimizer are fixed. The
+#'   remaining controls below apply to Gaussian sparse fits. The distributional
+#'   sparse solver accepts `crossprod_chunk_size`, `supernodal`,
+#'   `optimizer_maxit`, `optimizer_gradient_tolerance`,
+#'   `optimizer_trust_radius`, `inner_tolerance`, `inner_maxit`, `cores`,
+#'   `gradient`, `gradient_probes`,
+#'   `gradient_workers`, and `score_batch_size`. Its `gradient` may be
+#'   `"auto"` (the default), `"exact"`, or `"hybrid"`. Automatic selection
+#'   uses exact scores for small joint systems and a deterministic matrix-free
+#'   stochastic warm-up followed by exact-score refinement for large systems.
+#'   Hybrid warm-up stops early when rejected conditional fits exhaust a budget
+#'   based on recent fit times, then refines from the best valid point.
+#'   Exact refinement requests a score only after accepting an objective
+#'   improvement. At exhausted trust-region recovery it compares the exact
+#'   score with a directional finite difference to diagnose numerical
+#'   stagnation.
+#'   `gradient_probes` defaults to 64. Both generalized solvers warm-start each inner fit
+#'   from the preceding valid outer evaluation and retry cold if it fails.
+#'   They compute the exact score only when the outer optimizer requests a
+#'   gradient, so objective-only line-search probes do not perform trace solves.
+#'   `cores` is the total process and BLAS core budget. By default it is
+#'   inferred from scheduler, container, affinity, and operating-system limits.
+#'   Serial factorization phases use that budget for BLAS threads. Independent
+#'   score or finite-difference tasks divide it between processes and BLAS
+#'   threads without nested oversubscription. `score_workers` for the
+#'   single-predictor generalized solver and `gradient_workers` for the
+#'   distributional solver optionally override the number of exact-score
+#'   processes; the resolved
+#'   value is capped by the core budget and trace-column count. By default, exact-score
+#'   phases use the integer square root of the core budget as workers and give
+#'   each worker the remaining BLAS threads. Workers partition the inverse
+#'   columns required by each trace and reduce their partial scores. The
+#'   family-specific curvature derivatives remain shared copy-on-write data.
+#'   Process parallelism falls back to one worker on Windows. Exact score
+#'   directions are evaluated together so they share design streaming,
+#'   multi-right-hand-side solves, and inverse-column traversals.
+#'   `score_batch_size` optionally caps that group size; by default the process
+#'   uses its available-memory estimate to retain the largest safe shared batch.
+#'   The inverse-column chunk width also grows with available memory, up to a
+#'   fixed cap, to improve sparse-solve throughput.
 #'   `gradient` entry may be `"auto"` (the default), `"finite"`, `"exact"`,
 #'   `"stochastic"`, or `"hybrid"`; `gradient_probes` controls the fixed
 #'   Rademacher trace probes used by the latter two methods; `"hybrid"` uses
 #'   stochastic scores for a warm start and then refines with exact scores;
 #'   `"auto"` compares predicted exact-score time and memory with the cost of
 #'   finite differences after the first objective factorization;
-#'   `gradient_cores` evaluates central finite-difference directions in
-#'   parallel on systems that support process forking and falls back to one
-#'   core on Windows (use single-threaded BLAS when greater than one);
+#'   `gradient_workers` optionally overrides the automatically selected number
+#'   of central finite-difference worker processes. The resolved value is
+#'   capped by `cores` and the number of directions and falls back to one on
+#'   Windows;
 #'   `finite_difference_step` defaults to `1e-3`;
 #'   `outer_optimizer` may be `"auto"` (the default), `"lbfgsb"`, or
 #'   `"bfgs_trust"`; automatic selection uses safeguarded trust-region BFGS
@@ -2088,19 +2129,21 @@ cdrgam.fit <- function(
         if (!identical(family$family, 'gaulss')) {
             stop('The initial distributional design requires family="gaulss"')
         }
-        if (!is.null(checkpoint) ||
-                !identical(match.arg(rank_action), 'error') ||
+        if (!identical(match.arg(rank_action), 'error') ||
                 !is.null(rank_tol) || !is.null(rank_penalty)) {
             stop(
-                'Checkpoint and rank controls do not yet apply to ',
-                'distributional fits'
+                'Rank controls do not yet apply to distributional fits'
             )
+        }
+        if (!is.null(checkpoint) && !identical(backend, 'sparse')) {
+            stop('Distributional checkpoints require backend="sparse"')
         }
         fit <- if (identical(backend, 'sparse')) {
             .fit_distributional_sparse(
                 design,
                 family=family,
                 method=method,
+                checkpoint=checkpoint,
                 trace=solver_trace,
                 sparse_control=sparse_control,
                 ...

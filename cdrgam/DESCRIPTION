@@ -18,8 +18,11 @@ Description: Fits continuous-time deconvolutional regression models as
 License: MIT + file LICENSE
 Imports:
     Matrix,
+    RhpcBLASctl,
     methods,
-    mgcv
+    mgcv,
+    parallel,
+    parallelly
 Encoding: UTF-8
 NeedsCompilation: yes
 SystemRequirements: C99

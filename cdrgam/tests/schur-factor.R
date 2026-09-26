@@ -95,7 +95,7 @@ automatic_schur <- cdrgam:::.sparse_optimizer_selection(
     objective_seconds=1,
     exact_trace_rhs=6L,
     penalty_count=2L,
-    gradient_cores=1L,
+    gradient_workers=1L,
     dimension=6L
 )
 stopifnot(
@@ -112,7 +112,7 @@ automatic_solve <- cdrgam:::.sparse_optimizer_selection(
     objective_seconds=1,
     exact_trace_rhs=10000L,
     penalty_count=2L,
-    gradient_cores=1L,
+    gradient_workers=1L,
     dimension=6L
 )
 stopifnot(
@@ -128,7 +128,7 @@ explicit_trust <- cdrgam:::.sparse_optimizer_selection(
     objective_seconds=1,
     exact_trace_rhs=10000L,
     penalty_count=2L,
-    gradient_cores=1L,
+    gradient_workers=1L,
     dimension=6L
 )
 stopifnot(
@@ -144,7 +144,7 @@ saved_resolution <- cdrgam:::.sparse_optimizer_selection(
     objective_seconds=1,
     exact_trace_rhs=6L,
     penalty_count=2L,
-    gradient_cores=1L,
+    gradient_workers=1L,
     dimension=6L,
     saved=list(policy_version=1L, gradient='finite')
 )

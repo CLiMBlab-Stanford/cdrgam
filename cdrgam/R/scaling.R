@@ -289,21 +289,27 @@
     coefficients <- stats::coef(object)
     divisors <- rep.int(1, length(coefficients))
     names(divisors) <- names(coefficients)
+    parameter_preparations <- object$cdrgam$preparation$parameters
+    distributional_scaling <- !is.null(parameter_preparations) && any(vapply(
+        parameter_preparations,
+        function(preparation) isTRUE(preparation$scaling$enabled),
+        logical(1)
+    ))
     scaling <- object$cdrgam$scaling
     if (is.null(scaling)) scaling <- object$cdrgam$preparation$scaling
-    if (is.null(scaling) || !isTRUE(scaling$enabled)) return(divisors)
+    if (!distributional_scaling &&
+            (is.null(scaling) || !isTRUE(scaling$enabled))) return(divisors)
 
-    setup <- object$cdrgam$prediction$setup
-    if (is.null(setup) && inherits(object, 'gam')) {
-        setup <- .cdr_prediction_setup(object)
-    }
-    if (!is.null(setup$pterms) && !is.null(setup$nsdf) && setup$nsdf > 0L) {
+    apply_parametric <- function(setup, scaling, indices) {
+        if (is.null(setup$pterms) || is.null(setup$nsdf) ||
+                setup$nsdf <= 0L) return()
         assignment <- setup$assign
-        if (is.null(assignment) && !is.null(object$assign)) {
+        if (is.null(assignment) && length(indices) == length(divisors) &&
+                !is.null(object$assign)) {
             assignment <- object$assign
         }
         labels <- attr(setup$pterms, 'term.labels')
-        count <- min(as.integer(setup$nsdf), length(divisors))
+        count <- min(as.integer(setup$nsdf), length(indices))
         if (!is.null(assignment) && length(assignment) >= count) {
             for (i in seq_len(count)) {
                 term_index <- assignment[[i]]
@@ -314,13 +320,32 @@
                     error=function(e) NULL
                 )
                 if (!is.null(expression)) {
-                    divisors[[i]] <- .cdr_expression_divisor(
+                    divisors[[indices[[i]]]] <<- .cdr_expression_divisor(
                         expression,
                         scaling
                     )
                 }
             }
         }
+    }
+    if (distributional_scaling) {
+        setups <- object$cdrgam$prediction$setups
+        ranges <- object$cdrgam$prediction$coefficient_ranges
+        if (!is.null(setups) && !is.null(ranges)) {
+            for (parameter in intersect(names(setups), names(ranges))) {
+                apply_parametric(
+                    setups[[parameter]],
+                    parameter_preparations[[parameter]]$scaling,
+                    ranges[[parameter]]
+                )
+            }
+        }
+    } else {
+        setup <- object$cdrgam$prediction$setup
+        if (is.null(setup) && inherits(object, 'gam')) {
+            setup <- .cdr_prediction_setup(object)
+        }
+        apply_parametric(setup, scaling, seq_along(divisors))
     }
     for (term in object$cdrgam$terms) {
         indices <- term$coefficient_index

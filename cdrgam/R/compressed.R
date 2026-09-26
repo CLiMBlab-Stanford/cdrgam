@@ -557,7 +557,18 @@ summary.cdrgam <- function(
         if (length(output$chi.sq) == length(labels)) {
             names(output$chi.sq) <- labels
         }
+        p_values <- output$s.table[, ncol(output$s.table)]
+        output$s.test <- stats::setNames(
+            ifelse(
+                is.finite(p_values),
+                'approximate',
+                'not computed by mgcv'
+            ),
+            labels
+        )
     }
+    output$deviance <- object$deviance
+    output$null.deviance <- object$null.deviance
     if (isTRUE(all.coefficients)) {
         indices <- seq_along(object$coefficients)
         output$coefficients <- .cdrgam_coefficient_table(

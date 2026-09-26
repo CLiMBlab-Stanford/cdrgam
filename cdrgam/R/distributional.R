@@ -33,13 +33,6 @@
             'location and scale, in that order'
         )
     }
-    if (isTRUE(arguments$rescale_predictors)) {
-        stop(
-            'Distributional predictor rescaling is not yet supported; ',
-            'prepare source variables explicitly or use ',
-            'rescale_predictors=FALSE'
-        )
-    }
     location <- .cdrgam_distributional_formula(formulas$location)
     response <- all.vars(location[[2L]])
     if (length(response) != 1L) {
@@ -75,7 +68,7 @@
         ),
         configuration=list(
             drop.unused.levels=arguments$drop.unused.levels,
-            rescale_predictors=FALSE
+            rescale_predictors=arguments$rescale_predictors
         )
     )
     class(output) <- c('cdrgam_distributional_design', 'cdrgam_design')
@@ -157,6 +150,14 @@
     formula_env$ti <- mgcv::ti
     formula_env$t2 <- mgcv::t2
     data <- as.list(design$responses)
+    for (parameter_design in design$parameters) {
+        scaling <- parameter_design$scaling
+        rows <- scaling$variables$stream == 'responses' &
+            scaling$variables$applied
+        for (variable in scaling$variables$variable[rows]) {
+            data[[variable]] <- parameter_design$responses[[variable]]
+        }
+    }
     translated <- vector('list', length(parameter_names))
     names(translated) <- parameter_names
     data_names <- vector('list', length(parameter_names))

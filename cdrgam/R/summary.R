@@ -161,16 +161,27 @@
     )
     table[, 'edf'] <- edf
     table[, 'Ref.df'] <- edf
+    test_status <- stats::setNames(
+        rep.int('not computed: test structure unavailable', count),
+        rownames(table)
+    )
     for (i in seq_len(count)) {
         smooth <- object$smooth[[i]]
-        if (is.null(smooth$null.space.dim) || smooth$null.space.dim <= 0L) next
+        if (!is.null(smooth$null.space.dim) && smooth$null.space.dim <= 0L) {
+            test_status[[i]] <- 'not computed: fully penalized term'
+            next
+        }
+        if (is.null(smooth$null.space.dim)) next
         indices <- smooth$first.para:smooth$last.para
         selected <- covariance(indices)
         decomposition <- eigen(selected, symmetric=TRUE)
         values <- decomposition$values
         tolerance <- max(values) * sqrt(.Machine$double.eps)
         rank <- sum(values > tolerance)
-        if (!rank) next
+        if (!rank) {
+            test_status[[i]] <- 'not computed: covariance rank zero'
+            next
+        }
         retained <- values > tolerance
         precision <- decomposition$vectors[, retained, drop=FALSE] %*%
             ((1 / values[retained]) *
@@ -193,7 +204,9 @@
                 lower.tail=FALSE
             )
         }
+        test_status[[i]] <- 'approximate'
     }
+    attr(table, 'test.status') <- test_status
     table
 }
 
@@ -257,6 +270,8 @@
         p.pv=if (length(parametric)) p_table[, 4L] else numeric(),
         p.table=p_table,
         s.table=s_table,
+        s.test=if (is.null(s_table)) character() else
+            attr(s_table, 'test.status'),
         se=if (length(parametric)) p_table[, 'Std. Error'] else numeric(),
         chi.sq=if (is.null(s_table)) numeric() else
             if ('Chi.sq' %in% colnames(s_table)) s_table[, 'Chi.sq'] else
@@ -275,7 +290,9 @@
                 (length(object$y) - 1) /
                 (stats::var(sqrt(weights) *
                     (object$y - mean_response)) * residual_df)
-        } else NA_real_,
+        } else NULL,
+        deviance=deviance,
+        null.deviance=null_deviance,
         dev.expl=if (null_deviance > 0) 1 - deviance / null_deviance else NA_real_,
         method='-REML',
         sp.criterion=object$reml,
@@ -337,19 +354,42 @@
         cat('Approximate significance of smooth terms:\n')
         stats::printCoefmat(
             x$s.table, digits=digits, signif.stars=signif.stars,
-            has.Pvalue=TRUE, na.print='NA', cs.ind=1L, ...
+            has.Pvalue=TRUE, na.print='not tested', cs.ind=1L, ...
         )
-        if (anyNA(x$s.table[, 3L])) {
+        if (anyNA(x$s.table[, ncol(x$s.table)])) {
             cat(
-                'Term-level tests are omitted for fully penalized',
-                'random-effect and grouped-deviation terms.\n',
+                'Tests marked "not tested" were not computed. For fully',
+                'penalized terms, this does not indicate fit failure.\n',
                 sep=' '
             )
         }
     }
-    cat('\nR-sq.(adj) = ', formatC(x$r.sq, digits=3, width=5),
-        '  Deviance explained = ',
-        formatC(x$dev.expl * 100, digits=3, width=4), '%\n', sep='')
+    fit_statistics <- character()
+    if (!is.null(x$r.sq) && length(x$r.sq) && is.finite(x$r.sq)) {
+        fit_statistics <- c(
+            fit_statistics,
+            paste0('R-sq.(adj) = ', formatC(x$r.sq, digits=3, width=5))
+        )
+    }
+    if (!is.null(x$dev.expl) && length(x$dev.expl) &&
+            is.finite(x$dev.expl)) {
+        fit_statistics <- c(fit_statistics, paste0(
+            'Deviance explained = ',
+            formatC(x$dev.expl * 100, digits=3, width=4), '%'
+        ))
+    }
+    if (length(fit_statistics)) {
+        cat('\n', paste(fit_statistics, collapse='  '), '\n', sep='')
+    }
+    if (!is.null(x$deviance) && length(x$deviance) &&
+            is.finite(x$deviance) && !is.null(x$null.deviance) &&
+            length(x$null.deviance) && is.finite(x$null.deviance)) {
+        cat(
+            'Deviance = ', formatC(x$deviance, digits=5),
+            '  Null deviance = ', formatC(x$null.deviance, digits=5),
+            '\n', sep=''
+        )
+    }
     cat(x$method, ' = ', formatC(x$sp.criterion, digits=5),
         '  Scale est. = ', formatC(x$scale, digits=5, width=8, flag='-'),
         '  n = ', x$n, '\n', sep='')
@@ -379,6 +419,7 @@
 #' @return A `summary.gam`-style object with CDR formula metadata. Native fits
 #'   retain the complete `summary.gam` result. Custom backends provide its
 #'   commonly used coefficient, smooth-term, fit-statistic, and formula fields.
+#'   The `s.test` field states whether each smooth-term test was computed.
 #' @name summary.cdrgam
 NULL
 

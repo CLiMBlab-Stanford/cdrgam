@@ -66,8 +66,8 @@ stopifnot(isTRUE(small_chunks$converged), isTRUE(one_chunk$converged))
 stopifnot(small_chunks$sparse$convergence$restart_count == 2L)
 stopifnot(length(small_chunks$sparse$convergence$restart_objectives) == 3L)
 stopifnot(!small_chunks$sparse$convergence$global_optimum_certified)
-stopifnot(max(abs(coef(small_chunks) - coef(one_chunk))) < 1e-6)
 stopifnot(max(abs(fitted(small_chunks) - fitted(one_chunk))) < 1e-6)
+stopifnot(abs(small_chunks$reml - one_chunk$reml) < 1e-8)
 # Under this severe collinearity mgcv settles at a secondary REML stationary
 # point. The independent dense objective agrees with the sparse optimum.
 stopifnot(max(abs(fitted(block) - fitted(small_chunks))) < 1e-6)

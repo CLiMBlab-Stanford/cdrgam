@@ -31,6 +31,22 @@ design <- prepare_cdrgam(
     simulation$responses,
     quiet=TRUE
 )
+legacy_control_error <- tryCatch(
+    {
+        cdrgam.fit(
+            design,
+            backend='sparse',
+            sparse_control=list(gradient_cores=2L)
+        )
+        NA_character_
+    },
+    error=function(error) conditionMessage(error)
+)
+stopifnot(
+    !is.na(legacy_control_error),
+    grepl('Unknown sparse_control entries: gradient_cores',
+        legacy_control_error, fixed=TRUE)
+)
 
 # A progress callback can observe structured phase/evaluation records. Raising
 # an error simulates interruption after several completed objective calls.
@@ -105,7 +121,7 @@ stopifnot(
 automatic <- cdrgam.fit(
     design,
     backend='sparse',
-    sparse_control=list(gradient_cores=4L, hessian='none')
+    sparse_control=list(gradient_workers=4L, hessian='none')
 )
 stopifnot(
     identical(automatic$sparse$gradient_requested, 'auto'),
@@ -114,9 +130,12 @@ stopifnot(
     identical(automatic$sparse$outer_optimizer, 'bfgs_trust'),
     identical(automatic$sparse$hessian_requested, 'none'),
     identical(automatic$sparse$hessian, 'none'),
-    automatic$sparse$control$gradient_cores == if (
+    automatic$sparse$control$gradient_workers == if (
         .Platform$OS.type == 'windows'
-    ) 1L else 4L,
+    ) 1L else min(4L, 2L * length(automatic$sp)),
+    automatic$sparse$control$gradient_workers *
+        automatic$sparse$control$gradient_blas_threads <=
+        automatic$sparse$control$cores,
     is.list(automatic$sparse$optimizer_selection),
     automatic$sparse$optimizer_selection$policy_version == 1L
 )
@@ -306,12 +325,12 @@ if (.Platform$OS.type != 'windows') {
     finite_serial <- cdrgam.fit(
         design,
         backend='sparse',
-        sparse_control=list(gradient='finite', gradient_cores=1L)
+        sparse_control=list(gradient='finite', gradient_workers=1L)
     )
     finite_parallel <- cdrgam.fit(
         design,
         backend='sparse',
-        sparse_control=list(gradient='finite', gradient_cores=2L)
+        sparse_control=list(gradient='finite', gradient_workers=2L)
     )
     stopifnot(
         abs(finite_serial$reml - finite_parallel$reml) < 1e-8,
@@ -337,6 +356,37 @@ quadratic_gradient_hessian <- cdrgam:::.central_difference_jacobian(
     function(x) drop(quadratic_hessian %*% x),
     c(0.4, -0.7),
     step=1e-4
+)
+directional_check <- cdrgam:::.outer_directional_derivative_check(
+    c(0.4, -0.7),
+    drop(crossprod(c(0.4, -0.7), quadratic_hessian %*% c(0.4, -0.7))) / 2,
+    drop(quadratic_hessian %*% c(0.4, -0.7)),
+    function(x) drop(crossprod(x, quadratic_hessian %*% x)) / 2,
+    rep(-2, 2),
+    rep(2, 2)
+)
+invalid_directional_check <- cdrgam:::.outer_directional_derivative_check(
+    1,
+    0.5,
+    1,
+    function(x) if (x > 1) 1e50 else x^2 / 2,
+    -2,
+    2,
+    objective_validity=function(parameters, value) value < 1e40
+)
+stopifnot(
+    directional_check$valid,
+    directional_check$consistent,
+    abs(
+        directional_check$analytic -
+            directional_check$finite_difference
+    ) < 1e-8,
+    invalid_directional_check$valid,
+    invalid_directional_check$consistent,
+    invalid_directional_check$forward_valid,
+    !invalid_directional_check$backward_valid,
+    invalid_directional_check$recover,
+    abs(invalid_directional_check$finite_difference + 0.9995) < 1e-8
 )
 stopifnot(
     max(abs(quadratic_gradient_hessian$hessian - quadratic_hessian)) < 1e-10,
@@ -573,6 +623,40 @@ recovered_fit <- cdrgam:::.safeguarded_outer_bfgs(
         )
     }
 )
+diagnostic_calls <- 0L
+diagnostic_fit <- cdrgam:::.safeguarded_outer_bfgs(
+    par=1,
+    fn=function(x) round(x^2 / 2, 8),
+    gr=function(x) x,
+    lower=-2,
+    upper=2,
+    gradient_tolerance=1e-8,
+    state=floor_state,
+    maximum_recovery_resets=0L,
+    convergence_assessment=function(...) list(
+        converged=FALSE,
+        message='test unresolved curvature'
+    ),
+    stagnation_diagnostic=function(...) {
+        diagnostic_calls <<- diagnostic_calls + 1L
+        list(message='test directional mismatch')
+    }
+)
+directional_recovery_fit <- cdrgam:::.safeguarded_outer_bfgs(
+    par=1,
+    fn=function(x) x^2 / 2,
+    gr=function(x) x,
+    lower=-2,
+    upper=2,
+    gradient_tolerance=1e-8,
+    state=floor_state,
+    maximum_recovery_resets=0L,
+    convergence_assessment=function(...) list(
+        converged=FALSE,
+        message='test unresolved curvature'
+    ),
+    stagnation_diagnostic=function(...) invalid_directional_check
+)
 small_step_calls <- 0L
 small_step_state <- floor_state
 small_step_state$trust_radius <- 1e-7
@@ -674,6 +758,17 @@ stopifnot(
     identical(recovery_calls, 1L),
     any(vapply(recovered_fit$history, function(record) {
         identical(record$event, 'curvature_recovery')
+    }, logical(1))),
+    identical(diagnostic_calls, 1L),
+    grepl(
+        'test directional mismatch',
+        diagnostic_fit$message,
+        fixed=TRUE
+    ),
+    identical(directional_recovery_fit$convergence, 0L),
+    directional_recovery_fit$recovery_resets == 1L,
+    any(vapply(directional_recovery_fit$history, function(record) {
+        identical(record$event, 'directional_recovery')
     }, logical(1))),
     identical(small_step_fit$convergence, 0L),
     identical(

@@ -16,6 +16,7 @@ stopifnot(
 )
 
 batched <- batch_plan(10L, 4L, derivative_bytes=1024, batch_size=3L)
+single_batch <- batch_plan(10L, 4L, derivative_bytes=1024, batch_size=10L)
 bounded_trace_chunk <- trace_chunk_size(
     1000L, 2L,
     memory=list(available_bytes=64 * 1024^2)
@@ -23,6 +24,8 @@ bounded_trace_chunk <- trace_chunk_size(
 automatic_score <- score_parallel_plan(8L, 40L)
 stopifnot(
     batched$workers == 4L,
+    single_batch$workers == 4L,
+    length(single_batch$groups) == 1L,
     identical(unname(lengths(batched$groups)), c(3L, 3L, 3L, 1L)),
     batched$batch_size == 3L,
     batched$derivative_bytes == 1024,

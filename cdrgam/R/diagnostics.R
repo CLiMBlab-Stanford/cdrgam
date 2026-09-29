@@ -52,6 +52,445 @@ fit_diagnostics <- function(object) {
     )
 }
 
+.cdrgam_simplification_sp_indices <- function(object) {
+    cursor <- 0L
+    lapply(object$smooth, function(smooth) {
+        if (!is.null(smooth$first.sp) && !is.null(smooth$last.sp) &&
+                is.finite(smooth$first.sp) && is.finite(smooth$last.sp)) {
+            indices <- seq.int(smooth$first.sp, smooth$last.sp)
+            cursor <<- max(cursor, indices)
+            return(indices)
+        }
+        count <- length(smooth$sp)
+        if (!count) return(integer())
+        indices <- seq.int(cursor + 1L, cursor + count)
+        cursor <<- cursor + count
+        indices
+    })
+}
+
+.cdrgam_simplification_edf <- function(object) {
+    if (inherits(object, 'cdrgam_sparse')) {
+        return(.cdrgam_sparse_smooth_edf(object))
+    }
+    if (inherits(object, 'cdrgam_block')) {
+        return(.cdrgam_block_smooth_edf(object))
+    }
+    table <- summary(object)$s.table
+    if (is.null(table)) numeric() else as.numeric(table[, 'edf'])
+}
+
+.cdrgam_simplification_gradient <- function(object) {
+    gradient <- if (is.list(object$optimizer)) object$optimizer$gradient else NULL
+    if (is.null(gradient)) gradient <- object$outer.info$grad
+    if (!is.numeric(gradient) || length(gradient) != length(object$sp)) {
+        return(rep.int(NA_real_, length(object$sp)))
+    }
+    as.numeric(gradient)
+}
+
+.cdrgam_simplification_tolerance <- function(object) {
+    value <- object$sparse$control$optimizer_gradient_tolerance
+    if (is.numeric(value) && length(value) == 1L && is.finite(value) &&
+            value > 0) return(value)
+    if (inherits(object, 'cdrgam_distributional_sparse')) 2e-3 else 1e-4
+}
+
+.cdrgam_simplification_term_info <- function(object, smooth) {
+    indices <- seq.int(smooth$first.para, smooth$last.para)
+    metadata <- object$cdrgam$terms
+    if (!length(metadata)) return(NULL)
+    matched <- which(vapply(metadata, function(term) {
+        identical(as.integer(term$coefficient_index), as.integer(indices))
+    }, logical(1)))
+    if (length(matched) == 1L) metadata[[matched]] else NULL
+}
+
+.cdrgam_simplification_random_effect <- function(object, smooth) {
+    if (inherits(smooth, 'random.effect') ||
+            any(grepl('random.effect', class(smooth), fixed=TRUE))) return(TRUE)
+    blocks <- object$cdrgam$prediction$random_effects
+    if (!length(blocks)) return(FALSE)
+    direct <- vapply(blocks, function(block) {
+        is.list(block) && !is.null(block$coefficient_index)
+    }, logical(1))
+    if (!all(direct)) blocks <- unlist(blocks, recursive=FALSE)
+    indices <- seq.int(smooth$first.para, smooth$last.para)
+    any(vapply(blocks, function(block) {
+        is.list(block) && identical(
+            as.integer(block$coefficient_index), as.integer(indices)
+        )
+    }, logical(1)))
+}
+
+.cdrgam_simplification_recommendation <- function(
+        object, label, smooth, metadata, collapsed, null_collapsed
+) {
+    random_effect <- .cdrgam_simplification_random_effect(object, smooth)
+    grouped <- !is.null(metadata$group) || grepl('|', label, fixed=TRUE)
+    type <- if (is.null(metadata$type)) '' else metadata$type
+    if (isTRUE(collapsed)) {
+        if (random_effect) return('remove the random effect')
+        if (grouped) return('remove the grouped deviation')
+        return('remove the term')
+    }
+    if (isTRUE(null_collapsed)) {
+        return('replace the smooth with its unpenalized null-space form')
+    }
+    if (random_effect) return('remove the random effect')
+    if (grouped) return('remove the grouped deviation before its population term')
+    if (grepl('nonlinear', type, fixed=TRUE)) {
+        return('make the predictor contribution linear or remove the interaction')
+    }
+    if (grepl('varying', type, fixed=TRUE)) {
+        return('remove the time-varying component')
+    }
+    'reduce the basis dimension or remove the term'
+}
+
+.cdrgam_formula_text <- function(formula) {
+    paste(deparse(formula, width.cutoff=500L), collapse=' ')
+}
+
+.cdrgam_simplification_spec_name <- function(spec) {
+    name <- if (isTRUE(spec$constant)) 'irf(1)' else
+        paste(spec$predictors, collapse=':')
+    if (!is.null(spec$time)) name <- paste0(name, '~', spec$time)
+    if (!is.null(spec$by)) name <- paste0(name, ':', spec$by)
+    if (!is.null(spec$group)) name <- paste0(name, '|', spec$group)
+    name
+}
+
+.cdrgam_drop_ordinary_smooth <- function(formula, smooth) {
+    parsed <- .parse_cdr_formula(formula)
+    terms_object <- stats::terms(parsed$ordinary_formula, keep.order=TRUE)
+    labels <- attr(terms_object, 'term.labels')
+    target_variables <- sort(as.character(smooth$term))
+    matches <- which(vapply(labels, function(label) {
+        expression <- tryCatch(str2lang(label), error=function(error) NULL)
+        is.call(expression) && identical(as.character(expression[[1L]]), 's') &&
+            identical(sort(all.vars(expression[[2L]])), target_variables)
+    }, logical(1)))
+    if (length(matches) != 1L) return(NULL)
+    ordinary <- stats::formula(stats::drop.terms(
+        terms_object, dropx=matches, keep.response=TRUE
+    ))
+    environment(ordinary) <- environment(formula)
+    .compose_cdr_formula(ordinary, parsed$irfs)
+}
+
+.cdrgam_drop_irf <- function(formula, metadata) {
+    parsed <- .parse_cdr_formula(formula)
+    names <- vapply(
+        parsed$irfs, .cdrgam_simplification_spec_name, character(1)
+    )
+    matches <- which(names == metadata$name)
+    if (length(matches) != 1L) return(NULL)
+    .compose_cdr_formula(parsed$ordinary_formula, parsed$irfs[-matches])
+}
+
+.cdrgam_simplification_patch <- function(
+        object, parameter, smooth=NULL, metadata=NULL, action
+) {
+    formulas <- stats::formula(object, type='effective')
+    distributional <- is.list(formulas)
+    if (!distributional) formulas <- list(response=formulas)
+    target <- if (distributional) parameter else names(formulas)[[1L]]
+    if (is.na(target) || !(target %in% names(formulas))) return(NULL)
+    before_formula <- formulas[[target]]
+    after_formula <- if (identical(action, 'intercept_only_parameter')) {
+        response <- if (length(before_formula) == 3L) {
+            paste(deparse(before_formula[[2L]]), collapse='')
+        } else NULL
+        stats::as.formula(
+            if (is.null(response)) '~ 1' else paste(response, '~ 1'),
+            env=environment(before_formula)
+        )
+    } else if (!is.null(metadata)) {
+        .cdrgam_drop_irf(before_formula, metadata)
+    } else {
+        .cdrgam_drop_ordinary_smooth(before_formula, smooth)
+    }
+    if (is.null(after_formula)) return(NULL)
+    list(
+        operation='replace_formula',
+        path=if (distributional) paste0('formula.', target) else 'formula',
+        parameter=if (distributional) target else NULL,
+        before=.cdrgam_formula_text(before_formula),
+        after=.cdrgam_formula_text(after_formula)
+    )
+}
+
+.cdrgam_empty_simplification_candidates <- function() {
+    data.frame(
+        rank=integer(), priority=character(), parameter=character(),
+        term=character(), action=character(), recommendation=character(),
+        evidence=character(), automatable=logical(), patch_id=character(),
+        edf=numeric(), coefficient_count=integer(),
+        null_space_dimension=numeric(), smoothing_parameter=numeric(),
+        outer_score=numeric(), evidence_score=numeric(), df_loss=numeric(),
+        coefficient_loss=integer(), terms_touched=integer(),
+        impact_fraction=numeric(), score=numeric(), stringsAsFactors=FALSE
+    )
+}
+
+#' Suggest model simplifications from a fitted CDR-GAM
+#'
+#' The report ranks terms whose fitted effective degrees of freedom have
+#' collapsed toward their penalized limit or whose unresolved outer derivative
+#' favors stronger smoothing. For a nonconverged distributional fit, it also
+#' identifies a parameter submodel when the simplification-directed score is
+#' concentrated there. The function does not change or refit the model.
+#'
+#' @param object A fitted `cdrgam` model.
+#' @param max_candidates Maximum number of candidates to return. Use `Inf` to
+#'   retain every candidate.
+#' @param conservatism Strength of the ranking penalty for model degrees of
+#'   freedom removed by a candidate. Zero ranks only by diagnostic evidence.
+#' @return A `cdrgam_simplification_report`. Use `as.data.frame()` to extract
+#'   its ranked candidate table. The `patches` member contains exact,
+#'   preconditioned formula replacements for candidates that are safe to
+#'   automate mechanically; selecting and refitting them remains the caller's
+#'   responsibility.
+#' @export
+suggest_simplifications <- function(object, max_candidates=10L, conservatism=1) {
+    if (!is_cdrgam(object)) stop('object must be a fitted cdrgam model')
+    if (length(max_candidates) != 1L || !is.numeric(max_candidates) ||
+            is.na(max_candidates) || max_candidates < 1 ||
+            !(is.infinite(max_candidates) || max_candidates == as.integer(max_candidates))) {
+        stop('max_candidates must be a positive integer or Inf')
+    }
+    if (!is.numeric(conservatism) || length(conservatism) != 1L ||
+            !is.finite(conservatism) || conservatism < 0) {
+        stop('conservatism must be one finite nonnegative number')
+    }
+    labels <- .cdrgam_smooth_labels(object)
+    if (!length(labels)) {
+        output <- list(
+            candidates=.cdrgam_empty_simplification_candidates(),
+            patches=list(),
+            converged=isTRUE(fit_diagnostics(object)$converged),
+            gradient_tolerance=.cdrgam_simplification_tolerance(object),
+            conservatism=conservatism
+        )
+        class(output) <- 'cdrgam_simplification_report'
+        return(output)
+    }
+    edf <- .cdrgam_simplification_edf(object)
+    if (length(edf) != length(labels)) {
+        stop('Stored smooth metadata and effective degrees of freedom disagree')
+    }
+    sp_indices <- .cdrgam_simplification_sp_indices(object)
+    gradient <- .cdrgam_simplification_gradient(object)
+    tolerance <- .cdrgam_simplification_tolerance(object)
+    converged <- isTRUE(fit_diagnostics(object)$converged)
+    rows <- list()
+    patches <- list()
+    parameter_pressure <- numeric()
+    total_edf <- max(1, sum(edf, na.rm=TRUE))
+    for (i in seq_along(labels)) {
+        smooth <- object$smooth[[i]]
+        indices <- sp_indices[[i]]
+        dimension <- smooth$last.para - smooth$first.para + 1L
+        null_dimension <- if (is.null(smooth$null.space.dim)) {
+            0
+        } else smooth$null.space.dim
+        penalized_dimension <- max(0, dimension - null_dimension)
+        excess_edf <- max(0, edf[[i]] - null_dimension)
+        collapsed <- null_dimension <= 0 &&
+            edf[[i]] <= max(0.1, 0.02 * dimension)
+        null_collapsed <- null_dimension > 0 && penalized_dimension > 0 &&
+            excess_edf <= max(0.1, 0.02 * penalized_dimension)
+        term_gradient <- gradient[indices]
+        outer_score <- if (length(term_gradient) && any(is.finite(term_gradient))) {
+            min(term_gradient, na.rm=TRUE)
+        } else NA_real_
+        pressure <- if (is.finite(outer_score)) max(0, -outer_score) else 0
+        total_term_pressure <- if (length(term_gradient)) {
+            sum(pmax(0, -term_gradient), na.rm=TRUE)
+        } else 0
+        parameter <- if (grepl(':', labels[[i]], fixed=TRUE) &&
+                isTRUE(object$cdrgam$distributional)) {
+            sub(':.*$', '', labels[[i]])
+        } else NA_character_
+        if (!is.na(parameter)) {
+            existing_pressure <- if (parameter %in% names(parameter_pressure)) {
+                parameter_pressure[[parameter]]
+            } else 0
+            parameter_pressure[[parameter]] <-
+                existing_pressure + total_term_pressure
+        }
+        pressure_ratio <- pressure / tolerance
+        if (!collapsed && !null_collapsed &&
+                (converged || pressure_ratio < 2)) next
+        metadata <- .cdrgam_simplification_term_info(object, smooth)
+        evidence <- character()
+        if (collapsed) evidence <- c(evidence, sprintf(
+            'edf %.3g of %d coefficients', edf[[i]], dimension
+        ))
+        if (null_collapsed) evidence <- c(evidence, sprintf(
+            'edf %.3g is near null-space dimension %.3g',
+            edf[[i]], null_dimension
+        ))
+        if (pressure_ratio >= 2) evidence <- c(evidence, sprintf(
+            'outer derivative %.3g favors stronger smoothing (%.1fx tolerance)',
+            outer_score, pressure_ratio
+        ))
+        candidate_score <- max(
+            if (collapsed) 100 * (1 - min(1, edf[[i]] /
+                max(1, dimension))) else 0,
+            if (null_collapsed) 80 * (1 - min(1, excess_edf /
+                max(1, penalized_dimension))) else 0,
+            if (pressure_ratio >= 2) min(90, 45 + 15 * log10(pressure_ratio)) else 0
+        )
+        smoothing_parameter <- if (length(indices)) {
+            max(as.numeric(object$sp[indices]), na.rm=TRUE)
+        } else NA_real_
+        random_effect <- .cdrgam_simplification_random_effect(object, smooth)
+        grouped <- !is.null(metadata$group) || grepl('|', labels[[i]], fixed=TRUE)
+        action <- if (collapsed && random_effect) {
+            'drop_random_effect'
+        } else if (grouped) {
+            'drop_grouped_deviation'
+        } else if (collapsed) {
+            'drop_term'
+        } else if (null_collapsed) {
+            'replace_with_null_space'
+        } else 'review_term'
+        automatable <- action %in% c(
+            'drop_random_effect', 'drop_grouped_deviation', 'drop_term'
+        ) && !identical(metadata$name, 'irf(1)')
+        patch <- if (automatable) .cdrgam_simplification_patch(
+            object, parameter, smooth, metadata, action
+        ) else NULL
+        automatable <- !is.null(patch)
+        patch_id <- if (automatable) paste0('patch-', length(patches) + 1L) else NA_character_
+        if (automatable) patches[[patch_id]] <- patch
+        df_loss <- if (null_collapsed) excess_edf else edf[[i]]
+        coefficient_loss <- if (null_collapsed) penalized_dimension else dimension
+        impact_fraction <- min(1, max(0, df_loss / total_edf))
+        adjusted_score <- candidate_score - conservatism *
+            35 * sqrt(impact_fraction)
+        rows[[length(rows) + 1L]] <- data.frame(
+            rank=NA_integer_, priority=if (adjusted_score >= 70) 'high' else
+                if (adjusted_score >= 50) 'moderate' else 'low',
+            parameter=parameter,
+            term=labels[[i]],
+            action=action,
+            recommendation=.cdrgam_simplification_recommendation(
+                object, labels[[i]], smooth, metadata, collapsed, null_collapsed
+            ),
+            evidence=paste(evidence, collapse='; '),
+            automatable=automatable, patch_id=patch_id,
+            edf=edf[[i]], coefficient_count=as.integer(dimension),
+            null_space_dimension=null_dimension,
+            smoothing_parameter=smoothing_parameter,
+            outer_score=outer_score, evidence_score=candidate_score,
+            df_loss=df_loss, coefficient_loss=as.integer(coefficient_loss),
+            terms_touched=1L, impact_fraction=impact_fraction,
+            score=adjusted_score,
+            stringsAsFactors=FALSE
+        )
+    }
+    total_pressure <- sum(parameter_pressure)
+    if (!converged && length(parameter_pressure) > 1L && total_pressure > 0) {
+        dominant <- names(which.max(parameter_pressure))
+        share <- unname(parameter_pressure[[dominant]] / total_pressure)
+        if (share >= 0.67 && parameter_pressure[[dominant]] / tolerance >= 2) {
+            evidence_score <- min(95, 70 + 25 * share)
+            parameter_rows <- which(vapply(seq_along(labels), function(index) {
+                grepl(paste0('^', dominant, ':'), labels[[index]])
+            }, logical(1)))
+            df_loss <- sum(edf[parameter_rows], na.rm=TRUE)
+            coefficient_loss <- sum(vapply(parameter_rows, function(index) {
+                object$smooth[[index]]$last.para -
+                    object$smooth[[index]]$first.para + 1L
+            }, integer(1)))
+            impact_fraction <- min(1, max(0, df_loss / total_edf))
+            score <- evidence_score - conservatism *
+                (35 * sqrt(impact_fraction) + 5 * log1p(length(parameter_rows)))
+            patch <- .cdrgam_simplification_patch(
+                object, dominant, action='intercept_only_parameter'
+            )
+            automatable <- !is.null(patch)
+            patch_id <- if (automatable) paste0('patch-', length(patches) + 1L) else NA_character_
+            if (automatable) patches[[patch_id]] <- patch
+            rows[[length(rows) + 1L]] <- data.frame(
+                rank=NA_integer_, priority=if (score >= 70) 'high' else
+                    if (score >= 50) 'moderate' else 'low', parameter=dominant,
+                term=paste0('<', dominant, ' submodel>'),
+                action='intercept_only_parameter',
+                recommendation=paste0(
+                    'start with an intercept-only ', dominant,
+                    ' submodel, then restore terms incrementally'
+                ),
+                evidence=sprintf(
+                    '%.0f%% of simplification-directed outer score is in this submodel',
+                    100 * share
+                ),
+                automatable=automatable, patch_id=patch_id,
+                edf=NA_real_, coefficient_count=NA_integer_,
+                null_space_dimension=NA_real_, smoothing_parameter=NA_real_,
+                outer_score=-parameter_pressure[[dominant]],
+                evidence_score=evidence_score, df_loss=df_loss,
+                coefficient_loss=as.integer(coefficient_loss),
+                terms_touched=length(parameter_rows),
+                impact_fraction=impact_fraction, score=score,
+                stringsAsFactors=FALSE
+            )
+        }
+    }
+    candidates <- if (length(rows)) do.call(rbind, rows) else
+        .cdrgam_empty_simplification_candidates()
+    if (nrow(candidates)) {
+        candidates <- candidates[order(
+            -candidates$score, candidates$parameter, candidates$term,
+            na.last=TRUE
+        ), , drop=FALSE]
+        if (is.finite(max_candidates)) {
+            candidates <- utils::head(candidates, as.integer(max_candidates))
+        }
+        candidates$rank <- seq_len(nrow(candidates))
+        rownames(candidates) <- NULL
+    }
+    output <- list(
+        candidates=candidates,
+        patches=patches,
+        converged=converged,
+        gradient_tolerance=tolerance,
+        conservatism=conservatism
+    )
+    class(output) <- 'cdrgam_simplification_report'
+    output
+}
+
+#' @export
+as.data.frame.cdrgam_simplification_report <- function(x, ...) x$candidates
+
+#' @export
+print.cdrgam_simplification_report <- function(x, ...) {
+    cat('CDR-GAM simplification guidance\n')
+    cat('  fit converged:', if (isTRUE(x$converged)) 'yes' else 'no', '\n')
+    if (!nrow(x$candidates)) {
+        cat('  no strong simplification candidates identified\n')
+        return(invisible(x))
+    }
+    cat('  candidates:', nrow(x$candidates), '\n\n')
+    for (i in seq_len(nrow(x$candidates))) {
+        candidate <- x$candidates[i, ]
+        parameter <- if (is.na(candidate$parameter)) '' else
+            paste0(' [', candidate$parameter, ']')
+        cat(candidate$rank, '. ', candidate$term, parameter, ' (',
+            candidate$priority, ')\n', sep='')
+        cat('   Consider: ', candidate$recommendation, '.\n', sep='')
+        cat('   Evidence: ', candidate$evidence, '.\n', sep='')
+        cat('   Estimated df removed: ', format(candidate$df_loss, digits=3),
+            '; adjusted score: ', format(candidate$score, digits=3), '.\n', sep='')
+    }
+    cat('\nRecommendations are diagnostics, not automatic model selection.\n')
+    invisible(x)
+}
+
 #' Evaluate fitted impulse-response function terms
 #'
 #' @param object A fitted `cdrgam` model.

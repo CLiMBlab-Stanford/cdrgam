@@ -23,6 +23,8 @@ Imports:
     mgcv,
     parallel,
     parallelly
+Suggests:
+    marginaleffects
 Encoding: UTF-8
 NeedsCompilation: yes
 SystemRequirements: C99

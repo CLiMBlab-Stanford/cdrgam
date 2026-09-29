@@ -2,13 +2,65 @@
     formulas <- object$cdrgam$formula
     fallback <- if (is.null(formulas$user)) stats::formula(object) else
         formulas$user
-    list(
-        user=fallback,
-        normalized=if (is.null(formulas$normalized)) fallback else
-            formulas$normalized,
-        effective=if (is.null(formulas$effective)) fallback else
-            formulas$effective
+    output <- list(
+        raw=fallback
     )
+    if (!is.null(formulas$mgcv)) output$mgcv <- formulas$mgcv
+    output
+}
+
+.cdrgam_summary_simplifications <- function(object) {
+    empty <- data.frame(
+        parameter=character(), term=character(), axis=character(),
+        action=character(), requested=character(), effective=character(),
+        reason=character(), stringsAsFactors=FALSE
+    )
+    preparation <- object$cdrgam$preparation
+    if (is.null(preparation)) return(empty)
+    if (!is.null(preparation$simplifications)) {
+        value <- preparation$simplifications
+        if (!nrow(value)) return(empty)
+        value$parameter <- NA_character_
+        return(value[c('parameter', setdiff(names(value), 'parameter'))])
+    }
+    parameters <- preparation$parameters
+    if (is.null(parameters)) return(empty)
+    values <- lapply(names(parameters), function(parameter) {
+        value <- parameters[[parameter]]$simplifications
+        if (is.null(value) || !nrow(value)) return(NULL)
+        value$parameter <- parameter
+        value[c('parameter', setdiff(names(value), 'parameter'))]
+    })
+    values <- Filter(Negate(is.null), values)
+    if (!length(values)) empty else do.call(rbind, values)
+}
+
+.cdrgam_simplification_text <- function(change) {
+    prefix <- if (is.na(change$parameter) || !nzchar(change$parameter)) '' else
+        paste0('[', change$parameter, '] ')
+    subject <- paste0(prefix, change$term)
+    detail <- switch(
+        change$action,
+        basis_reduced=paste0(
+            subject, ' ', change$axis, ' basis dimension: ',
+            change$requested, ' -> ', change$effective
+        ),
+        nonlinear_to_linear=paste0(
+            subject, ' ', change$axis, ': nonlinear basis (',
+            change$requested, ') -> linear'
+        ),
+        term_removed=paste0(subject, ': removed'),
+        boundary_nullspace_reduction=paste0(
+            subject, ' penalty-space dimension: ', change$requested,
+            ' -> ', change$effective
+        ),
+        paste0(
+            subject, ' ', change$axis, ': ', change$action, ' (',
+            change$requested, ' -> ', change$effective, ')'
+        )
+    )
+    if (is.na(change$reason) || !nzchar(change$reason)) detail else
+        paste0(detail, ' (', change$reason, ')')
 }
 
 .cdrgam_formula_strings <- function(formulas) {
@@ -262,9 +314,10 @@
     output <- list(
         call=object$call,
         family=object$family,
-        formula=formulas$user,
+        formula=formulas$raw,
         formulas=formulas,
         formula_strings=.cdrgam_formula_strings(formulas),
+        simplifications=.cdrgam_summary_simplifications(object),
         p.coeff=if (length(parametric)) p_table[, 'Estimate'] else numeric(),
         p.t=if (length(parametric)) p_table[, 3L] else numeric(),
         p.pv=if (length(parametric)) p_table[, 4L] else numeric(),
@@ -328,8 +381,7 @@
         ...
 ) {
     print(x$family)
-    labels <- c(user='Formula', normalized='Normalized formula',
-        effective='Effective formula')
+    labels <- c(raw='Formula', mgcv='mgcv formula')
     for (name in names(labels)) {
         cat(labels[[name]], ':\n', sep='')
         value <- x$formulas[[name]]
@@ -340,6 +392,13 @@
             }
         } else {
             cat(paste(deparse(value), collapse='\n'), '\n')
+        }
+    }
+    if (nrow(x$simplifications)) {
+        cat('\nAutomatic simplifications:\n')
+        for (i in seq_len(nrow(x$simplifications))) {
+            cat('- ', .cdrgam_simplification_text(x$simplifications[i, ]), '\n',
+                sep='')
         }
     }
     if (length(x$p.coeff)) {
@@ -407,8 +466,10 @@
 #'
 #' The default output follows [mgcv::summary.gam()]: it reports parametric
 #' coefficients and one row per smooth term instead of expanded smooth and
-#' random-effect coefficients. CDR formulas are shown in user, normalized, and
-#' effective forms. Set `all.coefficients=TRUE` to request the expanded table.
+#' random-effect coefficients. It prints the raw user formula, the translated
+#' `mgcv` formula, and a direct account of any automatic simplifications. Use
+#' [formula.cdrgam()] to inspect normalized and effective formulas. Set
+#' `all.coefficients=TRUE` to request the expanded table.
 #'
 #' @param object A fitted `cdrgam` model.
 #' @param dispersion Optional known dispersion.

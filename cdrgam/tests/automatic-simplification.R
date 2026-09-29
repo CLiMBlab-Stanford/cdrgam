@@ -158,3 +158,11 @@ stopifnot(identical(
     binary_fit$cdrgam$preparation$simplifications,
     binary$simplifications
 ))
+binary_summary <- summary(binary_fit)
+binary_summary_text <- paste(capture.output(print(binary_summary)), collapse='\n')
+stopifnot(
+    nrow(binary_summary$simplifications) == nrow(binary$simplifications),
+    grepl('Automatic simplifications:', binary_summary_text, fixed=TRUE),
+    grepl('lag basis dimension:', binary_summary_text, fixed=TRUE),
+    grepl('nonlinear basis', binary_summary_text, fixed=TRUE)
+)

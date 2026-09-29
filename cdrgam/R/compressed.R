@@ -545,9 +545,10 @@ summary.cdrgam <- function(
         output$p.coeff <- table[, 'Estimate']
     }
     formulas <- .cdrgam_summary_formulas(object)
-    output$formula <- formulas$user
+    output$formula <- formulas$raw
     output$formulas <- formulas
     output$formula_strings <- .cdrgam_formula_strings(formulas)
+    output$simplifications <- .cdrgam_summary_simplifications(object)
     output$cdrgam.scaling <- object$cdrgam$scaling
     if (!is.null(output$s.table)) {
         labels <- .cdrgam_smooth_labels(object)

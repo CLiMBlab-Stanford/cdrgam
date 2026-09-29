@@ -156,14 +156,17 @@ Serial factorization phases use that budget for BLAS threads. Independent
 score or finite-difference tasks divide it between processes and BLAS threads
 without nested oversubscription. \code{score_workers} for the single-predictor
 generalized solver and \code{gradient_workers} for the distributional solver
-optionally override the number of exact-score processes; the resolved value is capped by the
-core budget and trace-column count. By default, exact-score phases use the integer
-square root of the core budget as workers and give each worker the remaining
-BLAS threads. Workers partition the inverse columns required by each trace and
-reduce their partial scores. The family-specific curvature derivatives remain
-shared copy-on-write data. Process parallelism falls back to one worker on
-Windows. Exact score directions are evaluated together so they share design
-streaming, multi-right-hand-side solves, and inverse-column traversals.
+optionally override the number of exact-score processes; the resolved value is
+capped by the core budget and available task count. By default,
+single-predictor exact-score phases use the integer square root of the core
+budget as workers. Distributional exact scores use the full core budget when
+a memory estimate permits a shared full-design cache; workers divide
+likelihood-curvature directions and inverse columns while sharing read-only
+inputs through copy-on-write memory. Otherwise the likelihood derivatives
+retain the streamed serial path. Each process receives the remaining BLAS
+thread budget without nested oversubscription. Process parallelism falls back
+to one worker on Windows. Exact score directions are evaluated together so
+they share multi-right-hand-side solves.
 \code{score_batch_size} optionally caps that group size; by default the process
 uses its available-memory estimate to retain the largest safe shared batch.
 The inverse-column chunk width also grows with available memory, up to a fixed
@@ -183,7 +186,9 @@ falls back to one on Windows.
 or the experimental safeguarded \code{"bfgs_trust"}. Automatic selection uses
 trust-region BFGS for exact gradients and L-BFGS-B otherwise. Explicitly
 requesting \code{"bfgs_trust"} with \code{gradient="auto"} forces an exact
-gradient. \code{optimizer_maxit} defaults to \code{200}.
+gradient. \code{optimizer_maxit} defaults to an initial budget of \code{200}.
+When that default is exhausted, analytic curvature recovery may add up to two
+more 200-iteration blocks. An explicitly supplied value is a hard limit.
 \code{optimizer_gradient_tolerance} and \code{optimizer_trust_radius}
 control its projected-gradient tolerance and initial trust radius.
 \code{hessian} selects the post-fit outer-Hessian calculation:
@@ -211,7 +216,8 @@ with block-local inverse entries and requires \code{schur="always"}.
 controls empirically inactive
 penalty subspaces: \code{"report"} (the default) records them,
 \code{"reduce"} projects certified IRF curvature boundaries to their joint
-null space and reoptimizes, and \code{"error"} turns optimizer nonconvergence
+null space and reoptimizes until no newly certified boundary remains, and
+\code{"error"} turns optimizer nonconvergence
 into an error. \code{boundary_log_sp} is the minimum log smoothing parameter
 considered for reduction and defaults to \code{12}. Reduced-model inference
 is conditional on the recorded data-selected boundary reduction. Full-rank

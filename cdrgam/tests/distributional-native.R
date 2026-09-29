@@ -92,6 +92,17 @@ hybrid_sparse <- cdrgam.fit(
     )
 )
 sparse_diagnostics <- fit_diagnostics(sparse)
+diagnostic_fit <- sparse
+diagnostic_fit$converged <- FALSE
+diagnostic_fit$optimizer$convergence <- 1L
+diagnostic_fit$optimizer$message <- 'test nonconvergence'
+diagnostic_fit$optimizer$gradient <- rep.int(0, length(diagnostic_fit$sp))
+diagnostic_fit$optimizer$gradient[[length(diagnostic_fit$sp)]] <- -0.1
+simplification_report <- suggest_simplifications(diagnostic_fit)
+simplification_candidates <- as.data.frame(simplification_report)
+report_text <- paste(capture.output(print(simplification_report)), collapse='\n')
+block_simplification_report <- suggest_simplifications(block)
+native_simplification_report <- suggest_simplifications(fit)
 stopifnot(
     inherits(block, 'cdrgam_distributional_block'),
     isTRUE(block$converged),
@@ -106,6 +117,24 @@ stopifnot(
     isTRUE(sparse_diagnostics$converged),
     identical(sparse_diagnostics$code, 0L),
     is.finite(sparse_diagnostics$gradient_norm),
+    inherits(simplification_report, 'cdrgam_simplification_report'),
+    inherits(block_simplification_report, 'cdrgam_simplification_report'),
+    inherits(native_simplification_report, 'cdrgam_simplification_report'),
+    nrow(simplification_candidates) >= 1L,
+    any(simplification_candidates$parameter == 'scale'),
+    all(c(
+        'action', 'automatable', 'patch_id', 'evidence_score', 'df_loss',
+        'coefficient_loss', 'terms_touched', 'impact_fraction', 'score'
+    ) %in% names(simplification_candidates)),
+    identical(simplification_report$conservatism, 1),
+    length(simplification_report$patches) >= 1L,
+    all(vapply(simplification_report$patches, function(patch) {
+        identical(patch$operation, 'replace_formula') &&
+            is.character(patch$before) && is.character(patch$after) &&
+            !identical(patch$before, patch$after)
+    }, logical(1))),
+    any(grepl('outer derivative', simplification_candidates$evidence, fixed=TRUE)),
+    grepl('Recommendations are diagnostics', report_text, fixed=TRUE),
     identical(
         sparse$optimizer$optimizer_state$optimizer,
         'safeguarded_outer_bfgs'
@@ -221,6 +250,7 @@ stopifnot(
 fit_summary <- summary(fit)
 block_summary <- summary(block)
 sparse_summary <- summary(sparse)
+sparse_summary_text <- paste(capture.output(print(sparse_summary)), collapse='\n')
 stopifnot(
     inherits(fit_summary, 'summary.cdrgam'),
     is.null(fit_summary$r.sq),
@@ -236,9 +266,13 @@ stopifnot(
     all(sparse_summary$s.test == 'approximate'),
     identical(rownames(sparse_summary$s.table), rownames(fit_summary$s.table)),
     identical(
-        names(fit_summary$formula_strings$user),
+        names(fit_summary$formula_strings$raw),
         c('location', 'scale')
     ),
+    identical(names(sparse_summary$formulas), c('raw', 'mgcv')),
+    grepl('mgcv formula:', sparse_summary_text, fixed=TRUE),
+    !grepl('Normalized formula:', sparse_summary_text, fixed=TRUE),
+    !grepl('Effective formula:', sparse_summary_text, fixed=TRUE),
     identical(
         rownames(fit_summary$s.table),
         c('location:location_signal', 'scale:scale_signal')

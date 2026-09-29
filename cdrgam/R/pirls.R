@@ -713,6 +713,13 @@
 }
 
 .cdrgam_sparse_design_chunk <- function(assembly, rows) {
+    if (!is.null(assembly$cached_design)) {
+        if (length(rows) == assembly$observation_count &&
+                identical(rows, seq_len(assembly$observation_count))) {
+            return(assembly$cached_design)
+        }
+        return(assembly$cached_design[rows, , drop=FALSE])
+    }
     pieces <- lapply(
         assembly$matrices,
         .sparse_component_rows,

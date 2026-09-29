@@ -36,7 +36,10 @@ interrupted <- tryCatch(
                 stop('simulated exact interruption')
             }
         },
-        sparse_control=list(gradient='exact', optimizer_maxit=2L)
+        sparse_control=list(
+            gradient='exact', optimizer_maxit=2L,
+            optimizer_gradient_tolerance=1e6
+        )
     ),
     error=function(error) conditionMessage(error)
 )
@@ -64,7 +67,10 @@ resumed <- cdrgam.fit(
     solver_trace=function(event) {
         resume_events[[length(resume_events) + 1L]] <<- event
     },
-    sparse_control=list(gradient='exact', optimizer_maxit=2L)
+    sparse_control=list(
+        gradient='exact', optimizer_maxit=2L,
+        optimizer_gradient_tolerance=1e6
+    )
 )
 complete <- readRDS(checkpoint)
 recovered <- cdrgam.fit(
@@ -72,7 +78,10 @@ recovered <- cdrgam.fit(
     family='gaulss',
     backend='sparse',
     checkpoint=checkpoint,
-    sparse_control=list(gradient='exact', optimizer_maxit=2L)
+    sparse_control=list(
+        gradient='exact', optimizer_maxit=2L,
+        optimizer_gradient_tolerance=1e6
+    )
 )
 mismatch <- tryCatch(
     {
@@ -81,7 +90,10 @@ mismatch <- tryCatch(
             family='gaulss',
             backend='sparse',
             checkpoint=checkpoint,
-            sparse_control=list(gradient='exact', optimizer_maxit=3L)
+            sparse_control=list(
+                gradient='exact', optimizer_maxit=3L,
+                optimizer_gradient_tolerance=1e6
+            )
         )
         NA_character_
     },
@@ -153,4 +165,27 @@ stopifnot(
     identical(readRDS(hybrid_checkpoint)$stage, 'complete')
 )
 
-unlink(c(checkpoint, hybrid_checkpoint))
+unfinished_checkpoint <- tempfile(
+    'cdrgam-distributional-unfinished-', fileext='.rds'
+)
+unfinished <- cdrgam.fit(
+    design,
+    family='gaulss',
+    backend='sparse',
+    checkpoint=unfinished_checkpoint,
+    sparse_control=list(
+        gradient='exact',
+        optimizer_maxit=1L,
+        optimizer_gradient_tolerance=1e-30
+    )
+)
+unfinished_state <- readRDS(unfinished_checkpoint)
+stopifnot(
+    !isTRUE(unfinished$converged),
+    identical(unfinished_state$stage, 'optimization'),
+    is.null(unfinished_state$optimizer_state),
+    is.null(unfinished_state$optimization),
+    is.finite(unfinished_state$best_criterion)
+)
+
+unlink(c(checkpoint, hybrid_checkpoint, unfinished_checkpoint))

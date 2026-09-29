@@ -319,6 +319,8 @@ stopifnot(
         'applied_and_reoptimized') == 1L,
     sum(automatic$cdrgam$boundary_reductions$status ==
         'full_term_boundary_requires_confirmation') >= 1L,
+    !any(automatic$cdrgam$boundary_reductions$status ==
+        'certified_boundary_candidate'),
     all(c('pilot', 'reoptimized') %in%
         automatic$cdrgam$boundary_reductions$fit_stage),
     any(automatic$cdrgam$preparation$simplifications$action ==
@@ -334,7 +336,7 @@ stopifnot(
         identical(record$event, 'optimizer initialization') &&
             identical(
                 record$source,
-                'mapped converged boundary-pilot smoothing parameters'
+                'mapped boundary-fit smoothing parameters'
             )
     }, logical(1)))
 )

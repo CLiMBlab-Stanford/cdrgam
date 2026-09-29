@@ -120,6 +120,32 @@
     )
 }
 
+.cdrgam_gaulss_step_factor <- function(system, supernodal, previous=NULL) {
+    attempt <- function(candidate, prior=NULL) tryCatch(
+        withCallingHandlers(
+            .cdrgam_sparse_factor(candidate, supernodal, prior),
+            warning=function(warning) stop(conditionMessage(warning))
+        ),
+        error=function(error) NULL
+    )
+    factor <- attempt(system, previous)
+    if (is.null(factor) && !is.null(previous)) factor <- attempt(system)
+    if (!is.null(factor)) return(list(factor=factor, damping=0))
+    diagonal_scale <- max(abs(Matrix::diag(system)), 1)
+    for (relative in c(1e-10, 1e-8, 1e-6, 1e-4)) {
+        damping <- relative * diagonal_scale
+        adjusted <- Matrix::forceSymmetric(
+            system + Matrix::Diagonal(nrow(system), x=damping),
+            uplo='U'
+        )
+        factor <- attempt(adjusted)
+        if (!is.null(factor)) {
+            return(list(factor=factor, damping=damping))
+        }
+    }
+    stop('Could not factor a damped gaulss Fisher-scoring system')
+}
+
 .cdrgam_distributional_sparse_predictor <- function(
         assembly, coefficients, offset
 ) {
@@ -128,6 +154,43 @@
         coefficients,
         offset,
         assembly$crossprod_chunk_size
+    )
+}
+
+.cdrgam_distributional_cache_designs <- function(assemblies) {
+    observation_count <- assemblies$location$observation_count
+    sample_count <- min(
+        observation_count,
+        assemblies$location$crossprod_chunk_size,
+        assemblies$scale$crossprod_chunk_size
+    )
+    sample_rows <- seq_len(sample_count)
+    sample <- lapply(assemblies, function(assembly) {
+        .cdrgam_sparse_design_chunk(assembly, sample_rows)
+    })
+    projected_bytes <- sum(vapply(sample, utils::object.size, numeric(1))) *
+        observation_count / sample_count
+    memory <- .cdrgam_memory_availability()
+    enabled <- is.finite(memory$available_bytes) &&
+        1.25 * projected_bytes <= 0.1 * memory$available_bytes
+    if (enabled) {
+        assemblies <- lapply(assemblies, function(assembly) {
+            assembly$cached_design <- .cdrgam_sparse_design_chunk(
+                assembly, seq_len(assembly$observation_count)
+            )
+            assembly
+        })
+    }
+    bytes <- if (enabled) sum(vapply(assemblies, function(assembly) {
+        utils::object.size(assembly$cached_design)
+    }, numeric(1))) else 0
+    list(
+        assemblies=assemblies,
+        enabled=enabled,
+        bytes=bytes,
+        projected_bytes=projected_bytes,
+        memory_source=memory$source,
+        memory_available_bytes=memory$available_bytes
     )
 }
 
@@ -339,9 +402,9 @@
                     sigma[rows]^2
             ))
         }
-        factor_location <- .cdrgam_sparse_factor(
+        factor_location <- .cdrgam_gaulss_step_factor(
             location_system, assemblies$location$supernodal
-        )
+        )$factor
         coefficients$location <- as.numeric(
             .cdr_factor_solve(factor_location, location_rhs)
         )
@@ -369,9 +432,9 @@
         scale_system <- Matrix::forceSymmetric(
             scale_system + penalties$scale, uplo='U'
         )
-        factor_scale <- .cdrgam_sparse_factor(
+        factor_scale <- .cdrgam_gaulss_step_factor(
             scale_system, assemblies$scale$supernodal
-        )
+        )$factor
         coefficients$scale <- as.numeric(
             .cdr_factor_solve(factor_scale, scale_rhs)
         )
@@ -397,6 +460,8 @@
     step_norm <- NA_real_
     directional_derivative <- NA_real_
     best_line_search_change <- NA_real_
+    step_mode <- NA_character_
+    maximum_damping <- 0
     factor_location <- retained_factors$location
     factor_scale <- retained_factors$scale
     for (iteration in seq_len(maxit)) {
@@ -426,15 +491,22 @@
                 moments$information$scale + penalties$scale, uplo='U'
             )
         )
-        factor_location <- .cdrgam_sparse_factor(
+        location_factorization <- .cdrgam_gaulss_step_factor(
             systems$location,
             assemblies$location$supernodal,
             factor_location
         )
-        factor_scale <- .cdrgam_sparse_factor(
+        scale_factorization <- .cdrgam_gaulss_step_factor(
             systems$scale,
             assemblies$scale$supernodal,
             factor_scale
+        )
+        factor_location <- location_factorization$factor
+        factor_scale <- scale_factorization$factor
+        maximum_damping <- max(
+            maximum_damping,
+            location_factorization$damping,
+            scale_factorization$damping
         )
         steps <- list(
             location=-as.numeric(.cdr_factor_solve(
@@ -456,6 +528,8 @@
         step_size <- 1
         minimum_step <- 2^-20
         accepted <- FALSE
+        step_mode <- 'joint'
+        accepted_step <- NULL
         best_line_search_change <- Inf
         while (step_size >= minimum_step) {
             candidate <- Map(function(current, step) {
@@ -474,13 +548,55 @@
                 predictors <- candidate_predictors
                 value <- candidate_value
                 accepted <- TRUE
+                accepted_step <- step_size * step_vector
                 break
             }
             step_size <- step_size / 2
         }
-        if (accepted && max(abs(step_size * unlist(
-                    steps, use.names=FALSE
-                ))) < tolerance / 100) {
+        if (!accepted) {
+            block_derivatives <- vapply(names(steps), function(parameter) {
+                sum(gradients[[parameter]] * steps[[parameter]])
+            }, numeric(1))
+            for (parameter in names(sort(block_derivatives))) {
+                block_step_size <- 1
+                while (block_step_size >= minimum_step) {
+                    candidate <- coefficients
+                    candidate_predictors <- predictors
+                    candidate[[parameter]] <- coefficients[[parameter]] +
+                        block_step_size * steps[[parameter]]
+                    candidate_predictors[[parameter]] <-
+                        predictors[[parameter]] +
+                        block_step_size * predictor_steps[[parameter]]
+                    candidate_value <- objective(
+                        candidate, candidate_predictors
+                    )
+                    best_line_search_change <- min(
+                        best_line_search_change,
+                        candidate_value - value,
+                        na.rm=TRUE
+                    )
+                    if (is.finite(candidate_value) && candidate_value < value) {
+                        coefficients <- candidate
+                        predictors <- candidate_predictors
+                        value <- candidate_value
+                        accepted <- TRUE
+                        step_mode <- paste0(parameter, '-only')
+                        accepted_step <- numeric(length(step_vector))
+                        parameter_offset <- if (identical(
+                                parameter, 'location'
+                            )) 0L else length(steps$location)
+                        indices <- parameter_offset +
+                            seq_along(steps[[parameter]])
+                        accepted_step[indices] <-
+                            block_step_size * steps[[parameter]]
+                        break
+                    }
+                    block_step_size <- block_step_size / 2
+                }
+                if (accepted) break
+            }
+        }
+        if (accepted && max(abs(accepted_step)) < tolerance / 100) {
             converged <- TRUE
             termination <- 'step tolerance'
             break
@@ -546,6 +662,8 @@
         step_norm=step_norm,
         directional_derivative=directional_derivative,
         best_line_search_change=best_line_search_change,
+        step_mode=step_mode,
+        maximum_damping=maximum_damping,
         prior_weights=weights,
         chunks=observed$chunks,
         warm_started=valid_initial
@@ -652,7 +770,7 @@
 }
 
 .cdrgam_gaulss_sparse_hessian_directions <- function(
-        assemblies, solution, coefficient_derivatives, b
+        assemblies, solution, coefficient_derivatives, b, workers=1L
 ) {
     coefficient_derivatives <- as.matrix(coefficient_derivatives)
     dimensions <- vapply(assemblies, `[[`, integer(1), 'dimension')
@@ -667,11 +785,117 @@
         scale=coefficient_derivatives[ranges$scale, , drop=FALSE]
     )
     count <- ncol(coefficient_derivatives)
+    workers <- min(as.integer(workers), max(1L, count))
+    parallel <- workers > 1L && .Platform$OS.type != 'windows'
+    cached_design <- NULL
+    cache_bytes <- 0
+    if (parallel) {
+        observation_count <- assemblies$location$observation_count
+        sample_count <- min(
+            observation_count,
+            assemblies$location$crossprod_chunk_size,
+            assemblies$scale$crossprod_chunk_size
+        )
+        sample_rows <- seq_len(sample_count)
+        sample <- lapply(assemblies, function(assembly) {
+            .cdrgam_sparse_design_chunk(assembly, sample_rows)
+        })
+        projected_bytes <- sum(vapply(sample, utils::object.size, numeric(1))) *
+            observation_count / sample_count
+        direction_bytes <- 16 * as.double(observation_count) * count
+        memory <- .cdrgam_memory_availability()
+        projected_working_bytes <-
+            projected_bytes * (workers + 1) + direction_bytes
+        cache_safe <- is.finite(memory$available_bytes) &&
+            projected_working_bytes <= 0.25 * memory$available_bytes
+        if (cache_safe) {
+            cached_design <- lapply(assemblies, function(assembly) {
+                .cdrgam_sparse_design_chunk(
+                    assembly, seq_len(assembly$observation_count)
+                )
+            })
+            cache_bytes <- sum(vapply(
+                cached_design, utils::object.size, numeric(1)
+            ))
+        }
+        rm(sample)
+    }
     location <- cross <- scale <- vector('list', count)
     q <- exp(solution$linear_predictors[, 'scale'])
     sigma <- b + q
     residual <- solution$residuals
     weights <- solution$prior_weights
+    if (!is.null(cached_design)) {
+        direction <- list(
+            location=as.matrix(
+                cached_design$location %*% coefficient_directions$location
+            ),
+            scale=as.matrix(
+                cached_design$scale %*% coefficient_directions$scale
+            )
+        )
+        location_scale_weight <- -2 * weights * q / sigma^3
+        cross_location_weight <- location_scale_weight
+        cross_scale_weight <- 2 * weights * (
+            q * residual / sigma^3 - 3 * q^2 * residual / sigma^4
+        )
+        scale_residual_weight <- weights * (
+            -2 * q * residual / sigma^3 +
+                6 * q^2 * residual / sigma^4
+        )
+        scale_q_weight <- weights * (
+            1 / sigma - 3 * q / sigma^2 - residual^2 / sigma^3 +
+                2 * q^2 / sigma^3 + 9 * q * residual^2 / sigma^4 -
+                12 * q^2 * residual^2 / sigma^5
+        )
+        evaluate <- function(index) {
+            d_location <- direction$location[, index]
+            d_scale <- direction$scale[, index]
+            location_part <- Matrix::crossprod(
+                cached_design$location,
+                Matrix::Diagonal(
+                    x=location_scale_weight * d_scale
+                ) %*% cached_design$location
+            )
+            cross_part <- Matrix::crossprod(
+                cached_design$location,
+                Matrix::Diagonal(x=
+                    cross_location_weight * d_location +
+                        cross_scale_weight * d_scale
+                ) %*% cached_design$scale
+            )
+            scale_part <- Matrix::crossprod(
+                cached_design$scale,
+                Matrix::Diagonal(x=
+                    -scale_residual_weight * d_location +
+                        scale_q_weight * q * d_scale
+                ) %*% cached_design$scale
+            )
+            Matrix::forceSymmetric(rbind(
+                cbind(location_part, cross_part),
+                cbind(Matrix::t(cross_part), scale_part)
+            ), uplo='U')
+        }
+        output <- suppressWarnings(parallel::mclapply(
+            seq_len(count), evaluate, mc.cores=workers,
+            mc.preschedule=TRUE, mc.set.seed=FALSE
+        ))
+        valid <- length(output) == count && all(vapply(
+            output,
+            function(value) methods::is(value, 'sparseMatrix'),
+            logical(1)
+        ))
+        if (valid) {
+            attr(output, 'direction_workers') <- workers
+            attr(output, 'design_cache_bytes') <- cache_bytes
+            return(output)
+        }
+        warning(
+            'Parallel likelihood derivatives failed; retrying with streamed ',
+            'serial derivatives',
+            call.=FALSE
+        )
+    }
     chunk_size <- min(
         assemblies$location$crossprod_chunk_size,
         assemblies$scale$crossprod_chunk_size
@@ -739,12 +963,15 @@
             } else scale[[index]] + scale_part
         }
     }
-    lapply(seq_len(count), function(index) {
+    output <- lapply(seq_len(count), function(index) {
         Matrix::forceSymmetric(rbind(
             cbind(location[[index]], cross[[index]]),
             cbind(Matrix::t(cross[[index]]), scale[[index]])
         ), uplo='U')
     })
+    attr(output, 'direction_workers') <- 1L
+    attr(output, 'design_cache_bytes') <- 0
+    output
 }
 
 .cdrgam_gaulss_sparse_score_reference <- function(
@@ -861,7 +1088,8 @@
                 assemblies,
                 solution,
                 coefficient_derivatives,
-                .cdrgam_gaulss_b(family)
+                .cdrgam_gaulss_b(family),
+                workers=trace_workers
             )
         },
         trace_workers=trace_workers
@@ -963,7 +1191,7 @@
     for (result in results) output[result$indices] <- result$values
     attr(output, 'score_plan') <- list(
         workers=workers,
-        parallel_axis='inverse columns',
+        parallel_axis='likelihood directions and inverse columns',
         batches=length(groups),
         batch_size=plan$batch_size,
         derivative_bytes=plan$derivative_bytes,
@@ -1209,6 +1437,8 @@
     best_parameters <- NULL
     best_evaluation <- NULL
     warm_solution <- NULL
+    accepted_parameters <- NULL
+    accepted_evaluation <- NULL
     warm_starts <- 0L
     cold_fallbacks <- 0L
     hybrid_warmup_active <- FALSE
@@ -1408,9 +1638,30 @@
             }
             result
         }
+        fixed_failure <- function(result) {
+            if (is.null(result$solution)) {
+                return(paste('failed:', result$error))
+            }
+            solution <- result$solution
+            paste0(
+                solution$termination,
+                ' after ', solution$iterations, ' iterations',
+                '; maximum penalized score ',
+                format(solution$gradient_norm, digits=5),
+                '; proposed-step norm ',
+                format(solution$step_norm, digits=5),
+                '; step mode ', solution$step_mode,
+                '; maximum damping ',
+                format(solution$maximum_damping, digits=5)
+            )
+        }
         used_warm_start <- !is.null(warm_solution)
         if (used_warm_start) warm_starts <<- warm_starts + 1L
         fixed <- solve_fixed(warm_solution)
+        warm_failure <- if (is.null(fixed$solution) ||
+                !isTRUE(fixed$solution$converged)) {
+            fixed_failure(fixed)
+        } else NULL
         if (used_warm_start && (is.null(fixed$solution) ||
                 !isTRUE(fixed$solution$converged))) {
             cold_fallbacks <<- cold_fallbacks + 1L
@@ -1418,12 +1669,21 @@
         }
         solution <- fixed$solution
         if (is.null(solution)) {
-            return(invalid_evaluation(
-                log_sp, paste('inner solve failed:', fixed$error)
-            ))
+            reason <- paste('inner solve failed:', fixed$error)
+            if (!is.null(warm_failure)) {
+                reason <- paste(reason, 'warm-start result:', warm_failure)
+            }
+            if (!is.null(reporter)) reporter$emit(
+                1L,
+                'outer inner solve rejected',
+                evaluation=evaluations,
+                warm_start=used_warm_start,
+                reason=reason
+            )
+            return(invalid_evaluation(log_sp, reason))
         }
         if (!isTRUE(solution$converged)) {
-            return(invalid_evaluation(log_sp, paste0(
+            reason <- paste0(
                 'inner solve did not converge after ', solution$iterations,
                 ' iterations; maximum penalized score ',
                 format(solution$gradient_norm, digits=5),
@@ -1434,8 +1694,22 @@
                 format(solution$directional_derivative, digits=5),
                 '; best line-search change ',
                 format(solution$best_line_search_change, digits=5),
-                '; objective ', format(solution$objective, digits=10)
-            )))
+                '; objective ', format(solution$objective, digits=10),
+                '; step mode ', solution$step_mode,
+                '; maximum damping ',
+                format(solution$maximum_damping, digits=5)
+            )
+            if (!is.null(warm_failure)) {
+                reason <- paste(reason, 'warm-start result:', warm_failure)
+            }
+            if (!is.null(reporter)) reporter$emit(
+                1L,
+                'outer inner solve rejected',
+                evaluation=evaluations,
+                warm_start=used_warm_start,
+                reason=reason
+            )
+            return(invalid_evaluation(log_sp, reason))
         }
         warm_solution <<- solution
         inner_seconds <- proc.time()[['elapsed']] - evaluation_started
@@ -1649,6 +1923,23 @@
     checkpoint_state$exact_base_counts <- exact_base_counts
     directional_diagnostic <- NULL
     optimizer_progress_callback <- function(record) {
+        if (isTRUE(record$accepted)) {
+            matching_cache <- !is.null(cached_parameters) && identical(
+                as.numeric(record$parameters), cached_parameters
+            ) && !is.null(cached_evaluation$solution)
+            if (matching_cache) {
+                accepted_parameters <<- cached_parameters
+                accepted_evaluation <<- cached_evaluation
+            } else if (!is.null(best_parameters) && identical(
+                    as.numeric(record$parameters), best_parameters
+                ) && !is.null(best_evaluation$solution)) {
+                accepted_parameters <<- best_parameters
+                accepted_evaluation <<- best_evaluation
+            }
+        } else if (identical(record$event, 'rejected') &&
+                !is.null(accepted_evaluation$solution)) {
+            warm_solution <<- accepted_evaluation$solution
+        }
         optimizer_state <- record$optimizer_state
         record$optimizer_state <- NULL
         checkpoint_state$optimizer_state <<- optimizer_state
@@ -1835,12 +2126,21 @@
             retained$invalid_reason
         )
     }
+    checkpoint_complete <- identical(optimization$convergence, 0L)
+    if (!checkpoint_complete) {
+        checkpoint_state$optimizer_state <- NULL
+        checkpoint_state$optimization <- NULL
+        checkpoint_state$optimizer_history <- list()
+        checkpoint_state$optimizer_progress <- NULL
+        checkpoint_state$exact_restart <-
+            checkpoint_count('exact_restart') + 1L
+    }
     write_checkpoint(
         optimization$par,
         retained,
         phase='exact',
-        stage='complete',
-        optimization=optimization
+        stage=if (checkpoint_complete) 'complete' else 'optimization',
+        optimization=if (checkpoint_complete) optimization else NULL
     )
     list(
         optimization=optimization,
@@ -1973,6 +2273,21 @@
             )
         )
     })
+    design_cache <- .cdrgam_distributional_cache_designs(assemblies)
+    assemblies <- design_cache$assemblies
+    reporter$emit(
+        1L,
+        'distributional design cache',
+        enabled=design_cache$enabled,
+        megabytes=format(design_cache$bytes / 1024^2, digits=5),
+        projected_megabytes=format(
+            design_cache$projected_bytes / 1024^2, digits=5
+        ),
+        memory_source=design_cache$memory_source,
+        available_megabytes=format(
+            design_cache$memory_available_bytes / 1024^2, digits=5
+        )
+    )
     y <- assemblies$location$setup$y
     if (!identical(y, assemblies$scale$setup$y)) {
         stop('Distributional parameter setups retained different responses')
@@ -1986,7 +2301,7 @@
     gradient_method <- if (identical(gradient_requested, 'auto')) {
         if (dimension > max(512L, 4L * gradient_probes)) 'hybrid' else 'exact'
     } else gradient_requested
-    gradient_plan <- .cdrgam_score_parallel_plan(
+    gradient_plan <- .cdrgam_parallel_plan(
         cores,
         max(1L, score_tasks),
         sparse_control$gradient_workers
@@ -2142,6 +2457,9 @@
             condition_indicator=.cdr_factor_condition_indicator(
                 solution$factor
             ),
+            design_cache=design_cache[setdiff(
+                names(design_cache), 'assemblies'
+            )],
             crossprod_chunks=solution$chunks,
             observation_count=length(y)
         ),

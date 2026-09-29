@@ -1003,6 +1003,8 @@
     started <- proc.time()[['elapsed']]
     likelihood <- likelihood_derivatives(coefficient_derivatives)
     likelihood_seconds <- proc.time()[['elapsed']] - started
+    direction_workers <- attr(likelihood, 'direction_workers', exact=TRUE)
+    design_cache_bytes <- attr(likelihood, 'design_cache_bytes', exact=TRUE)
     if (length(likelihood) != length(penalty_derivatives)) {
         stop('The likelihood derivative kernel returned the wrong batch size')
     }
@@ -1038,6 +1040,12 @@
         rhs=rhs_seconds,
         coefficient_solve=solve_seconds,
         likelihood_derivatives=likelihood_seconds,
+        likelihood_direction_workers=if (is.null(direction_workers)) {
+            1
+        } else direction_workers,
+        likelihood_design_cache_mb=if (is.null(design_cache_bytes)) {
+            0
+        } else design_cache_bytes / 1024^2,
         selected_inverse_trace=trace_seconds,
         trace_chunk_size=trace_chunk_size,
         quadratic=proc.time()[['elapsed']] - started
@@ -1714,7 +1722,8 @@
             c('auto', 'lbfgsb', 'bfgs_trust')
         )
     }
-    optimizer_maxit <- if (is.null(control('optimizer_maxit'))) {
+    optimizer_maxit_explicit <- !is.null(control('optimizer_maxit'))
+    optimizer_maxit <- if (!optimizer_maxit_explicit) {
         200L
     } else {
         value <- control('optimizer_maxit')
@@ -1723,6 +1732,11 @@
             stop('sparse_control$optimizer_maxit must be a positive integer')
         }
         as.integer(value)
+    }
+    optimizer_adaptive_maxit <- if (optimizer_maxit_explicit) {
+        optimizer_maxit
+    } else {
+        3L * optimizer_maxit
     }
     optimizer_gradient_tolerance <- if (is.null(
             control('optimizer_gradient_tolerance')
@@ -2315,6 +2329,7 @@
         gradient_workers=gradient_workers,
         finite_difference_step=finite_difference_step,
         optimizer_maxit=optimizer_maxit,
+        optimizer_adaptive_maxit=optimizer_adaptive_maxit,
         optimizer_gradient_tolerance=optimizer_gradient_tolerance,
         optimizer_trust_radius=optimizer_trust_radius,
         restarts=restart_count,
@@ -2731,15 +2746,17 @@
         projected <- gradient
         at_lower <- log_sp <= lower_bound + 1e-10
         at_upper <- log_sp >= upper_bound - 1e-10
-        projected[at_lower & projected > 0] <- 0
-        projected[at_upper & projected < 0] <- 0
+        active <- (at_lower & projected > 0) |
+            (at_upper & projected < 0)
+        projected[active] <- 0
         assessment <- .analytic_outer_convergence_assessment(
             curvature$hessian,
             projected,
             criterion,
             optimizer_gradient_tolerance,
             optimizer_trust_radius,
-            objective_noise
+            objective_noise,
+            active=active
         )
         assessment$message <- sub('^analytic', method, assessment$message)
         assessment$diagnostics$method <- method
@@ -3105,6 +3122,7 @@
                 lower=arguments$lower,
                 upper=arguments$upper,
                 maxit=optimizer_maxit,
+                adaptive_maxit=optimizer_adaptive_maxit,
                 gradient_tolerance=optimizer_gradient_tolerance,
                 initial_radius=optimizer_trust_radius,
                 progress=optimizer_progress_callback,
@@ -3607,6 +3625,7 @@
                 outer_optimizer_requested=outer_optimizer_requested,
                 outer_optimizer=outer_optimizer,
                 optimizer_maxit=optimizer_maxit,
+                optimizer_adaptive_maxit=optimizer_adaptive_maxit,
                 optimizer_gradient_tolerance=optimizer_gradient_tolerance,
                 optimizer_trust_radius=optimizer_trust_radius,
                 boundary_action=boundary_action,

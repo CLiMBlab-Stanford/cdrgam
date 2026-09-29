@@ -333,22 +333,57 @@
         criterion,
         gradient_tolerance,
         initial_radius,
-        objective_noise=0
+        objective_noise=0,
+        active=NULL
 ) {
     hessian <- (as.matrix(hessian) + t(as.matrix(hessian))) / 2
-    decomposition <- eigen(hessian, symmetric=TRUE)
+    dimension <- length(gradient)
+    if (is.null(active)) active <- rep.int(FALSE, dimension)
+    if (length(active) != dimension || anyNA(active)) {
+        stop('active must identify each outer parameter')
+    }
+    active <- as.logical(active)
+    free <- which(!active)
+    free_hessian <- hessian[free, free, drop=FALSE]
+    free_gradient <- gradient[free]
+    if (!length(free)) {
+        objective_floor <- max(1e-8, 1e-10 * (1 + abs(criterion)))
+        return(list(
+            converged=TRUE,
+            message='analytic practical convergence reached at active bounds',
+            restart_hessian=diag(1, dimension),
+            restart_radius=min(initial_radius, 0.1),
+            diagnostics=list(
+                predicted_improvement=0,
+                objective_floor=objective_floor,
+                baseline_objective_floor=objective_floor,
+                observed_objective_noise=objective_noise,
+                newton_step_max=0,
+                unresolved_gradient=0,
+                curvature_tolerance=0,
+                minimum_eigenvalue=NA_real_,
+                positive_directions=0L,
+                flat_directions=0L,
+                active_bound_directions=dimension,
+                dimension=dimension
+            )
+        ))
+    }
+    decomposition <- eigen(free_hessian, symmetric=TRUE)
     values <- decomposition$values
     vectors <- decomposition$vectors
     scale <- max(1, max(abs(values)))
     curvature_tolerance <- scale * sqrt(.Machine$double.eps)
     positive <- values > curvature_tolerance
-    coordinates <- drop(crossprod(vectors, gradient))
+    coordinates <- drop(crossprod(vectors, free_gradient))
     step_coordinates <- numeric(length(values))
     if (any(positive)) {
         step_coordinates[positive] <-
             -coordinates[positive] / values[positive]
     }
-    newton_step <- drop(vectors %*% step_coordinates)
+    free_newton_step <- drop(vectors %*% step_coordinates)
+    newton_step <- numeric(dimension)
+    newton_step[free] <- free_newton_step
     predicted_improvement <- if (any(positive)) {
         sum(coordinates[positive]^2 / values[positive]) / 2
     } else {
@@ -377,9 +412,11 @@
         predicted_improvement <= objective_floor &&
         unresolved_gradient <= gradient_tolerance
     eigenvalue_floor <- scale * 1e-6
-    restart_hessian <- vectors %*% (
+    free_restart_hessian <- vectors %*% (
         pmax(values, eigenvalue_floor) * t(vectors)
     )
+    restart_hessian <- diag(max(1, scale), dimension)
+    restart_hessian[free, free] <- free_restart_hessian
     restart_hessian <- (restart_hessian + t(restart_hessian)) / 2
     restart_radius <- min(
         initial_radius,
@@ -396,7 +433,8 @@
         minimum_eigenvalue=min(values),
         positive_directions=sum(positive),
         flat_directions=sum(!positive),
-        dimension=length(values)
+        active_bound_directions=sum(active),
+        dimension=dimension
     )
     list(
         converged=converged,
@@ -547,6 +585,7 @@
         lower,
         upper,
         maxit=100L,
+        adaptive_maxit=maxit,
         gradient_tolerance=1e-4,
         initial_radius=2,
         maximum_radius=10,
@@ -561,6 +600,11 @@
     par <- pmin(upper, pmax(lower, as.numeric(par)))
     dimension <- length(par)
     maximum_recovery_resets <- as.integer(maximum_recovery_resets)
+    adaptive_maxit <- as.integer(adaptive_maxit)
+    if (length(adaptive_maxit) != 1L || is.na(adaptive_maxit) ||
+            adaptive_maxit < maxit) {
+        stop('adaptive_maxit must be at least maxit')
+    }
     if (length(maximum_recovery_resets) != 1L ||
             is.na(maximum_recovery_resets) || maximum_recovery_resets < 0L) {
         stop('maximum_recovery_resets must be a non-negative integer')
@@ -890,13 +934,15 @@
             continue_optimization <- FALSE
         }
     }
-    iteration_sequence <- if (continue_optimization &&
-            completed_iteration < maxit) {
-        seq.int(completed_iteration + 1L, maxit)
-    } else {
-        integer()
-    }
-    for (iteration in iteration_sequence) {
+    iteration_limit <- maxit
+    repeat {
+        iteration_sequence <- if (continue_optimization &&
+                completed_iteration < iteration_limit) {
+            seq.int(completed_iteration + 1L, iteration_limit)
+        } else {
+            integer()
+        }
+        for (iteration in iteration_sequence) {
         projected <- projected_gradient(par, gradient)
         projected_norm <- max(abs(projected))
         if (projected_norm <= gradient_tolerance) {
@@ -1149,6 +1195,29 @@
             message <- outcome$message
             break
         }
+        }
+        if (!continue_optimization || convergence == 0L ||
+                !identical(message, 'iteration limit reached') ||
+                iterations < iteration_limit ||
+                iteration_limit >= adaptive_maxit) break
+        limit_record <- if (length(history)) {
+            history[[length(history)]]
+        } else initial_record
+        outcome <- assess_stagnation(
+            limit_record,
+            'the initial iteration budget was exhausted'
+        )
+        if (identical(outcome$action, 'converged')) {
+            convergence <- 0L
+            message <- outcome$message
+            break
+        }
+        if (!identical(outcome$action, 'recovered')) {
+            message <- outcome$message
+            break
+        }
+        completed_iteration <- iterations
+        iteration_limit <- min(adaptive_maxit, iteration_limit + maxit)
     }
     final_projected <- projected_gradient(par, gradient)
     emit_progress(list(

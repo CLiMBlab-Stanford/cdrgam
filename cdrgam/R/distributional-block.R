@@ -648,9 +648,10 @@ summary.cdrgam_distributional_block <- function(
     output <- list(
         call=object$call,
         family=object$family,
-        formula=formulas$user,
+        formula=formulas$raw,
         formulas=formulas,
         formula_strings=.cdrgam_formula_strings(formulas),
+        simplifications=.cdrgam_summary_simplifications(object),
         p.coeff=if (is.null(p_table)) numeric() else p_table[, 'Estimate'],
         p.t=if (is.null(p_table)) numeric() else p_table[, 'z value'],
         p.pv=if (is.null(p_table)) numeric() else p_table[, 'Pr(>|z|)'],

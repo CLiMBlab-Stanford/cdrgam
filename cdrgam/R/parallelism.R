@@ -74,7 +74,7 @@
         ceiling(seq_len(task_count) / resolved_batch_size)
     )
     list(
-        workers=min(workers, length(groups)),
+        workers=min(workers, task_count),
         groups=groups,
         batch_size=resolved_batch_size,
         derivative_bytes=derivative_bytes,

@@ -75,6 +75,9 @@ stopifnot(isTRUE(sparse$sparse$convergence$hessian_positive_definite))
 stopifnot(length(sparse$sparse$convergence$boundary) == 0L)
 stopifnot(isTRUE(all.equal(predict(sparse), fitted(sparse))))
 sparse_summary <- summary(sparse)
+stopifnot(inherits(
+    suggest_simplifications(sparse), 'cdrgam_simplification_report'
+))
 stopifnot(inherits(sparse_summary, 'summary.cdrgam_sparse'))
 stopifnot(abs(sum(sparse_summary$edf) - sum(summary(native)$edf)) < 1e-4)
 stopifnot(
@@ -84,8 +87,8 @@ stopifnot(
     identical(rownames(sparse_summary$s.table), sparse$cdrgam$term_labels),
     identical(names(sparse_summary$s.pv), sparse$cdrgam$term_labels),
     identical(
-        sparse_summary$formula_strings$user,
-        paste(deparse(formula(sparse, type='user')), collapse=' ')
+        sparse_summary$formula_strings$raw,
+        paste(deparse(formula(sparse, type='raw')), collapse=' ')
     )
 )
 native_summary <- summary(native)
@@ -93,8 +96,8 @@ stopifnot(
     inherits(native_summary, 'summary.cdrgam'),
     identical(rownames(native_summary$s.table), native$cdrgam$term_labels),
     identical(
-        native_summary$formula_strings$effective,
-        paste(deparse(formula(native, type='effective')), collapse=' ')
+        native_summary$formula_strings$mgcv,
+        paste(deparse(formula(native, type='mgcv')), collapse=' ')
     )
 )
 expanded_summary <- summary(sparse, all.coefficients=TRUE)

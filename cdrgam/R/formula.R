@@ -1556,7 +1556,6 @@ prepare_cdrgam <- function(
                     ))
                 }
             }
-            terms[[i]]$linear_predictors <- predictors[linear_predictors]
             if (!is.null(spec$k_t)) {
                 terms[[i]]$varying <- spec$time
                 terms[[i]]$name <- paste0(term_name, '~', spec$time)
@@ -1603,6 +1602,7 @@ prepare_cdrgam <- function(
                 response_multiplier=by_values
             )
         }
+        terms[[i]]$linear_predictors <- predictors[linear_predictors]
         if (!is.null(spec$by)) {
             terms[[i]]$X <- terms[[i]]$X * by_values
             terms[[i]]$by <- spec$by
@@ -1903,15 +1903,17 @@ prepare_cdrgam <- function(
 #'   threads without nested oversubscription. `score_workers` for the
 #'   single-predictor generalized solver and `gradient_workers` for the
 #'   distributional solver optionally override the number of exact-score
-#'   processes; the resolved
-#'   value is capped by the core budget and trace-column count. By default, exact-score
-#'   phases use the integer square root of the core budget as workers and give
-#'   each worker the remaining BLAS threads. Workers partition the inverse
-#'   columns required by each trace and reduce their partial scores. The
-#'   family-specific curvature derivatives remain shared copy-on-write data.
+#'   processes; the resolved value is capped by the core budget and available
+#'   task count. By default, single-predictor exact-score phases use the integer
+#'   square root of the core budget as workers. Distributional exact scores use
+#'   the full core budget when a memory estimate permits a shared full-design
+#'   cache; workers divide likelihood-curvature directions and inverse columns
+#'   while sharing read-only inputs through copy-on-write memory. Otherwise the
+#'   likelihood derivatives retain the streamed serial path. Each process
+#'   receives the remaining BLAS thread budget without nested oversubscription.
 #'   Process parallelism falls back to one worker on Windows. Exact score
-#'   directions are evaluated together so they share design streaming,
-#'   multi-right-hand-side solves, and inverse-column traversals.
+#'   directions are evaluated together so they share multi-right-hand-side
+#'   solves.
 #'   `score_batch_size` optionally caps that group size; by default the process
 #'   uses its available-memory estimate to retain the largest safe shared batch.
 #'   The inverse-column chunk width also grows with available memory, up to a
@@ -1931,7 +1933,9 @@ prepare_cdrgam <- function(
 #'   `"bfgs_trust"`; automatic selection uses safeguarded trust-region BFGS
 #'   for exact gradients and L-BFGS-B otherwise; explicitly requesting
 #'   `"bfgs_trust"` with `gradient="auto"` forces an exact gradient;
-#'   `optimizer_maxit` defaults to `200`;
+#'   `optimizer_maxit` defaults to an initial budget of `200`; when that
+#'   default is exhausted, analytic curvature recovery may add up to two more
+#'   200-iteration blocks, while an explicitly supplied value is a hard limit;
 #'   `hessian` selects the post-fit outer-Hessian calculation: `"auto"`
 #'   (the default) uses the analytic Hessian when its estimated peak memory fits
 #'   a conservative fraction of the process's available memory and otherwise
@@ -1956,7 +1960,8 @@ prepare_cdrgam <- function(
 #'   `trace_chunk_size` bounds exact-score solves; and
 #'   `boundary_action` controls empirically inactive penalty subspaces:
 #'   `"report"` (the default) records them, `"reduce"` projects certified IRF
-#'   curvature boundaries to their joint null space and reoptimizes, and
+#'   curvature boundaries to their joint null space and reoptimizes until no
+#'   newly certified boundary remains, and
 #'   `"error"` turns optimizer nonconvergence into an error.
 #'   `boundary_log_sp` is the minimum log smoothing parameter considered for
 #'   reduction and defaults to `12`. Reduced-model inference is conditional on
@@ -2242,28 +2247,39 @@ cdrgam.fit <- function(
             'report'
         } else boundary_action_value
         boundary_reduced <- FALSE
-        boundary_plan <- fit$cdrgam$boundary_reductions
-        if (identical(boundary_action, 'reduce') &&
-                !is.null(boundary_plan) && nrow(boundary_plan)) {
-            planned <- .cdr_boundary_reduction_plan(
-                fit,
-                design,
-                log_sp_threshold=if (is.null(
-                    sparse_control[['boundary_log_sp', exact=TRUE]]
-                )) 12 else sparse_control[['boundary_log_sp', exact=TRUE]],
-                score_tolerance=if (is.null(
-                    sparse_control[['optimizer_gradient_tolerance', exact=TRUE]]
-                )) 1e-4 else sparse_control[[
-                    'optimizer_gradient_tolerance', exact=TRUE
-                ]]
+        if (identical(boundary_action, 'reduce')) {
+            reduction_design <- design
+            reduction_tables <- list()
+            reduction_pass <- 0L
+            boundary_reporter <- .new_solver_reporter(
+                solver_trace,
+                'sparse'
             )
-            if (length(planned$entries)) {
-                boundary_reporter <- .new_solver_reporter(
-                    solver_trace,
-                    'sparse'
+            repeat {
+                planned <- .cdr_boundary_reduction_plan(
+                    fit,
+                    reduction_design,
+                    log_sp_threshold=if (is.null(
+                        sparse_control[['boundary_log_sp', exact=TRUE]]
+                    )) 12 else sparse_control[[
+                        'boundary_log_sp', exact=TRUE
+                    ]],
+                    score_tolerance=if (is.null(
+                        sparse_control[[
+                            'optimizer_gradient_tolerance', exact=TRUE
+                        ]]
+                    )) 1e-4 else sparse_control[[
+                        'optimizer_gradient_tolerance', exact=TRUE
+                    ]]
                 )
+                if (!length(planned$entries)) break
+                reduction_pass <- reduction_pass + 1L
+                if (reduction_pass > 1000L) {
+                    stop('Boundary reduction did not reach a fixed point')
+                }
                 boundary_reporter$phase(
                     'boundary reduction',
+                    pass=reduction_pass,
                     reason='penalty curvature was empirically unsupported',
                     pilot_criterion=format(fit$reml, digits=10),
                     reductions=length(planned$entries),
@@ -2281,7 +2297,10 @@ cdrgam.fit <- function(
                     boundary_reporter$emit(
                         1L,
                         'boundary reduction selected',
-                        term=names(design$terms)[[entry$term_index]],
+                        pass=reduction_pass,
+                        term=names(reduction_design$terms)[[
+                            entry$term_index
+                        ]],
                         components=if (nrow(row)) row$components[[1L]] else '',
                         dimension=paste0(
                             entry$original_dimension,
@@ -2294,7 +2313,10 @@ cdrgam.fit <- function(
                         )
                     )
                 }
-                reduced_design <- .cdr_apply_boundary_reduction(design, planned)
+                reduced_design <- .cdr_apply_boundary_reduction(
+                    reduction_design,
+                    planned
+                )
                 reduced_initial <- .cdr_boundary_warm_start(
                     fit,
                     reduced_design
@@ -2304,8 +2326,9 @@ cdrgam.fit <- function(
                 boundary_reporter$emit(
                     1L,
                     'reduced model refit started',
+                    pass=reduction_pass,
                     reason='infinite-penalty limits require a reduced basis',
-                    initialization='mapped converged pilot smoothing parameters',
+                    initialization='mapped current smoothing parameters',
                     checkpoint='disabled because the model structure changed'
                 )
                 fit <- .fit_sparse_gaussian(
@@ -2321,35 +2344,44 @@ cdrgam.fit <- function(
                     drop.unused.levels=
                         reduced_design$configuration$drop.unused.levels,
                     initial_log_sp=reduced_initial,
-                    initial_source=
-                        'mapped converged boundary-pilot smoothing parameters',
+                    initial_source='mapped boundary-fit smoothing parameters',
                     ...
                 )
                 boundary_reporter$emit(
                     1L,
                     'reduced model refit complete',
+                    pass=reduction_pass,
                     criterion=format(fit$reml, digits=10),
                     converged=isTRUE(fit$converged),
                     coefficients=length(fit$coefficients),
                     smoothing_parameters=length(fit$sp)
                 )
-                remaining <- fit$cdrgam$boundary_reductions
                 applied <- planned$table
-                applied$status[applied$status ==
-                    'certified_boundary_candidate'] <-
-                    'applied_and_reoptimized'
-                applied$fit_stage <- 'pilot'
-                reductions <- if (is.null(remaining) || !nrow(remaining)) {
-                    applied
+                selected <- applied$status == 'certified_boundary_candidate'
+                applied$status[selected] <- 'applied_and_reoptimized'
+                applied <- applied[selected, , drop=FALSE]
+                applied$fit_stage <- if (reduction_pass == 1L) {
+                    'pilot'
                 } else {
-                    remaining$fit_stage <- 'reoptimized'
-                    rbind(applied, remaining)
+                    'reoptimized'
                 }
+                reduction_tables[[length(reduction_tables) + 1L]] <- applied
+                reduction_design <- reduced_design
+                boundary_reduced <- TRUE
+            }
+            if (boundary_reduced) {
+                remaining <- fit$cdrgam$boundary_reductions
+                if (!is.null(remaining) && nrow(remaining)) {
+                    remaining$fit_stage <- 'reoptimized'
+                    reduction_tables[[length(reduction_tables) + 1L]] <-
+                        remaining
+                }
+                reductions <- do.call(rbind, reduction_tables)
+                rownames(reductions) <- NULL
                 fit$cdrgam$boundary_reductions <- reductions
                 fit$cdrgam$conditional_on_boundary_reduction <- TRUE
                 fit$sparse$convergence$boundary_reductions <- reductions
                 fit$sparse$convergence$conditional_on_boundary_reduction <- TRUE
-                boundary_reduced <- TRUE
             }
         }
         if (identical(boundary_action, 'reduce') && !boundary_reduced &&
@@ -2418,7 +2450,7 @@ cdrgam.fit <- function(
 #' Extract a CDR-GAM formula
 #'
 #' @param x A fitted `cdrgam` object or prepared `cdrgam_design`.
-#' @param type Formula representation: the formula supplied by the user, the
+#' @param type Formula representation: the raw formula supplied by the user, the
 #'   normalized CDR formula including structural defaults, or the effective
 #'   CDR formula after automatic simplification. Fitted models also support
 #'   `"mgcv"`, the translated formula used by the fitting backend.
@@ -2429,13 +2461,13 @@ cdrgam.fit <- function(
 #' @export
 formula.cdrgam_design <- function(
         x,
-        type=c('user', 'normalized', 'effective'),
+        type=c('raw', 'normalized', 'effective'),
         ...
 ) {
     type <- match.arg(type)
     switch(
         type,
-        user=x$formula,
+        raw=x$formula,
         normalized=x$normalized_formula,
         effective=x$effective_formula
     )
@@ -2445,10 +2477,14 @@ formula.cdrgam_design <- function(
 #' @export
 formula.cdrgam <- function(
         x,
-        type=c('user', 'normalized', 'effective', 'mgcv'),
+        type=c('raw', 'normalized', 'effective', 'mgcv'),
         ...
 ) {
     type <- match.arg(type)
-    value <- x$cdrgam$formula[[type]]
+    value <- if (identical(type, 'raw')) {
+        x$cdrgam$formula$user
+    } else {
+        x$cdrgam$formula[[type]]
+    }
     if (is.null(value)) x$cdrgam$formula$user else value
 }

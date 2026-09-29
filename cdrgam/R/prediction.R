@@ -120,8 +120,11 @@
                         base[response_rows, , drop=FALSE] + accumulated
                 }
             } else {
-            values <- if (constant) rep.int(1, nrow(impulses)) else
-                predictor_values[[1L]]
+            values <- if (constant) {
+                rep.int(1, nrow(impulses))
+            } else {
+                Reduce(`*`, predictor_values)
+            }
             linked_values <- values[links$impulse_index]
             tensor_values <- if (!is.null(specification$varying)) {
                 if (!(specification$varying %in% names(responses))) {

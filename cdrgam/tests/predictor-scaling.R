@@ -79,8 +79,8 @@ stopifnot(
         responses$z / sd(responses$z)
     )),
     identical(
-        paste(deparse(formula(native, 'user')), collapse=''),
-        paste(deparse(formula(scaled, 'user')), collapse='')
+        paste(deparse(formula(native, 'raw')), collapse=''),
+        paste(deparse(formula(scaled, 'raw')), collapse='')
     ),
     identical(
         paste(deparse(formula(native, 'normalized')), collapse=''),

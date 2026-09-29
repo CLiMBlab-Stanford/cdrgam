@@ -34,6 +34,38 @@ assemblies <- lapply(design$parameters, function(parameter_design) {
 })
 family <- cdrgam_family('gaulss')
 
+cached <- cdrgam:::.cdrgam_distributional_cache_designs(assemblies)
+stopifnot(
+    is.logical(cached$enabled),
+    length(cached$enabled) == 1L,
+    is.numeric(cached$projected_bytes),
+    is.numeric(cached$bytes)
+)
+if (cached$enabled) {
+    rows <- seq_len(min(25L, assemblies$location$observation_count))
+    for (parameter in names(assemblies)) stopifnot(isTRUE(all.equal(
+        cdrgam:::.cdrgam_sparse_design_chunk(
+            assemblies[[parameter]], rows
+        ),
+        cdrgam:::.cdrgam_sparse_design_chunk(
+            cached$assemblies[[parameter]], rows
+        )
+    )))
+}
+
+singular_system <- Matrix::Matrix(
+    matrix(c(1, 1, 1, 1), 2L, 2L), sparse=TRUE
+)
+damped_factor <- cdrgam:::.cdrgam_gaulss_step_factor(
+    singular_system, supernodal=FALSE
+)
+stopifnot(
+    damped_factor$damping > 0,
+    all(is.finite(cdrgam:::.cdr_factor_solve(
+        damped_factor$factor, c(1, 0)
+    )))
+)
+
 numerically_converged <- cdrgam:::.cdrgam_gaulss_numerically_converged
 stopifnot(
     numerically_converged(-6.2743e-9, 1.0594e-8, 299647.5249),
@@ -133,6 +165,14 @@ if (.Platform$OS.type != 'windows') {
         assemblies, retained$solution, exp(log_sp), family, workers=2L
     )
     plan <- attr(concurrent, 'score_plan')
+    previous_memory_limit <- getOption('cdrgam.memory_limit_bytes')
+    process_rss <- cdrgam:::.cdrgam_proc_memory('VmRSS')
+    options(cdrgam.memory_limit_bytes=process_rss + 100 * 1024)
+    streamed <- cdrgam:::.cdrgam_gaulss_sparse_score(
+        assemblies, retained$solution, exp(log_sp), family, workers=2L
+    )
+    options(cdrgam.memory_limit_bytes=previous_memory_limit)
+    streamed_timing <- attr(streamed, 'score_plan')$batch_timings[[1L]]
     stopifnot(
         isTRUE(all.equal(
             as.numeric(reference), as.numeric(serial), tolerance=1e-10
@@ -140,12 +180,25 @@ if (.Platform$OS.type != 'windows') {
         isTRUE(all.equal(
             as.numeric(serial), as.numeric(concurrent), tolerance=1e-10
         )),
-        identical(plan$parallel_axis, 'inverse columns'),
+        isTRUE(all.equal(
+            as.numeric(serial), as.numeric(streamed), tolerance=1e-10
+        )),
+        identical(
+            plan$parallel_axis,
+            'likelihood directions and inverse columns'
+        ),
+        identical(plan$workers, 2L),
         length(plan$batch_timings) == plan$batches,
         all(c(
             'rhs', 'coefficient_solve', 'likelihood_derivatives',
+            'likelihood_direction_workers',
+            'likelihood_design_cache_mb',
             'selected_inverse_trace', 'quadratic'
-        ) %in% names(plan$batch_timings[[1L]]))
+        ) %in% names(plan$batch_timings[[1L]])),
+        plan$batch_timings[[1L]][['likelihood_direction_workers']] == 2,
+        plan$batch_timings[[1L]][['likelihood_design_cache_mb']] > 0,
+        streamed_timing[['likelihood_direction_workers']] == 1,
+        streamed_timing[['likelihood_design_cache_mb']] == 0
     )
 }
 
@@ -242,6 +295,8 @@ stopifnot(
     isTRUE(warm$warm_started),
     isTRUE(cold$converged),
     isTRUE(warm$converged),
+    warm$step_mode %in% c('joint', 'location-only', 'scale-only'),
+    is.finite(warm$maximum_damping),
     abs(cold$objective - warm$objective) < 1e-7,
     max(abs(cold$coefficients - warm$coefficients)) < 2e-5,
     warm$iterations <= cold$iterations

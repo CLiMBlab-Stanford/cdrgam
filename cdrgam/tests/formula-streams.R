@@ -214,6 +214,9 @@ stopifnot(isTRUE(all.equal(
 stopifnot(all(is.finite(coef(block_fit))))
 stopifnot(all(is.finite(vcov(block_fit))))
 stopifnot(inherits(summary(block_fit), 'summary.cdrgam_block'))
+stopifnot(inherits(
+    suggest_simplifications(block_fit), 'cdrgam_simplification_report'
+))
 
 noncanonical_error <- tryCatch(
     {

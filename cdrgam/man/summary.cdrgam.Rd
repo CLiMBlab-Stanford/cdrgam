@@ -52,8 +52,9 @@ coefficient table. The default is false.}
 \item{x}{A CDR-GAM summary object.}
 }
 \value{
-A \code{summary.gam}-style object containing parametric and smooth-term tables
-plus the user, normalized, and effective CDR formulas. Native fits retain the
+A \code{summary.gam}-style object containing parametric and smooth-term tables,
+the raw and translated \pkg{mgcv} formulas, and recorded automatic
+simplifications. Native fits retain the
 complete \code{summary.gam} result. Custom backends provide its commonly used
 coefficient, smooth-term, fit-statistic, and formula fields. The \code{s.test}
 field states whether each smooth-term test was computed.
@@ -63,7 +64,9 @@ The default output follows \code{mgcv::summary.gam()}: it reports parametric
 coefficients and one row per smooth term instead of expanded smooth and
 random-effect coefficients. Fully penalized random-effect and grouped IRF
 terms report effective degrees of freedom and an explicit "not computed" test
-status. This status does not indicate fit failure. Distributional Gaussian
+status. The printed output reports automatic formula simplifications directly;
+normalized and effective formulas remain available through \code{formula()}.
+This status does not indicate fit failure. Distributional Gaussian
 summaries report deviance, null deviance, and deviance explained without an
 adjusted R-squared statistic. Set \code{all.coefficients = TRUE} to request
 expanded coefficients.

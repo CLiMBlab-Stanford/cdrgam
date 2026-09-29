@@ -568,6 +568,36 @@ unresolved_assessment <- cdrgam:::.analytic_outer_convergence_assessment(
     gradient_tolerance=1e-4,
     initial_radius=2
 )
+active_assessment <- cdrgam:::.analytic_outer_convergence_assessment(
+    hessian=matrix(c(1, 100, 100, 1), 2, 2),
+    gradient=c(0, 0.01),
+    criterion=1e6,
+    gradient_tolerance=1e-4,
+    initial_radius=2,
+    active=c(TRUE, FALSE)
+)
+budget_assessment_calls <- 0L
+budget_fit <- cdrgam:::.safeguarded_outer_bfgs(
+    par=0,
+    fn=function(x) (x - 3)^2 / 2,
+    gr=function(x) x - 3,
+    lower=-10,
+    upper=10,
+    maxit=1L,
+    adaptive_maxit=3L,
+    gradient_tolerance=1e-8,
+    initial_radius=2,
+    convergence_assessment=function(parameters, criterion, gradient, ...) {
+        budget_assessment_calls <<- budget_assessment_calls + 1L
+        cdrgam:::.analytic_outer_convergence_assessment(
+            hessian=matrix(1),
+            gradient=gradient,
+            criterion=criterion,
+            gradient_tolerance=1e-8,
+            initial_radius=2
+        )
+    }
+)
 certification_calls <- 0L
 floor_state <- list(
     version=1L,
@@ -745,6 +775,14 @@ stopifnot(
     identical(resumed_bfgs$hessian, quadratic_bfgs$hessian),
     isTRUE(flat_assessment$converged),
     !isTRUE(unresolved_assessment$converged),
+    isTRUE(active_assessment$converged),
+    identical(active_assessment$diagnostics$active_bound_directions, 1L),
+    identical(budget_fit$convergence, 0L),
+    identical(budget_fit$iterations, 2L),
+    identical(budget_assessment_calls, 2L),
+    any(vapply(budget_fit$history, function(record) {
+        identical(record$event, 'curvature_recovery')
+    }, logical(1))),
     min(eigen(
         unresolved_assessment$restart_hessian,
         symmetric=TRUE,

@@ -5,13 +5,13 @@
 \usage{
 \method{formula}{cdrgam_design}(
   x,
-  type = c("user", "normalized", "effective"),
+  type = c("raw", "normalized", "effective"),
   ...
 )
 
 \method{formula}{cdrgam}(
   x,
-  type = c("user", "normalized", "effective", "mgcv"),
+  type = c("raw", "normalized", "effective", "mgcv"),
   ...
 )
 }
@@ -24,7 +24,7 @@ is available for fitted models.}
 \value{The selected formula, or a parameter-named formula list for a
 distributional model.}
 \description{
-Returns the user formula, the normalized CDR formula with structural defaults,
+Returns the raw user formula, the normalized CDR formula with structural defaults,
 the effective formula after automatic simplification, or the translated
 \pkg{mgcv} formula.
 }

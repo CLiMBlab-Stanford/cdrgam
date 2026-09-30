@@ -1,4 +1,4 @@
-% Generated manually from cdrgam/R/formula.R and compressed.R.
+% Generated manually from R/formula.R and R/compressed.R.
 \name{cdrgam}
 \alias{cdrgam}
 \alias{cdrgam.fit}

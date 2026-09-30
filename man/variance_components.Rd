@@ -1,4 +1,4 @@
-% Generated manually from cdrgam/R/diagnostics.R.
+% Generated manually from R/diagnostics.R.
 \name{variance_components}
 \alias{variance_components}
 \title{Extract smoothing variance components}

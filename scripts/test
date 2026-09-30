@@ -12,7 +12,7 @@ case "$scope" in
     recovery) tests='mixed-recovery nonlinear-recovery synthetic-recovery varying-recovery' ;;
     all) tests='automatic-simplification axis-irf boundary-reduction checkpoint-progress compressed distributional-checkpoint distributional-native distributional-qncv distributional-score effects formula-streams generalized-families generalized-gcv hybrid-transition identifiability marginaleffects mixed-recovery nonlinear-recovery parallelism predictor-scaling randomized-equivalence schur-factor sparse-gcv sparse-robustness synthetic-recovery varying-recovery' ;;
     *)
-        if [ -f "cdrgam/tests/$scope.R" ]; then
+        if [ -f "tests/$scope.R" ]; then
             tests=$scope
         else
             echo "Unknown test scope: $scope" >&2
@@ -36,13 +36,15 @@ source_copy=$(mktemp -d "$temporary_root/cdrgam-test-source.XXXXXX")
 trap 'rm -rf "$test_library" "$source_copy"' EXIT HUP INT TERM
 mkdir -p "$test_library/cache"
 export XDG_CACHE_HOME="$test_library/cache"
-cp -a cdrgam "$source_copy/cdrgam"
+mkdir "$source_copy/cdrgam"
+cp -a DESCRIPTION LICENSE NAMESPACE R man src tests \
+    "$source_copy/cdrgam/"
 "$r_bin" CMD INSTALL --preclean -l "$test_library" \
     "$source_copy/cdrgam" >/dev/null
 
 for test_name in $tests; do
     test_file="$source_copy/cdrgam/tests/$test_name.R"
-    echo "RUN cdrgam/tests/$test_name.R"
+    echo "RUN tests/$test_name.R"
     R_LIBS="$test_library${R_LIBS:+:$R_LIBS}" \
         "$r_bin" --vanilla --slave -f "$test_file"
 done

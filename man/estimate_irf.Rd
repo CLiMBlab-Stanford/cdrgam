@@ -1,4 +1,4 @@
-% Generated manually from cdrgam/R/diagnostics.R.
+% Generated manually from R/diagnostics.R.
 \name{estimate_irf}
 \alias{estimate_irf}
 \title{Evaluate fitted impulse-response function terms}

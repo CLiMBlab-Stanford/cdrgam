@@ -1,4 +1,4 @@
-% Generated manually from cdrgam/R/compressed.R.
+% Generated manually from R/compressed.R.
 \name{cdrgam-class}
 \alias{is_cdrgam}
 \alias{as_gam}

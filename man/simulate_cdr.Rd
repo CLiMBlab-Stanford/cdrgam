@@ -1,4 +1,4 @@
-% Generated manually from cdrgam/R/diagnostics.R.
+% Generated manually from R/diagnostics.R.
 \name{simulate_cdr}
 \alias{simulate_cdr}
 \title{Simulate irregular streams from fixed impulse-response functions}

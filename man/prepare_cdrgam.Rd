@@ -1,4 +1,4 @@
-% Generated manually from cdrgam/R/formula.R.
+% Generated manually from R/formula.R.
 \name{prepare_cdrgam}
 \alias{prepare_cdrgam}
 \title{Compile untiled streams for CDR-GAM fitting}

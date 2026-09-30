@@ -17,17 +17,17 @@ session identifiers.
 
 ## Repository structure
 
-The active R package is under `cdrgam/`:
+The R package occupies the repository root:
 
-- `cdrgam/R/formula.R` parses `irf()` terms and compiles stream histories.
-- `cdrgam/R/compressed.R` integrates compact designs with native `mgcv` fits.
-- `cdrgam/R/block.R` implements the dense Gaussian REML reference backend.
-- `cdrgam/R/sparse.R` implements the scalable sparse Gaussian REML backend.
-- `cdrgam/R/solver-control.R` contains checkpoints, progress reporting,
+- `R/formula.R` parses `irf()` terms and compiles stream histories.
+- `R/compressed.R` integrates compact designs with native `mgcv` fits.
+- `R/block.R` implements the dense Gaussian REML reference backend.
+- `R/sparse.R` implements the scalable sparse Gaussian REML backend.
+- `R/solver-control.R` contains checkpoints, progress reporting,
   numerical Hessians, and the experimental trust optimizer.
-- `cdrgam/R/prediction.R` rebuilds designs for new streams.
-- `cdrgam/src/` contains registered native routines.
-- `cdrgam/tests/` contains standalone regression and recovery tests.
+- `R/prediction.R` rebuilds designs for new streams.
+- `src/` contains registered native routines.
+- `tests/` contains standalone regression and recovery tests.
 - `validation/` contains longer empirical and performance experiments.
 
 The historical implementation under `archive/` is reference-only, ignored by
@@ -44,7 +44,7 @@ Run the narrowest relevant tests while developing, then run all standalone
 tests before handing off a broad change:
 
 ```sh
-for test_file in cdrgam/tests/*.R; do
+for test_file in tests/*.R; do
     Rscript "$test_file" || exit 1
 done
 ```

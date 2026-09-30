@@ -183,7 +183,7 @@ and inference against one another.
 Install from the repository root:
 
 ```sh
-R CMD INSTALL cdrgam
+R CMD INSTALL .
 ```
 
 The package requires R, `Matrix`, `methods`, and `mgcv`. It compiles a small C
@@ -203,7 +203,7 @@ correctness.
 Run the standalone test scripts from the repository root:
 
 ```sh
-for test_file in cdrgam/tests/*.R; do
+for test_file in tests/*.R; do
     Rscript "$test_file" || exit 1
 done
 ```
@@ -236,5 +236,4 @@ contain `Assisted-by:` trailers.
 
 ## License
 
-`cdrgam` is distributed under the MIT License. See
-[cdrgam/LICENSE](cdrgam/LICENSE).
+`cdrgam` is distributed under the MIT License. See [LICENSE](LICENSE).

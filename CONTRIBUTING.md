@@ -9,9 +9,9 @@ behavior.
 Install the package and run the standalone tests from the repository root:
 
 ```sh
-R CMD INSTALL cdrgam
+R CMD INSTALL .
 
-for test_file in cdrgam/tests/*.R; do
+for test_file in tests/*.R; do
     Rscript "$test_file" || exit 1
 done
 ```
@@ -29,7 +29,7 @@ temporary library and run one focused scope:
 ./scripts/test recovery
 ```
 
-The script also accepts the stem of one file in `cdrgam/tests/` or `all`.
+The script also accepts the stem of one file in `tests/` or `all`.
 
 Use a clean temporary R library when testing package installation or namespace
 behavior. Run relevant scripts under `validation/` for changes to numerical
@@ -42,7 +42,7 @@ implementation fields. Extend `fit_metadata()`, `fit_report()`, or
 information. Test changes to these functions against native `mgcv`, block, and
 sparse fits when the reported field differs by backend.
 
-Before merging a release, update `Version` in `cdrgam/DESCRIPTION`, run the
+Before merging a release, update `Version` in `DESCRIPTION`, run the
 complete test suite, and run `R CMD check` on a clean source package. Document
 intentional incompatibilities and migration steps.
 

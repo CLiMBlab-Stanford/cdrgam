@@ -1,4 +1,4 @@
-% Generated manually from cdrgam/R/formula.R.
+% Generated manually from R/formula.R.
 \name{irf}
 \alias{irf}
 \title{Specify an impulse-response term}

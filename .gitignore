@@ -17,11 +17,11 @@ plans/
 # Package build and check artifacts
 *.tar.gz
 *.Rcheck/
-cdrgam/src/*.o
-cdrgam/src/*.so
-cdrgam/src/*.dll
-cdrgam/src/*.dylib
-cdrgam/src/symbols.rds
+src/*.o
+src/*.so
+src/*.dll
+src/*.dylib
+src/symbols.rds
 
 # Historical implementation
 archive/

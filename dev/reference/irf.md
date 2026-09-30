@@ -1,7 +1,7 @@
 # Specify an impulse-response term
 
 Use `irf()` as a top-level additive term inside a
-[`cdrgam()`](https://climblab-stanford.github.io/cdrgam/dev/reference/cdrgam.md)
+[`cdrgam()`](https://climblab.org/cdrgam/dev/reference/cdrgam.md)
 formula. Ordinary terms retain their usual R and mgcv meanings. By
 default each predictor enters linearly as a convolution weight. Numeric
 `k_p` entries add smooth predictor marginals and `k_t` adds a

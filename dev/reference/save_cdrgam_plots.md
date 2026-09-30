@@ -1,7 +1,7 @@
 # Save CDR plots to PDF or raster images
 
 Open a graphics device, call
-[`plot.cdrgam()`](https://climblab-stanford.github.io/cdrgam/dev/reference/plot.cdrgam.md),
+[`plot.cdrgam()`](https://climblab.org/cdrgam/dev/reference/plot.cdrgam.md),
 and close the device. PDF output may contain multiple pages. Raster
 output inserts a numbered format field before the extension when more
 than one page is requested.
@@ -46,14 +46,14 @@ save_cdrgam_plots(
 - pages:
 
   Number of output pages passed to
-  [`plot.cdrgam()`](https://climblab-stanford.github.io/cdrgam/dev/reference/plot.cdrgam.md).
+  [`plot.cdrgam()`](https://climblab.org/cdrgam/dev/reference/plot.cdrgam.md).
 
 - ...:
 
   Additional arguments passed to
-  [`plot.cdrgam()`](https://climblab-stanford.github.io/cdrgam/dev/reference/plot.cdrgam.md).
+  [`plot.cdrgam()`](https://climblab.org/cdrgam/dev/reference/plot.cdrgam.md).
 
 ## Value
 
 Invisibly, the plot-data object returned by
-[`plot.cdrgam()`](https://climblab-stanford.github.io/cdrgam/dev/reference/plot.cdrgam.md).
+[`plot.cdrgam()`](https://climblab.org/cdrgam/dev/reference/plot.cdrgam.md).

@@ -14,7 +14,7 @@ Description: Fits continuous-time deconvolutional regression models as
     Fitted objects provide standard model methods and retain their translated
     'mgcv' representation.
 License: MIT + file LICENSE
-URL: https://climblab-stanford.github.io/cdrgam/,
+URL: https://climblab.org/cdrgam/,
     https://github.com/CLiMBlab-Stanford/cdrgam
 BugReports: https://github.com/CLiMBlab-Stanford/cdrgam/issues
 Imports:

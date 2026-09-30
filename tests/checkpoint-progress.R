@@ -60,11 +60,11 @@ interrupted <- tryCatch(
         solver_trace=function(event) {
             events[[length(events) + 1L]] <<- event
             if (event$event %in% c('new best', 'evaluation') &&
-                    event$evaluation >= 12L) {
+                    event$evaluation >= 4L) {
                 stop('simulated interruption')
             }
         },
-        sparse_control=list(gradient='exact', outer_optimizer='lbfgsb')
+        sparse_control=list(gradient='exact', outer_optimizer='bfgs_trust')
     ),
     error=function(error) conditionMessage(error)
 )
@@ -78,7 +78,7 @@ partial <- readRDS(checkpoint)
 stopifnot(
     identical(partial$checkpoint_version, 1L),
     identical(partial$stage, 'optimization'),
-    partial$evaluation_count >= 10L,
+    partial$evaluation_count >= 3L,
     is.finite(partial$best_criterion)
 )
 
@@ -90,32 +90,43 @@ resumed <- cdrgam.fit(
     solver_trace=function(event) {
         resumed_events[[length(resumed_events) + 1L]] <<- event
     },
-    sparse_control=list(gradient='exact', outer_optimizer='lbfgsb')
+    sparse_control=list(gradient='exact', outer_optimizer='bfgs_trust')
 )
-reference <- cdrgam.fit(
+checkpoint_reference <- cdrgam.fit(
     design,
     backend='sparse',
-    sparse_control=list(gradient='exact', outer_optimizer='lbfgsb')
+    sparse_control=list(gradient='exact', outer_optimizer='bfgs_trust')
 )
 complete <- readRDS(checkpoint)
 stopifnot(
     identical(complete$stage, 'complete'),
     isTRUE(complete$converged),
     isTRUE(resumed$sparse$convergence$resumed),
-    max(abs(coef(resumed) - coef(reference))) < 1e-8,
-    abs(resumed$reml - reference$reml) < 1e-8,
+    max(abs(coef(resumed) - coef(checkpoint_reference))) < 1e-8,
+    abs(resumed$reml - checkpoint_reference$reml) < 1e-8,
     any(vapply(resumed_events, `[[`, character(1), 'event') ==
         'checkpoint resumed'),
-    identical(reference$sparse$gradient_requested, 'exact'),
-    identical(reference$sparse$outer_optimizer_requested, 'lbfgsb'),
-    identical(reference$sparse$hessian_requested, 'auto'),
-    reference$sparse$hessian %in% c('analytic', 'gradient'),
+    identical(checkpoint_reference$sparse$gradient_requested, 'exact'),
+    identical(checkpoint_reference$sparse$outer_optimizer_requested,
+        'bfgs_trust'),
+    identical(checkpoint_reference$sparse$hessian_requested, 'auto'),
+    checkpoint_reference$sparse$hessian %in% c('analytic', 'gradient'),
     identical(
-        reference$sparse$hessian,
-        reference$sparse$hessian_selection$method
+        checkpoint_reference$sparse$hessian,
+        checkpoint_reference$sparse$hessian_selection$method
     ),
-    is.finite(reference$sparse$hessian_selection$estimated_peak_bytes),
-    length(reference$sparse$optimizer_selection$measured_exact_seconds) > 0L
+    is.finite(
+        checkpoint_reference$sparse$hessian_selection$estimated_peak_bytes
+    ),
+    length(
+        checkpoint_reference$sparse$optimizer_selection$measured_exact_seconds
+    ) > 0L
+)
+
+reference <- cdrgam.fit(
+    design,
+    backend='sparse',
+    sparse_control=list(gradient='exact', outer_optimizer='lbfgsb')
 )
 
 automatic <- cdrgam.fit(
@@ -144,7 +155,11 @@ stopifnot(
 # assessment. An automatic analytic assessment receives the memory-derived
 # allowance, while an explicit gradient strategy differentiates exact scores.
 previous_element_limit <- getOption('cdrgam.max_analytic_hessian_elements')
-options(cdrgam.max_analytic_hessian_elements=1)
+previous_assessment_memory_limit <- getOption('cdrgam.memory_limit_bytes')
+options(
+    cdrgam.max_analytic_hessian_elements=1,
+    cdrgam.memory_limit_bytes=8 * 1024^3
+)
 automatic_assessment_events <- list()
 automatic_assessment <- cdrgam.fit(
     design,
@@ -171,7 +186,10 @@ gradient_assessment <- cdrgam.fit(
         optimizer_trust_radius=1e-9, optimizer_maxit=5L
     )
 )
-options(cdrgam.max_analytic_hessian_elements=previous_element_limit)
+options(
+    cdrgam.max_analytic_hessian_elements=previous_element_limit,
+    cdrgam.memory_limit_bytes=previous_assessment_memory_limit
+)
 automatic_assessments <- Filter(
     function(event) identical(
         event$event,
@@ -274,7 +292,7 @@ resumed_again <- cdrgam.fit(
     design,
     backend='sparse',
     checkpoint=checkpoint,
-    sparse_control=list(gradient='exact', outer_optimizer='lbfgsb')
+    sparse_control=list(gradient='exact', outer_optimizer='bfgs_trust')
 )
 stopifnot(
     readRDS(checkpoint)$evaluation_count == completed_evaluations,

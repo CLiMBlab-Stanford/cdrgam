@@ -161,12 +161,16 @@ if (.Platform$OS.type != 'windows') {
     serial <- cdrgam:::.cdrgam_gaulss_sparse_score(
         assemblies, retained$solution, exp(log_sp), family
     )
+    previous_memory_limit <- getOption('cdrgam.memory_limit_bytes')
+    process_rss <- max(c(
+        cdrgam:::.cdrgam_proc_memory('VmRSS'),
+        cdrgam:::.cdrgam_r_memory()
+    ), na.rm=TRUE)
+    options(cdrgam.memory_limit_bytes=process_rss + 1024^3)
     concurrent <- cdrgam:::.cdrgam_gaulss_sparse_score(
         assemblies, retained$solution, exp(log_sp), family, workers=2L
     )
     plan <- attr(concurrent, 'score_plan')
-    previous_memory_limit <- getOption('cdrgam.memory_limit_bytes')
-    process_rss <- cdrgam:::.cdrgam_proc_memory('VmRSS')
     options(cdrgam.memory_limit_bytes=process_rss + 100 * 1024)
     streamed <- cdrgam:::.cdrgam_gaulss_sparse_score(
         assemblies, retained$solution, exp(log_sp), family, workers=2L

@@ -62,7 +62,8 @@ contracts. Do not cancel, overwrite, or invalidate a run unless the user asks.
 
 Commit, push, tag, or create or update a pull request only when the user
 explicitly requests that action. Development belongs on `dev` or a feature
-branch; `main` is reserved for reviewed releases.
+branch. Changes enter the release-only `main` branch through a pull request
+after its hosted release gate and cross-platform checks pass.
 
 Before committing, verify that the existing Git configuration provides both
 the requesting human's `user.name` and `user.email`. Before using a hosting CLI

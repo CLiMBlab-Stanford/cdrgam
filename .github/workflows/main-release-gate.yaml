@@ -1,0 +1,42 @@
+name: Main release gate
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  release-gate:
+    name: Release gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      GITHUB_PAT: ${{ secrets.GITHUB_TOKEN }}
+      R_KEEP_PKG_SOURCE: yes
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: r-lib/actions/setup-pandoc@v2
+      - uses: r-lib/actions/setup-r@v2
+        with:
+          r-version: release
+          use-public-rspm: true
+      - name: Require a later release version
+        env:
+          BASE_COMMIT: ${{ github.event.pull_request.base.sha }}
+        run: Rscript .github/workflows/check-main-version.R "$BASE_COMMIT"
+      - uses: r-lib/actions/setup-r-dependencies@v2
+        with:
+          extra-packages: |
+            any::pkgdown
+            any::rcmdcheck
+          needs: check
+      - name: Run the complete package check
+        run: rcmdcheck::rcmdcheck(args = c('--no-manual', '--no-build-vignettes'), build_args = c('--no-manual', '--no-build-vignettes'), error_on = 'warning')
+        shell: Rscript {0}
+      - name: Build the complete documentation site
+        run: pkgdown::build_site(new_process = FALSE, install = FALSE)
+        shell: Rscript {0}

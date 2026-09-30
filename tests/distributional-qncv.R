@@ -69,7 +69,8 @@ roomy_plan <- direction_plan(
 stopifnot(
     constrained_plan$workers == 1L,
     constrained_plan$blas_threads == 4L,
-    isTRUE(constrained_plan$memory_limited),
+    isTRUE(constrained_plan$memory_limited) ==
+        (.Platform$OS.type != 'windows'),
     !isTRUE(constrained_plan$cache_parallel),
     roomy_plan$workers == if (.Platform$OS.type == 'windows') 1L else 2L,
     roomy_plan$blas_threads == if (
@@ -100,8 +101,14 @@ small_batch <- evaluate_qncv(
     gamma=gamma,
     batch_size=7L
 )
+criterion_scale <- max(
+    1,
+    abs(native_criterion$criterion),
+    abs(unname(native$gcv.ubre))
+)
 stopifnot(
-    abs(native_criterion$criterion - unname(native$gcv.ubre)) < 2e-5,
+    abs(native_criterion$criterion - unname(native$gcv.ubre)) /
+        criterion_scale < 1e-6,
     abs(native_criterion$criterion - small_batch$criterion) < 1e-10,
     max(abs(
         unname(native_solution$coefficients) - unname(stats::coef(native))

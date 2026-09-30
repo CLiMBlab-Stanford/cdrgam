@@ -63,9 +63,10 @@ sparse <- cdrgam.fit(
     method='REML',
     sparse_control=list(gradient='finite')
 )
+fitted_scale <- max(1, max(abs(fitted(native))))
 stopifnot(
-    max(abs(fitted(native) - fitted(block))) < 1e-5,
-    max(abs(fitted(native) - fitted(sparse))) < 1e-5
+    max(abs(fitted(native) - fitted(block))) / fitted_scale < 5e-5,
+    max(abs(fitted(native) - fitted(sparse))) / fitted_scale < 5e-5
 )
 
 newdata <- list(

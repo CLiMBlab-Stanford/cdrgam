@@ -410,7 +410,8 @@
     candidates <- list()
     add_candidate <- function(source, limit, used, available=NULL) {
         if (is.null(available)) available <- limit - used
-        if (!is.finite(available) || available < 0) return(invisible(NULL))
+        if (!is.finite(available)) return(invisible(NULL))
+        available <- max(0, available)
         candidates[[length(candidates) + 1L]] <<- list(
             source=source,
             limit_bytes=limit,

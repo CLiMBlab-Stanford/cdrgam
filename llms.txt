@@ -1,0 +1,324 @@
+# cdrgam
+
+`cdrgam` fits continuous-time deconvolutional regression (CDR) models in
+R. It represents impulse-response functions with GAM smooths while
+compiling irregular impulse histories into compact response-level
+designs. This avoids materializing the much larger history-level design
+used by a direct `mgcv` linear-functional fit.
+
+The package is an experimental rewrite. Its API and numerical backends
+may change while validation continues.
+
+## Model interface
+
+A model combines ordinary response-aligned GAM terms with
+[`irf()`](https://climblab-stanford.github.io/cdrgam/reference/irf.md)
+terms whose predictors come from an impulse stream:
+
+``` r
+
+library(cdrgam)
+
+model <- cdrgam(
+    rt ~ s(word_position, k = 5) +
+        irf(surprisal, k_l = 20),
+    impulses = words,
+    responses = fixations,
+    window = c(0, 2),
+    series = c("subject", "document"),
+    impulse_time = "time",
+    response_time = "time",
+    backend = "sparse"
+)
+```
+
+Every formula receives a deconvolutional intercept, represented by an
+implicit `irf(1)`, unless the formula removes it with `- irf(1)`. This
+is distinct from the ordinary response intercept.
+
+Use
+[`prepare_cdrgam()`](https://climblab-stanford.github.io/cdrgam/reference/prepare_cdrgam.md)
+when the same compiled design will be fitted more than once:
+
+``` r
+
+design <- prepare_cdrgam(
+    rt ~ irf(surprisal, k_l = 20),
+    impulses = words,
+    responses = fixations,
+    window = c(0, 2),
+    series = c("subject", "document")
+)
+
+model <- cdrgam.fit(design, backend = "sparse")
+```
+
+[`predict()`](https://rdrr.io/r/stats/predict.html) accepts new untiled
+streams in a named `newdata` list and rebuilds their response-level
+design from the fitted bases and constraints:
+
+``` r
+
+prediction <- predict(model, newdata = list(
+    impulses = new_words,
+    responses = new_fixations
+))
+```
+
+The native `mgcv` backend accepts Gaussian, binomial, Poisson, and Gamma
+families through the validated
+[`cdrgam_family()`](https://climblab-stanford.github.io/cdrgam/reference/cdrgam_family.md)
+registry, with an optional explicit link. Stream-aware prediction
+supports both response and link scales. The dense block backend provides
+a generalized reference implementation for `poisson(log)`,
+`binomial(logit)`, and estimated-dispersion `Gamma(log)` models using
+safeguarded penalized IRLS and Laplace marginal-likelihood optimization.
+The sparse backend supports the same families with streamed PIRLS,
+numeric sparse-factor updates, and an exact Laplace score. Canonical
+fixed-dispersion fits use safeguarded trust-region BFGS; Gamma uses
+exact-gradient L-BFGS-B to avoid a boundary-adjacent secondary basin.
+Noncanonical links remain native-only.
+
+Set `rescale_predictors = TRUE` to improve numerical conditioning when
+continuous predictors or timestamps have awkward units. The
+transformation divides by training-data standard deviations but never
+centers, so interaction reference points retain their meaning. Binary,
+categorical, grouping, series, and constant variables are left alone.
+History windows are built in native time units, then lag and time are
+divided by the same impulse-time standard deviation. Formulas remain
+unchanged; new data are transformed with the stored training statistics,
+and CDR plots and effect estimates use native source units.
+
+## Plotting
+
+[`plot()`](https://rdrr.io/r/graphics/plot.default.html) provides
+CDR-specific views of the fitted terms:
+
+``` r
+
+plot(model, view = "irf", select = "surprisal",
+     at = list(predictor = c(-1, 0, 1)))
+plot(model, view = "predictor", select = "surprisal",
+     at = list(lag = c(0.2, 0.5, 1)))
+plot(model, view = "surface", select = "surprisal")
+```
+
+Grouped terms support population, deviation, and conditional views. CDR
+plots show additive effects on the linear-predictor scale and can
+include conditional or smoothing-parameter-adjusted uncertainty.
+[`save_cdrgam_plots()`](https://climblab-stanford.github.io/cdrgam/reference/save_cdrgam_plots.md)
+writes the same panels to PDF or raster devices. Native `mgcv` fits
+retain access to the translated GAM display through
+`plot(model, view = "gam")` or `mgcv::plot.gam(as_gam(model))`. The
+first form restores scaled ordinary-smooth axes to source units; the
+explicit
+[`as_gam()`](https://climblab-stanford.github.io/cdrgam/reference/cdrgam-class.md)
+escape hatch exposes the literal internal mgcv parameterization.
+
+## Supported terms
+
+The current implementation supports:
+
+- stationary linear and nonlinear impulse-response functions;
+- multi-predictor tensor interactions with mixed linear and smooth axes;
+- response-aligned `by` modulation;
+- nonstationary response-time axes;
+- grouped impulse-response deviations;
+- ordinary `mgcv` terms, including response-side random effects; and
+- Gaussian families through every backend; canonical Poisson and
+  binomial families through every backend; and other validated
+  family/link pairs through the native `mgcv` backend.
+
+`k_l`, `k_t`, and `k_p` control the lag, response-time, and predictor
+basis dimensions. `NULL` predictor entries are linear; use an R list
+such as `k_p = list(NULL, 4)` when an interaction mixes linear and
+smooth predictors. The corresponding `bs_l`, `bs_t`, and `bs_p`
+arguments accept standard numeric `mgcv` marginal bases. Smooth non-lag
+tensor marginals are centered to separate an interaction from its
+lower-order effects.
+
+`knots_l` supplies exactly `k_l` strictly increasing lag-basis
+construction points in the original lag units. This can concentrate
+interior resolution within part of a longer window without increasing
+the basis dimension. The points must span the linked training lags.
+Custom lag knots are supported for the numeric `cr`, `cs`, `cc`, `tp`,
+and `ts` marginals; `ps` has a different knot contract and rejects
+`knots_l`.
+
+## Fitting backends
+
+[`cdrgam()`](https://climblab-stanford.github.io/cdrgam/reference/cdrgam.md)
+provides three fitting paths:
+
+- `backend = "mgcv"` fits the compiled response-level design with
+  [`mgcv::gam()`](https://rdrr.io/pkg/mgcv/man/gam.html) or
+  [`mgcv::bam()`](https://rdrr.io/pkg/mgcv/man/bam.html). The result
+  directly inherits from the native `gam` or `bam` class.
+- `backend = "block"` is an independent dense Gaussian REML and
+  generalized LAML reference solver.
+- `backend = "sparse"` fits Gaussian identity-link models and Poisson,
+  binomial, or Gamma models with sparse penalized systems and sparse
+  Cholesky factorization. Generalized fits stream changing PIRLS
+  cross-products and use an exact Laplace score. Grouped IRFs remain
+  compact until backend assembly.
+
+The sparse backend’s experimental exact-score, safeguarded trust-region
+BFGS optimizer is selected with
+`sparse_control = list(gradient = "exact", outer_optimizer = "bfgs_trust")`.
+Its checkpoints preserve the complete optimizer state, including BFGS
+curvature and trust radius, so an interrupted run continues its original
+trajectory. If the trust radius reaches the numerical floor during
+fitting, the resolved Hessian strategy is used to certify practical
+convergence in identifiable curvature directions or reset curvature for
+a bounded recovery attempt. The default automatic strategy uses the
+analytic Hessian when it fits the process memory budget and otherwise
+differences exact gradients. Near-neutral steps are accepted only when
+their exact score reaches tolerance or improves, which prevents
+factorization-level objective noise from collapsing the trust radius.
+
+With `sparse_control = list(schur = "always")`, response-aligned
+random-effect blocks are eliminated through a consolidated Schur
+transfer matrix. The factorization, exact-score trace, and
+multi-right-hand-side solves use batched BLAS operations. A threaded
+BLAS implementation such as OpenBLAS materially reduces runtime for
+large Schur cores; R’s reference BLAS remains supported but executes
+these kernels serially.
+
+Set `sparse_control$boundary_action = "reduce"` to convert certified IRF
+curvature boundaries into explicit reduced bases and reoptimize the
+remaining smoothing parameters. The user formula is preserved, and the
+fitted object records the removed penalty subspaces, original and
+effective dimensions, and the conditional status of subsequent
+inference. The default `"report"` records the same diagnosis without
+altering the fitted representation. Reports name the affected component
+(for example, lag curvature, predictor curvature, or group-deviation
+magnitude). A full-rank boundary would erase an entire term, so it is
+reported for confirmation and is never removed automatically.
+
+The independent backends are used to test compilation, fitting,
+prediction, and inference against one another.
+
+## Installation
+
+Install from the repository root:
+
+``` sh
+R CMD INSTALL .
+```
+
+The package requires R, `Matrix`, `methods`, and `mgcv`. It compiles a
+small C extension for the optional Schur-complement factorization path.
+
+The fitting and prediction APIs are intended to run on Linux, macOS, and
+Windows. Platform-specific acceleration is optional. Parallel
+finite-gradient evaluation uses process forking where R supports it and
+runs serially on Windows. Automatic Hessian selection reads Linux cgroup
+and Slurm limits when available; elsewhere it chooses the lower-memory
+gradient calculation unless `options(cdrgam.memory_limit_bytes=...)`
+supplies a process limit. Threaded BLAS acceleration depends on the R
+distribution and is not required for correctness.
+
+## Tests
+
+Run the standalone test scripts from the repository root:
+
+``` sh
+for test_file in tests/*.R; do
+    Rscript "$test_file" || exit 1
+done
+```
+
+The suite covers compressed-design equivalence, formula compilation,
+identifiability, nonlinear and varying effects, mixed models, sparse
+factorization, prediction, checkpoint recovery, optimizer behavior, and
+synthetic recovery.
+
+Longer empirical and performance checks live under `validation/`. Their
+generated outputs and benchmark reports are intentionally excluded from
+Git.
+
+## Development
+
+Development takes place on `dev` or a feature branch. See
+[CONTRIBUTING.md](https://climblab-stanford.github.io/cdrgam/CONTRIBUTING.md)
+for testing, commit attribution, and release requirements. Instructions
+for AI coding agents are in
+[AGENTS.md](https://climblab-stanford.github.io/cdrgam/AGENTS.md), and
+repository-level AI assistance is recorded in
+[AI_PROVENANCE.md](https://climblab-stanford.github.io/cdrgam/AI_PROVENANCE.md).
+
+## AI-assisted development
+
+This codebase was developed almost entirely with AI coding assistance.
+Human maintainers selected the requirements, reviewed the generated
+code, ran the applicable tests, and accept responsibility for the
+published result.
+
+The tools and models used are recorded in
+[AI_PROVENANCE.md](https://climblab-stanford.github.io/cdrgam/AI_PROVENANCE.md).
+Where available, individual commits also contain `Assisted-by:`
+trailers.
+
+## License
+
+`cdrgam` is distributed under the MIT License. See
+[LICENSE](https://climblab-stanford.github.io/cdrgam/LICENSE).
+
+# Package index
+
+## All functions
+
+- [`is_cdrgam()`](https://climblab-stanford.github.io/cdrgam/reference/cdrgam-class.md)
+  [`as_gam()`](https://climblab-stanford.github.io/cdrgam/reference/cdrgam-class.md)
+  : CDR-GAM model class helpers
+- [`cdrgam()`](https://climblab-stanford.github.io/cdrgam/reference/cdrgam.md)
+  [`cdrgam.fit()`](https://climblab-stanford.github.io/cdrgam/reference/cdrgam.md)
+  : Fit a continuous-time deconvolutional GAM
+- [`cdrgam_family()`](https://climblab-stanford.github.io/cdrgam/reference/cdrgam_family.md)
+  : Construct a supported CDR-GAM response family
+- [`effect_catalog()`](https://climblab-stanford.github.io/cdrgam/reference/effect_catalog.md)
+  : List estimable impulse-response effects
+- [`estimate_effect()`](https://climblab-stanford.github.io/cdrgam/reference/estimate_effect.md)
+  : Evaluate fitted effects on declarative axis grids
+- [`estimate_irf()`](https://climblab-stanford.github.io/cdrgam/reference/estimate_irf.md)
+  : Evaluate fitted impulse-response function terms
+- [`estimate_response_effect()`](https://climblab-stanford.github.io/cdrgam/reference/estimate_response_effect.md)
+  : Generate response-effect plot data
+- [`fit_diagnostics()`](https://climblab-stanford.github.io/cdrgam/reference/fit_diagnostics.md)
+  : Report standardized fit convergence diagnostics
+- [`fit_metadata()`](https://climblab-stanford.github.io/cdrgam/reference/fit_report.md)
+  [`fit_report()`](https://climblab-stanford.github.io/cdrgam/reference/fit_report.md)
+  : Extract Stable Fit Metadata and Summary Tables
+- [`formula(`*`<cdrgam_design>`*`)`](https://climblab-stanford.github.io/cdrgam/reference/formula.cdrgam.md)
+  [`formula(`*`<cdrgam>`*`)`](https://climblab-stanford.github.io/cdrgam/reference/formula.cdrgam.md)
+  : Extract a CDR-GAM formula
+- [`irf()`](https://climblab-stanford.github.io/cdrgam/reference/irf.md)
+  : Specify an impulse-response term
+- [`marginaleffects_view()`](https://climblab-stanford.github.io/cdrgam/reference/marginaleffects_view.md)
+  : Prepare a cdrgam model for marginaleffects
+- [`plot(`*`<cdrgam>`*`)`](https://climblab-stanford.github.io/cdrgam/reference/plot.cdrgam.md)
+  : Plot CDR effects and translated GAM components
+- [`predict(`*`<cdrgam>`*`)`](https://climblab-stanford.github.io/cdrgam/reference/predict.cdrgam.md)
+  [`predict(`*`<cdrgam_block>`*`)`](https://climblab-stanford.github.io/cdrgam/reference/predict.cdrgam.md)
+  [`predict(`*`<cdrgam_sparse>`*`)`](https://climblab-stanford.github.io/cdrgam/reference/predict.cdrgam.md)
+  : Predict from a fitted CDR-GAM
+- [`predict_components()`](https://climblab-stanford.github.io/cdrgam/reference/predict_components.md)
+  : Predict Response and Link Components
+- [`prepare_cdrgam()`](https://climblab-stanford.github.io/cdrgam/reference/prepare_cdrgam.md)
+  : Compile untiled streams for CDR-GAM fitting
+- [`response_scenarios()`](https://climblab-stanford.github.io/cdrgam/reference/response_scenarios.md)
+  : Construct response-history scenarios
+- [`save_cdrgam_plots()`](https://climblab-stanford.github.io/cdrgam/reference/save_cdrgam_plots.md)
+  : Save CDR plots to PDF or raster images
+- [`simulate_cdr()`](https://climblab-stanford.github.io/cdrgam/reference/simulate_cdr.md)
+  : Simulate irregular streams from fixed impulse-response functions
+- [`suggest_simplifications()`](https://climblab-stanford.github.io/cdrgam/reference/suggest_simplifications.md)
+  : Suggest model simplifications from a fitted CDR-GAM
+- [`summary(`*`<cdrgam>`*`)`](https://climblab-stanford.github.io/cdrgam/reference/summary.cdrgam.md)
+  [`summary(`*`<cdrgam_block>`*`)`](https://climblab-stanford.github.io/cdrgam/reference/summary.cdrgam.md)
+  [`summary(`*`<cdrgam_sparse>`*`)`](https://climblab-stanford.github.io/cdrgam/reference/summary.cdrgam.md)
+  [`print(`*`<summary.cdrgam>`*`)`](https://climblab-stanford.github.io/cdrgam/reference/summary.cdrgam.md)
+  : Summarize a fitted CDR-GAM
+- [`variance_components()`](https://climblab-stanford.github.io/cdrgam/reference/variance_components.md)
+  : Extract smoothing variance components
+

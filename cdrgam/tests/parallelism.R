@@ -4,6 +4,7 @@ positive_integer <- cdrgam:::.cdrgam_positive_integer
 available_cores <- cdrgam:::.cdrgam_available_cores
 parallel_plan <- cdrgam:::.cdrgam_parallel_plan
 score_parallel_plan <- cdrgam:::.cdrgam_score_parallel_plan
+memory_parallel_plan <- cdrgam:::.cdrgam_memory_parallel_plan
 batch_plan <- cdrgam:::.cdrgam_sparse_score_batch_plan
 trace_chunk_size <- cdrgam:::.cdrgam_sparse_trace_chunk_size
 with_blas_threads <- cdrgam:::.cdrgam_with_blas_threads
@@ -22,6 +23,13 @@ bounded_trace_chunk <- trace_chunk_size(
     memory=list(available_bytes=64 * 1024^2)
 )
 automatic_score <- score_parallel_plan(8L, 40L)
+memory_limited <- memory_parallel_plan(
+    8L, 8L,
+    per_worker_bytes=2 * 1024^3,
+    memory_fraction=1,
+    reserve_bytes=0,
+    memory=list(source='synthetic', available_bytes=5 * 1024^3)
+)
 stopifnot(
     batched$workers == 4L,
     single_batch$workers == 4L,
@@ -36,7 +44,16 @@ stopifnot(
     automatic_score$blas_threads == if (
         .Platform$OS.type == 'windows'
     ) 8L else 4L,
-    identical(automatic_score$worker_source, 'automatic')
+    identical(automatic_score$worker_source, 'automatic'),
+    memory_limited$workers == if (.Platform$OS.type == 'windows') 1L else 2L,
+    memory_limited$blas_threads == if (
+        .Platform$OS.type == 'windows'
+    ) 8L else 4L,
+    identical(
+        memory_limited$memory_limited,
+        .Platform$OS.type != 'windows'
+    ),
+    identical(memory_limited$memory_source, 'synthetic')
 )
 
 many_tasks <- parallel_plan(8L, 40L)

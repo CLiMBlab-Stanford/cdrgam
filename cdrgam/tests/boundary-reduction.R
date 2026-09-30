@@ -14,6 +14,39 @@ stopifnot(
     practical$diagnostics$flat_directions == 1L
 )
 
+# A local quadratic optimum beyond a smoothing-parameter bound contributes
+# only the improvement attainable before the bound. This is the geometry of
+# an effectively linear smooth whose penalty has almost reached its cap.
+near_boundary <- cdrgam:::.analytic_outer_convergence_assessment(
+    hessian=diag(c(8e-5, 1)),
+    gradient=c(-1.55e-4, 0),
+    criterion=87822,
+    gradient_tolerance=1e-4,
+    initial_radius=2,
+    parameters=c(25 - 1.3e-4, 0),
+    lower=c(-25, -25),
+    upper=c(25, 25)
+)
+unbounded_boundary <- cdrgam:::.analytic_outer_convergence_assessment(
+    hessian=diag(c(8e-5, 1)),
+    gradient=c(-1.55e-4, 0),
+    criterion=87822,
+    gradient_tolerance=1e-4,
+    initial_radius=2
+)
+stopifnot(
+    isTRUE(near_boundary$converged),
+    !isTRUE(unbounded_boundary$converged),
+    near_boundary$diagnostics$bounded_quadratic,
+    near_boundary$diagnostics$bounded_quadratic_converged,
+    near_boundary$diagnostics$active_bound_directions == 1L,
+    near_boundary$diagnostics$newton_step_max <= 1.31e-4,
+    near_boundary$diagnostics$predicted_improvement <
+        near_boundary$diagnostics$objective_floor,
+    near_boundary$diagnostics$unconstrained_predicted_improvement >
+        near_boundary$diagnostics$objective_floor
+)
+
 noise_certified <- cdrgam:::.analytic_outer_convergence_assessment(
     hessian=diag(c(1, 1e-9)),
     gradient=c(0.02, 1e-6),
@@ -131,11 +164,21 @@ fit <- list(
         c(exp(14), exp(13), 0.2),
         c('s(cdr_term_1)1', 's(cdr_term_1)2', 's(cdr_term_1)3')
     ),
-    optimizer=list(gradient=c(1e-7, -2e-7, 0.1)),
-    sparse=list(gradient='exact')
+    optimizer=list(gradient=c(-0.1, -0.2, 0.1)),
+    sparse=list(
+        gradient='exact',
+        penalty_trace=c(2.9995, 2.9995, 0),
+        convergence=list(boundary=stats::setNames(
+            c('upper', 'upper'),
+            c('s(cdr_term_1)1', 's(cdr_term_1)2')
+        ))
+    )
 )
 class(fit) <- c('cdrgam_sparse', 'cdrgam')
 plan <- cdrgam:::.cdr_boundary_reduction_plan(fit, design)
+active_fit <- fit
+active_fit$sparse$penalty_trace[1:2] <- c(0.5, 0.5)
+active_plan <- cdrgam:::.cdr_boundary_reduction_plan(active_fit, design)
 reduced <- cdrgam:::.cdr_apply_boundary_reduction(design, plan)
 reduced_initial <- cdrgam:::.cdr_boundary_warm_start(fit, reduced)
 untransformed <- design
@@ -146,6 +189,9 @@ untransformed_reduced <- cdrgam:::.cdr_apply_boundary_reduction(
 )
 stopifnot(
     length(plan$entries) == 1L,
+    length(active_plan$entries) == 0L,
+    active_plan$table$status == 'active_penalized_subspace',
+    active_plan$table$remaining_penalized_edf > 1,
     identical(plan$entries[[1L]]$penalty_indices, 1:2),
     ncol(reduced$terms[[1L]]$X) == 1L,
     identical(dim(reduced$terms[[1L]]$transform), c(4L, 1L)),
@@ -308,6 +354,7 @@ automatic <- cdrgam.fit(
         optimizer_gradient_tolerance=1e6,
         boundary_action='reduce',
         boundary_log_sp=-1,
+        boundary_edf_tolerance=1e6,
         hessian='none'
     ),
     rank_action='minimum_norm'
@@ -339,6 +386,37 @@ stopifnot(
                 'mapped boundary-fit smoothing parameters'
             )
     }, logical(1)))
+)
+applied_summary_text <- capture.output(print(summary(automatic)))
+stopifnot(
+    any(grepl(
+        'Applied boundary penalty reductions:',
+        applied_summary_text,
+        fixed=TRUE
+    )),
+    !any(grepl(
+        'Boundary penalty reductions:',
+        applied_summary_text,
+        fixed=TRUE
+    ))
+)
+diagnostic_summary <- summary(automatic)
+diagnostic_summary$boundary_reductions$status[] <-
+    'certified_boundary_candidate'
+diagnostic_summary$conditional_on_boundary_reduction <- FALSE
+diagnostic_summary_text <- capture.output(print(diagnostic_summary))
+stopifnot(
+    any(grepl(
+        'Boundary reduction diagnostics (no reductions applied):',
+        diagnostic_summary_text,
+        fixed=TRUE
+    )),
+    any(grepl(
+        'Diagnostic rows do not change the fitted basis dimensions.',
+        diagnostic_summary_text,
+        fixed=TRUE
+    )),
+    any(grepl('candidate_dimension', diagnostic_summary_text, fixed=TRUE))
 )
 prediction_data <- responses[names(responses) != 'response']
 automatic_prediction <- predict(

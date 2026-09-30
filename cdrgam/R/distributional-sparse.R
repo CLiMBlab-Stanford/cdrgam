@@ -87,6 +87,11 @@
         optimizer_signature$optimizer_trust_radius <-
             control$optimizer_trust_radius
     }
+    if (identical(control$criterion, 'QNCV')) {
+        optimizer_signature$criterion <- 'QNCV'
+        optimizer_signature$gamma <- control$gamma
+        optimizer_signature$qncv_batch_size <- control$qncv_batch_size
+    }
     list(
         version=1L,
         backend='distributional-sparse',
@@ -670,6 +675,429 @@
     )
 }
 
+.cdrgam_sparse_row_inner <- function(design, coefficient_by_row) {
+    coefficient_by_row <- as.matrix(coefficient_by_row)
+    if (ncol(design) != nrow(coefficient_by_row) ||
+            nrow(design) != ncol(coefficient_by_row)) {
+        stop('Row-inner-product dimensions do not match')
+    }
+    if (!methods::is(design, 'sparseMatrix')) {
+        return(rowSums(design * t(coefficient_by_row)))
+    }
+    entries <- Matrix::summary(design)
+    if (!nrow(entries)) return(numeric(nrow(design)))
+    values <- entries$x * coefficient_by_row[cbind(
+        entries$j, entries$i
+    )]
+    summed <- rowsum(values, entries$i, reorder=FALSE)
+    output <- numeric(nrow(design))
+    output[as.integer(rownames(summed))] <- summed[, 1L]
+    output
+}
+
+.cdrgam_gaulss_sparse_qncv <- function(
+        assemblies, solution, gamma=1, batch_size=NULL,
+        coefficient_derivatives=NULL, hessian_derivatives=NULL
+) {
+    if (length(gamma) != 1L || !is.numeric(gamma) ||
+            !is.finite(gamma) || gamma <= 0) {
+        stop('gamma must be one positive finite number')
+    }
+    dimensions <- vapply(assemblies, `[[`, integer(1), 'dimension')
+    ranges <- split(seq_len(sum(dimensions)), rep(names(dimensions), dimensions))
+    derivative_count <- if (is.null(coefficient_derivatives)) 0L else {
+        coefficient_derivatives <- as.matrix(coefficient_derivatives)
+        ncol(coefficient_derivatives)
+    }
+    if (derivative_count && (
+            nrow(coefficient_derivatives) != sum(dimensions) ||
+            length(hessian_derivatives) != derivative_count)) {
+        stop('QNCV derivatives do not match the joint sparse system')
+    }
+    observation_count <- assemblies$location$observation_count
+    if (is.null(batch_size)) batch_size <- min(256L, observation_count)
+    batch_size <- min(as.integer(batch_size), observation_count)
+    if (!is.finite(batch_size) || batch_size < 1L) {
+        stop('QNCV batch size must be positive')
+    }
+    q <- exp(solution$linear_predictors[, 'scale'])
+    sigma <- solution$sigma
+    residual <- solution$residuals
+    weights <- solution$prior_weights
+    location_score <- weights * residual / sigma^2
+    scale_score <- weights * q * (
+        -1 / sigma + residual^2 / sigma^3
+    )
+    location_curvature <- weights / sigma^2
+    cross_curvature <- weights * 2 * q * residual / sigma^3
+    scale_curvature <- weights * (
+        q * (1 / sigma - residual^2 / sigma^3) +
+            q^2 * (-1 / sigma^2 + 3 * residual^2 / sigma^4)
+    )
+    delta_location <- numeric(observation_count)
+    delta_scale <- numeric(observation_count)
+    score <- numeric(derivative_count)
+    minimum_determinant <- Inf
+    for (start in seq.int(1L, observation_count, by=batch_size)) {
+        rows <- start:min(observation_count, start + batch_size - 1L)
+        count <- length(rows)
+        X_location <- .cdrgam_sparse_design_chunk(
+            assemblies$location, rows
+        )
+        X_scale <- .cdrgam_sparse_design_chunk(assemblies$scale, rows)
+        zero_location <- Matrix::Matrix(
+            0, dimensions[['location']], count, sparse=TRUE
+        )
+        zero_scale <- Matrix::Matrix(
+            0, dimensions[['scale']], count, sparse=TRUE
+        )
+        right_hand_sides <- rbind(
+            cbind(Matrix::t(X_location), zero_location),
+            cbind(zero_scale, Matrix::t(X_scale))
+        )
+        inverse_rows <- as.matrix(.cdr_factor_solve(
+            solution$factor, right_hand_sides
+        ))
+        location_columns <- seq_len(count)
+        scale_columns <- count + seq_len(count)
+        a11 <- .cdrgam_sparse_row_inner(
+            X_location,
+            inverse_rows[ranges$location, location_columns, drop=FALSE]
+        )
+        a12_location <- .cdrgam_sparse_row_inner(
+            X_location,
+            inverse_rows[ranges$location, scale_columns, drop=FALSE]
+        )
+        a12_scale <- .cdrgam_sparse_row_inner(
+            X_scale,
+            inverse_rows[ranges$scale, location_columns, drop=FALSE]
+        )
+        a12 <- (a12_location + a12_scale) / 2
+        a22 <- .cdrgam_sparse_row_inner(
+            X_scale,
+            inverse_rows[ranges$scale, scale_columns, drop=FALSE]
+        )
+        w11 <- location_curvature[rows]
+        w12 <- cross_curvature[rows]
+        w22 <- scale_curvature[rows]
+        c11 <- 1 - a11 * w11 - a12 * w12
+        c12 <- -a11 * w12 - a12 * w22
+        c21 <- -a12 * w11 - a22 * w12
+        c22 <- 1 - a12 * w12 - a22 * w22
+        determinant <- c11 * c22 - c12 * c21
+        minimum_determinant <- min(minimum_determinant, determinant)
+        if (any(!is.finite(determinant)) || any(abs(determinant) < 1e-10)) {
+            stop('QNCV leave-out system is numerically singular')
+        }
+        v1 <- a11 * location_score[rows] + a12 * scale_score[rows]
+        v2 <- a12 * location_score[rows] + a22 * scale_score[rows]
+        delta_location[rows] <- -(c22 * v1 - c12 * v2) / determinant
+        delta_scale[rows] <- -(-c21 * v1 + c11 * v2) / determinant
+        if (derivative_count) {
+            predictor_derivatives <- list(
+                location=as.matrix(X_location %*%
+                    coefficient_derivatives[
+                        ranges$location, , drop=FALSE
+                    ]),
+                scale=as.matrix(X_scale %*%
+                    coefficient_derivatives[ranges$scale, , drop=FALSE])
+            )
+            z_location <- inverse_rows[, location_columns, drop=FALSE]
+            z_scale <- inverse_rows[, scale_columns, drop=FALSE]
+            delta1 <- delta_location[rows]
+            delta2 <- delta_scale[rows]
+            l1 <- location_score[rows]
+            l2 <- scale_score[rows]
+            for (index in seq_len(derivative_count)) {
+                hessian_product <- as.matrix(
+                    hessian_derivatives[[index]] %*% inverse_rows
+                )
+                product_location <- hessian_product[
+                    , location_columns, drop=FALSE
+                ]
+                product_scale <- hessian_product[
+                    , scale_columns, drop=FALSE
+                ]
+                da11 <- -colSums(z_location * product_location)
+                da12 <- -0.5 * (
+                    colSums(z_location * product_scale) +
+                        colSums(z_scale * product_location)
+                )
+                da22 <- -colSums(z_scale * product_scale)
+                deta1 <- predictor_derivatives$location[, index]
+                deta2 <- predictor_derivatives$scale[, index]
+                dw11 <- -2 * weights[rows] * q[rows] / sigma[rows]^3 *
+                    deta2
+                dw12 <- -2 * weights[rows] * q[rows] / sigma[rows]^3 *
+                    deta1 + 2 * weights[rows] * (
+                        q[rows] * residual[rows] / sigma[rows]^3 -
+                            3 * q[rows]^2 * residual[rows] /
+                                sigma[rows]^4
+                    ) * deta2
+                scale_residual_weight <- weights[rows] * (
+                    -2 * q[rows] * residual[rows] / sigma[rows]^3 +
+                        6 * q[rows]^2 * residual[rows] / sigma[rows]^4
+                )
+                scale_q_weight <- weights[rows] * (
+                    1 / sigma[rows] - 3 * q[rows] / sigma[rows]^2 -
+                        residual[rows]^2 / sigma[rows]^3 +
+                        2 * q[rows]^2 / sigma[rows]^3 +
+                        9 * q[rows] * residual[rows]^2 / sigma[rows]^4 -
+                        12 * q[rows]^2 * residual[rows]^2 /
+                            sigma[rows]^5
+                )
+                dw22 <- -scale_residual_weight * deta1 +
+                    scale_q_weight * q[rows] * deta2
+                dl1 <- -w11 * deta1 - w12 * deta2
+                dl2 <- -w12 * deta1 - w22 * deta2
+                dc11 <- -(da11 * w11 + da12 * w12 +
+                    a11 * dw11 + a12 * dw12)
+                dc12 <- -(da11 * w12 + da12 * w22 +
+                    a11 * dw12 + a12 * dw22)
+                dc21 <- -(da12 * w11 + da22 * w12 +
+                    a12 * dw11 + a22 * dw12)
+                dc22 <- -(da12 * w12 + da22 * w22 +
+                    a12 * dw12 + a22 * dw22)
+                dv1 <- da11 * l1 + da12 * l2 + a11 * dl1 + a12 * dl2
+                dv2 <- da12 * l1 + da22 * l2 + a12 * dl1 + a22 * dl2
+                right1 <- dv1 + dc11 * delta1 + dc12 * delta2
+                right2 <- dv2 + dc21 * delta1 + dc22 * delta2
+                ddelta1 <- -(c22 * right1 - c12 * right2) / determinant
+                ddelta2 <- -(-c21 * right1 + c11 * right2) / determinant
+                full_derivative <- -(l1 * deta1 + l2 * deta2)
+                correction_derivative <-
+                    dl1 * delta1 + dl2 * delta2 +
+                    l1 * ddelta1 + l2 * ddelta2 -
+                    ddelta1 * (w11 * delta1 + w12 * delta2) -
+                    ddelta2 * (w12 * delta1 + w22 * delta2) -
+                    0.5 * (
+                        dw11 * delta1^2 +
+                            2 * dw12 * delta1 * delta2 +
+                            dw22 * delta2^2
+                    )
+                score[[index]] <- score[[index]] + sum(
+                    full_derivative - gamma * correction_derivative
+                )
+            }
+        }
+    }
+    log_likelihood <- -weights * (
+        log(sigma) + 0.5 * (residual / sigma)^2 + 0.5 * log(2 * pi)
+    )
+    linear_change <- location_score * delta_location +
+        scale_score * delta_scale
+    quadratic_change <- -(
+        location_curvature * delta_location^2 +
+            2 * cross_curvature * delta_location * delta_scale +
+            scale_curvature * delta_scale^2
+    )
+    criterion <- -sum(log_likelihood) - gamma * sum(
+        linear_change + 0.5 * quadratic_change
+    )
+    list(
+        criterion=criterion,
+        linear_predictors=solution$linear_predictors + cbind(
+            location=delta_location,
+            scale=delta_scale
+        ),
+        predictor_change=cbind(
+            location=delta_location,
+            scale=delta_scale
+        ),
+        score=if (derivative_count) score else NULL,
+        minimum_determinant=minimum_determinant,
+        batch_size=batch_size
+    )
+}
+
+.cdrgam_gaulss_qncv_direction_plan <- function(
+        assemblies, direction_count, cores, workers,
+        memory=.cdrgam_memory_availability()
+) {
+    direction_count <- .cdrgam_positive_integer(
+        direction_count, 'QNCV direction count'
+    )
+    plan <- .cdrgam_parallel_plan(cores, direction_count, workers)
+    requested_workers <- plan$workers
+    observation_count <- assemblies$location$observation_count
+    sample_count <- min(
+        observation_count,
+        assemblies$location$crossprod_chunk_size,
+        assemblies$scale$crossprod_chunk_size
+    )
+    sample_rows <- seq_len(sample_count)
+    sample <- lapply(assemblies, function(assembly) {
+        .cdrgam_sparse_design_chunk(assembly, sample_rows)
+    })
+    projected_design_bytes <- sum(vapply(
+        sample, utils::object.size, numeric(1)
+    )) * observation_count / sample_count
+    direction_bytes <- 16 * as.double(observation_count) * direction_count
+    rm(sample)
+    memory_budget_bytes <- if (is.finite(memory$available_bytes)) {
+        0.25 * memory$available_bytes
+    } else NA_real_
+    memory_workers <- if (is.finite(memory_budget_bytes) &&
+            projected_design_bytes > 0) {
+        max(0L, floor(
+            (memory_budget_bytes - direction_bytes) /
+                projected_design_bytes - 1
+        ))
+    } else 0L
+    resolved_workers <- min(requested_workers, memory_workers)
+    cache_parallel <- resolved_workers > 1L &&
+        .Platform$OS.type != 'windows'
+    if (!cache_parallel) resolved_workers <- 1L
+    plan$workers <- as.integer(resolved_workers)
+    plan$blas_threads <- max(1L, plan$cores %/% plan$workers)
+    plan$requested_workers <- as.integer(requested_workers)
+    plan$memory_workers <- as.integer(memory_workers)
+    plan$memory_limited <- plan$workers < requested_workers
+    plan$memory_source <- memory$source
+    plan$memory_available_bytes <- memory$available_bytes
+    plan$memory_budget_bytes <- memory_budget_bytes
+    plan$projected_design_bytes <- as.numeric(projected_design_bytes)
+    plan$direction_bytes <- as.numeric(direction_bytes)
+    plan$cache_parallel <- cache_parallel
+    plan
+}
+
+.cdrgam_gaulss_sparse_qncv_score <- function(
+        assemblies, solution, sp, family, gamma=1, batch_size=NULL,
+        cores=1L, workers=1L, score_batch_size=NULL
+) {
+    dimensions <- vapply(assemblies, `[[`, integer(1), 'dimension')
+    ranges <- split(seq_len(sum(dimensions)), rep(names(dimensions), dimensions))
+    counts <- vapply(
+        assemblies,
+        function(assembly) length(assembly$penalty_components),
+        integer(1)
+    )
+    tasks <- list()
+    offset <- 0L
+    for (parameter in names(assemblies)) {
+        for (local_index in seq_len(counts[[parameter]])) {
+            global_index <- offset + local_index
+            tasks[[global_index]] <- list(
+                parameter=parameter,
+                local_index=local_index,
+                global_index=global_index
+            )
+        }
+        offset <- offset + counts[[parameter]]
+    }
+    if (!length(tasks)) return(numeric())
+    derivative_bytes <- max(
+        1,
+        32 * as.double(Matrix::nnzero(solution$hessian)) +
+            16 * as.double(assemblies$location$observation_count)
+    )
+    plan <- .cdrgam_sparse_score_batch_plan(
+        length(tasks), workers, derivative_bytes, score_batch_size
+    )
+    direction_plan <- .cdrgam_gaulss_qncv_direction_plan(
+        assemblies,
+        direction_count=plan$batch_size,
+        cores=cores,
+        workers=plan$workers
+    )
+    plan$workers <- direction_plan$workers
+    evaluate <- function(indices) tryCatch({
+        started <- proc.time()[['elapsed']]
+        selected <- tasks[indices]
+        penalties <- lapply(selected, function(task) {
+            .cdrgam_distributional_global_penalty(
+                assemblies, ranges, task$parameter, task$local_index,
+                sp[[task$global_index]]
+            )
+        })
+        right_hand_sides <- do.call(cbind, lapply(
+            penalties,
+            function(penalty) as.numeric(
+                penalty %*% solution$coefficients
+            )
+        ))
+        coefficient_derivatives <- -as.matrix(.cdr_factor_solve(
+            solution$factor, right_hand_sides
+        ))
+        likelihood_derivatives <-
+            .cdrgam_gaulss_sparse_hessian_directions(
+                assemblies,
+                solution,
+                coefficient_derivatives,
+                .cdrgam_gaulss_b(family),
+                workers=plan$workers,
+                cache_parallel=direction_plan$cache_parallel
+            )
+        hessian_derivatives <- Map(function(penalty, likelihood) {
+            Matrix::forceSymmetric(penalty + likelihood, uplo='U')
+        }, penalties, likelihood_derivatives)
+        evaluated <- .cdrgam_gaulss_sparse_qncv(
+            assemblies,
+            solution,
+            gamma=gamma,
+            batch_size=batch_size,
+            coefficient_derivatives=coefficient_derivatives,
+            hessian_derivatives=hessian_derivatives
+        )
+        list(
+            indices=indices,
+            score=evaluated$score,
+            criterion=evaluated$criterion,
+            minimum_determinant=evaluated$minimum_determinant,
+            seconds=proc.time()[['elapsed']] - started,
+            error=NULL
+        )
+    }, error=function(error) list(
+        indices=indices,
+        score=NULL,
+        criterion=NA_real_,
+        minimum_determinant=NA_real_,
+        seconds=NA_real_,
+        error=conditionMessage(error)
+    ))
+    results <- .cdrgam_with_blas_threads(
+        direction_plan$blas_threads,
+        lapply(plan$groups, evaluate)
+    )
+    failed <- which(vapply(
+        results, function(result) !is.null(result$error), logical(1)
+    ))
+    if (length(failed)) {
+        result <- results[[failed[[1L]]]]
+        stop(
+            'Exact QNCV score batch ',
+            paste(result$indices, collapse=', '),
+            ' failed: ', result$error
+        )
+    }
+    output <- numeric(length(tasks))
+    for (result in results) output[result$indices] <- result$score
+    attr(output, 'criterion') <- results[[1L]]$criterion
+    attr(output, 'minimum_determinant') <- min(vapply(
+        results, `[[`, numeric(1), 'minimum_determinant'
+    ))
+    attr(output, 'score_plan') <- list(
+        workers=plan$workers,
+        requested_workers=direction_plan$requested_workers,
+        blas_threads=direction_plan$blas_threads,
+        memory_limited=direction_plan$memory_limited,
+        design_cache=direction_plan$cache_parallel,
+        parallel_axis='QNCV Hessian directions and leave-out solves',
+        batches=length(plan$groups),
+        batch_size=plan$batch_size,
+        response_batch_size=batch_size,
+        derivative_bytes=plan$derivative_bytes,
+        memory_source=plan$memory$source,
+        memory_available_bytes=plan$memory$available_bytes,
+        memory_budget_bytes=direction_plan$memory_budget_bytes,
+        projected_design_bytes=direction_plan$projected_design_bytes,
+        direction_bytes=direction_plan$direction_bytes,
+        batch_seconds=vapply(results, `[[`, numeric(1), 'seconds')
+    )
+    output
+}
+
 .cdrgam_distributional_global_penalty <- function(
         assemblies, ranges, parameter, index, sp
 ) {
@@ -770,7 +1198,8 @@
 }
 
 .cdrgam_gaulss_sparse_hessian_directions <- function(
-        assemblies, solution, coefficient_derivatives, b, workers=1L
+        assemblies, solution, coefficient_derivatives, b, workers=1L,
+        cache_parallel=NULL
 ) {
     coefficient_derivatives <- as.matrix(coefficient_derivatives)
     dimensions <- vapply(assemblies, `[[`, integer(1), 'dimension')
@@ -803,11 +1232,13 @@
         projected_bytes <- sum(vapply(sample, utils::object.size, numeric(1))) *
             observation_count / sample_count
         direction_bytes <- 16 * as.double(observation_count) * count
-        memory <- .cdrgam_memory_availability()
-        projected_working_bytes <-
-            projected_bytes * (workers + 1) + direction_bytes
-        cache_safe <- is.finite(memory$available_bytes) &&
-            projected_working_bytes <= 0.25 * memory$available_bytes
+        cache_safe <- if (is.null(cache_parallel)) {
+            memory <- .cdrgam_memory_availability()
+            projected_working_bytes <-
+                projected_bytes * (workers + 1) + direction_bytes
+            is.finite(memory$available_bytes) &&
+                projected_working_bytes <= 0.25 * memory$available_bytes
+        } else isTRUE(cache_parallel)
         if (cache_safe) {
             cached_design <- lapply(assemblies, function(assembly) {
                 .cdrgam_sparse_design_chunk(
@@ -1389,6 +1820,7 @@
         assemblies, family, control, reporter=NULL, checkpoint=NULL,
         checkpoint_signature=NULL
 ) {
+    qncv <- identical(control$criterion, 'QNCV')
     counts <- vapply(
         assemblies, function(assembly) length(assembly$penalty_components),
         integer(1)
@@ -1527,17 +1959,31 @@
         score_started <- proc.time()[['elapsed']]
         scored <- tryCatch(
             list(
-                value=.cdrgam_with_blas_threads(
-                    control$gradient_blas_threads,
-                    .cdrgam_gaulss_sparse_score(
+                value=if (qncv) {
+                    .cdrgam_gaulss_sparse_qncv_score(
                         assemblies,
                         value$solution,
                         value$solution$sp,
                         family,
+                        gamma=control$gamma,
+                        batch_size=control$qncv_batch_size,
+                        cores=control$cores,
                         workers=control$gradient_workers,
-                        batch_size=control$score_batch_size
+                        score_batch_size=control$score_batch_size
                     )
-                ),
+                } else {
+                    .cdrgam_with_blas_threads(
+                        control$gradient_blas_threads,
+                        .cdrgam_gaulss_sparse_score(
+                            assemblies,
+                            value$solution,
+                            value$solution$sp,
+                            family,
+                            workers=control$gradient_workers,
+                            batch_size=control$score_batch_size
+                        )
+                    )
+                },
                 error=NULL
             ),
             error=function(error) list(
@@ -1722,24 +2168,41 @@
             warm_start=used_warm_start,
             cold_fallback=used_warm_start && !isTRUE(solution$warm_started)
         )
-        penalty_determinant <- 0
-        offset <- 0L
-        for (parameter in names(assemblies)) {
-            count <- counts[[parameter]]
-            indices <- offset + seq_len(count)
-            penalty_determinant <- penalty_determinant +
-                .sparse_penalty_logdet(
-                    assemblies[[parameter]]$blocks, exp(log_sp[indices])
-                )$value
-            offset <- offset + count
+        criterion_evaluation <- if (qncv) {
+            .cdrgam_gaulss_sparse_qncv(
+                assemblies,
+                solution,
+                gamma=control$gamma,
+                batch_size=control$qncv_batch_size
+            )
+        } else NULL
+        if (qncv) {
+            criterion <- criterion_evaluation$criterion
+        } else {
+            penalty_determinant <- 0
+            offset <- 0L
+            for (parameter in names(assemblies)) {
+                count <- counts[[parameter]]
+                indices <- offset + seq_len(count)
+                penalty_determinant <- penalty_determinant +
+                    .sparse_penalty_logdet(
+                        assemblies[[parameter]]$blocks,
+                        exp(log_sp[indices])
+                    )$value
+                offset <- offset + count
+            }
+            criterion <- 2 * solution$objective +
+                .cdr_factor_logdet(solution$factor) - penalty_determinant
         }
-        criterion <- 2 * solution$objective +
-            .cdr_factor_logdet(solution$factor) - penalty_determinant
         if (!is.finite(criterion)) {
-            return(invalid_evaluation(log_sp, 'LAML criterion was not finite'))
+            return(invalid_evaluation(
+                log_sp,
+                paste(control$criterion, 'criterion was not finite')
+            ))
         }
         solution$criterion <- criterion
         solution$sp <- exp(log_sp)
+        if (qncv) solution$qncv <- criterion_evaluation
         value <- list(
             criterion=criterion,
             score=NULL,
@@ -1842,7 +2305,8 @@
     completed_optimization <- if (
         identical(checkpoint_state$stage, 'complete')
     ) checkpoint_state$optimization else NULL
-    run_stochastic <- identical(control$gradient_method, 'hybrid') &&
+    run_stochastic <- !qncv &&
+        identical(control$gradient_method, 'hybrid') &&
         !identical(checkpoint_phase, 'exact') &&
         !identical(checkpoint_state$stage, 'complete')
     if (run_stochastic) {
@@ -2098,12 +2562,18 @@
             '; optimizer endpoint was replaced by its best valid evaluation'
         )
     }
-    if (max(abs(optimization$gradient)) >
+    projected_gradient <- optimization$gradient
+    at_lower <- optimization$par <= lower_bound + 1e-10
+    at_upper <- optimization$par >= upper_bound - 1e-10
+    projected_gradient[at_lower & projected_gradient > 0] <- 0
+    projected_gradient[at_upper & projected_gradient < 0] <- 0
+    optimization$projected_gradient <- projected_gradient
+    if (max(abs(projected_gradient)) >
             control$optimizer_gradient_tolerance) {
         optimization$convergence <- 1L
         score_message <- paste0(
             'outer score ',
-            format(max(abs(optimization$gradient)), digits=5),
+            format(max(abs(projected_gradient)), digits=5),
             ' exceeds tolerance ',
             format(control$optimizer_gradient_tolerance, digits=5)
         )
@@ -2122,7 +2592,8 @@
     solution <- retained$solution
     if (is.null(solution)) {
         stop(
-            'Sparse gaulss LAML optimization ended at an invalid fit: ',
+            'Sparse gaulss ', control$criterion,
+            ' optimization ended at an invalid fit: ',
             retained$invalid_reason
         )
     }
@@ -2196,7 +2667,7 @@
 
 .fit_distributional_sparse <- function(
         design, family, method=NULL, checkpoint=NULL, trace=FALSE,
-        sparse_control=list(), ...
+        sparse_control=list(), gamma=1, ...
 ) {
     dots <- list(...)
     if (!is.null(dots$weights) && any(dots$weights != 1)) {
@@ -2205,14 +2676,27 @@
             'but ignores them'
         )
     }
-    if (!is.null(method) && !(method %in% c('REML', 'fREML'))) {
-        stop('The distributional sparse backend currently supports only REML')
+    if (!is.null(method) && !(method %in% c('REML', 'fREML', 'QNCV'))) {
+        stop('The distributional sparse backend supports REML and QNCV')
+    }
+    criterion_method <- if (identical(method, 'QNCV')) 'QNCV' else 'REML'
+    qncv <- identical(criterion_method, 'QNCV')
+    if (length(gamma) != 1L || !is.numeric(gamma) ||
+            !is.finite(gamma) || gamma <= 0) {
+        stop('gamma must be one positive finite number')
+    }
+    if (qncv && !is.null(dots$nei)) {
+        stop(
+            'Sparse QNCV currently supports its default ',
+            'leave-one-response-out neighborhoods only'
+        )
     }
     allowed <- c(
         'crossprod_chunk_size', 'supernodal', 'optimizer_maxit',
         'optimizer_gradient_tolerance', 'optimizer_trust_radius',
         'inner_tolerance', 'inner_maxit', 'cores', 'gradient',
-        'gradient_probes', 'gradient_workers', 'score_batch_size'
+        'gradient_probes', 'gradient_workers', 'score_batch_size',
+        'qncv_batch_size'
     )
     unknown <- setdiff(names(sparse_control), allowed)
     if (length(unknown)) {
@@ -2247,6 +2731,9 @@
         'auto'
     } else {
         match.arg(sparse_control$gradient, c('auto', 'exact', 'hybrid'))
+    }
+    if (qncv && identical(gradient_requested, 'hybrid')) {
+        stop('Sparse QNCV supports gradient="auto" or "exact"')
     }
     gradient_probes <- if (is.null(sparse_control$gradient_probes)) {
         64L
@@ -2298,7 +2785,9 @@
         integer(1)
     ))
     dimension <- sum(vapply(assemblies, `[[`, integer(1), 'dimension'))
-    gradient_method <- if (identical(gradient_requested, 'auto')) {
+    gradient_method <- if (qncv) {
+        'exact'
+    } else if (identical(gradient_requested, 'auto')) {
         if (dimension > max(512L, 4L * gradient_probes)) 'hybrid' else 'exact'
     } else gradient_requested
     gradient_plan <- .cdrgam_parallel_plan(
@@ -2330,8 +2819,32 @@
             'sparse_control$score_batch_size'
         )
     }
+    control$qncv_batch_size <- if (qncv) {
+        memory <- .cdrgam_memory_availability()
+        target_bytes <- if (is.finite(memory$available_bytes)) {
+            min(256 * 1024^2, 0.05 * memory$available_bytes)
+        } else 128 * 1024^2
+        automatic <- max(1L, min(
+            length(y),
+            assemblies$location$crossprod_chunk_size,
+            assemblies$scale$crossprod_chunk_size,
+            floor(target_bytes / max(1, 32 * as.double(dimension)))
+        ))
+        if (is.null(sparse_control$qncv_batch_size)) {
+            as.integer(automatic)
+        } else min(
+            length(y),
+            .cdrgam_positive_integer(
+                sparse_control$qncv_batch_size,
+                'sparse_control$qncv_batch_size'
+            )
+        )
+    } else NULL
+    control$criterion <- criterion_method
+    control$gamma <- gamma
     reporter$phase(
         'joint smoothing-parameter optimization',
+        criterion=criterion_method,
         smoothing_parameters=score_tasks,
         requested_gradient=gradient_requested,
         gradient=control$gradient_method,
@@ -2342,7 +2855,12 @@
         inner_blas_threads=control$inner_blas_threads,
         gradient_workers=control$gradient_workers,
         gradient_blas_threads=control$gradient_blas_threads,
-        exact_score_batching='memory-bounded shared traces',
+        exact_score_batching=if (qncv) {
+            'memory-bounded Hessian directions and leave-out solves'
+        } else 'memory-bounded shared traces',
+        qncv_response_batch_size=if (qncv) {
+            control$qncv_batch_size
+        } else 0L,
         inner_solver='streamed sparse Fisher scoring'
     )
     checkpoint_signature <- .cdrgam_distributional_checkpoint_signature(
@@ -2356,6 +2874,20 @@
             checkpoint_signature=checkpoint_signature
         )
     )
+    if (qncv && !is.null(result$score_plan)) {
+        control$gradient_workers_requested <-
+            result$score_plan$requested_workers
+        control$gradient_workers <- result$score_plan$workers
+        control$gradient_blas_threads <- result$score_plan$blas_threads
+        control$gradient_memory_limited <-
+            result$score_plan$memory_limited
+        control$gradient_memory_source <- result$score_plan$memory_source
+        control$gradient_memory_available_bytes <-
+            result$score_plan$memory_available_bytes
+        control$gradient_memory_budget_bytes <-
+            result$score_plan$memory_budget_bytes
+        control$gradient_design_cache <- result$score_plan$design_cache
+    }
     solution <- result$solution
     dimensions <- vapply(assemblies, `[[`, integer(1), 'dimension')
     ranges <- split(seq_len(sum(dimensions)), rep(names(dimensions), dimensions))
@@ -2403,7 +2935,7 @@
         sp=smoothing_parameters,
         scale=1,
         sig2=1,
-        method='REML',
+        method=criterion_method,
         smooth=smooths,
         converged=isTRUE(solution$converged) &&
             identical(result$optimization$convergence, 0L),
@@ -2420,7 +2952,11 @@
                 0.5 * (solution$residuals / solution$sigma)^2 +
                 0.5 * log(2 * pi)
         )),
-        reml=solution$criterion,
+        reml=if (qncv) NULL else solution$criterion,
+        gcv.ubre=if (qncv) stats::setNames(
+            solution$criterion, 'QNCV'
+        ) else NULL,
+        qncv=if (qncv) solution$criterion else NULL,
         optimizer=result$optimization,
         distributional=list(
             sigma=solution$sigma,
@@ -2435,7 +2971,11 @@
             warm_starts=result$warm_starts,
             cold_fallbacks=result$cold_fallbacks,
             score_plan=result$score_plan,
-            stochastic_score_plan=result$stochastic_score_plan
+            stochastic_score_plan=result$stochastic_score_plan,
+            qncv=if (qncv) list(
+                minimum_determinant=solution$qncv$minimum_determinant,
+                response_batch_size=solution$qncv$batch_size
+            ) else NULL
         ),
         sparse=list(
             factor=solution$factor,
@@ -2498,8 +3038,15 @@
                 tolerance=.rank_tolerance(NULL)
             ),
             solver=paste(
-                'sparse Gaussian location-scale LAML solver',
-                if (identical(control$gradient_method, 'hybrid')) {
+                if (qncv) {
+                    'sparse Gaussian location-scale QNCV solver'
+                } else 'sparse Gaussian location-scale LAML solver',
+                if (qncv) {
+                    paste(
+                        '(streamed Fisher scoring, low-rank leave-out',
+                        'updates, exact-score BFGS)'
+                    )
+                } else if (identical(control$gradient_method, 'hybrid')) {
                     paste(
                         '(streamed Fisher scoring, matrix-free stochastic',
                         'warm-up, exact-score BFGS refinement)'

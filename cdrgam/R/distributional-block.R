@@ -645,6 +645,7 @@ summary.cdrgam_distributional_block <- function(
             object$distributional$sigma)^2
     )
     formulas <- .cdrgam_summary_formulas(object)
+    qncv <- identical(object$method, 'QNCV')
     output <- list(
         call=object$call,
         family=object$family,
@@ -676,8 +677,8 @@ summary.cdrgam_distributional_block <- function(
         dev.expl=if (null_deviance > 0) {
             1 - deviance / null_deviance
         } else NA_real_,
-        method='-REML',
-        sp.criterion=object$reml,
+        method=if (qncv) 'QNCV' else '-REML',
+        sp.criterion=if (qncv) object$qncv else object$reml,
         rank=length(object$coefficients),
         np=length(object$coefficients),
         n=length(object$y),

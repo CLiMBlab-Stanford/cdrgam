@@ -311,6 +311,11 @@
         ))
     }
     formulas <- .cdrgam_summary_formulas(object)
+    gcv <- identical(object$method, 'GCV.Cp')
+    prediction_error_method <- if (gcv &&
+            !is.null(object$sparse$control$criterion)) {
+        object$sparse$control$criterion
+    } else if (gcv) 'GCV' else '-REML'
     output <- list(
         call=object$call,
         family=object$family,
@@ -347,8 +352,8 @@
         deviance=deviance,
         null.deviance=null_deviance,
         dev.expl=if (null_deviance > 0) 1 - deviance / null_deviance else NA_real_,
-        method='-REML',
-        sp.criterion=object$reml,
+        method=prediction_error_method,
+        sp.criterion=if (gcv) unname(object$gcv.ubre) else object$reml,
         rank=length(object$coefficients),
         np=length(object$coefficients),
         n=length(object$y),

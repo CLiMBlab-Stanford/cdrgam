@@ -327,6 +327,59 @@
     list(hessian=out, evaluations=2L * count)
 }
 
+.bounded_positive_quadratic_step <- function(
+        hessian,
+        gradient,
+        lower,
+        upper,
+        initial,
+        gradient_tolerance
+) {
+    objective <- function(step) {
+        sum(gradient * step) +
+            drop(crossprod(step, hessian %*% step)) / 2
+    }
+    score <- function(step) drop(gradient + hessian %*% step)
+    solution <- tryCatch(
+        stats::optim(
+            pmin(upper, pmax(lower, initial)),
+            objective,
+            score,
+            method='L-BFGS-B',
+            lower=lower,
+            upper=upper,
+            control=list(
+                factr=10,
+                pgtol=min(1e-10, gradient_tolerance / 100),
+                maxit=200L
+            )
+        ),
+        error=function(error) NULL
+    )
+    if (is.null(solution) || solution$convergence != 0L ||
+            any(!is.finite(solution$par)) || !is.finite(solution$value)) {
+        return(list(
+            converged=FALSE,
+            step=initial,
+            predicted_improvement=NA_real_,
+            active=rep.int(FALSE, length(initial))
+        ))
+    }
+    step <- as.numeric(solution$par)
+    final_score <- score(step)
+    tolerance <- 1e-8 * (1 + pmax(abs(lower), abs(upper), abs(step)))
+    at_lower <- is.finite(lower) & step <= lower + tolerance
+    at_upper <- is.finite(upper) & step >= upper - tolerance
+    active <- (at_lower & final_score > 0) |
+        (at_upper & final_score < 0)
+    list(
+        converged=TRUE,
+        step=step,
+        predicted_improvement=max(0, -as.numeric(solution$value)),
+        active=active
+    )
+}
+
 .analytic_outer_convergence_assessment <- function(
         hessian,
         gradient,
@@ -334,7 +387,10 @@
         gradient_tolerance,
         initial_radius,
         objective_noise=0,
-        active=NULL
+        active=NULL,
+        parameters=NULL,
+        lower=NULL,
+        upper=NULL
 ) {
     hessian <- (as.matrix(hessian) + t(as.matrix(hessian))) / 2
     dimension <- length(gradient)
@@ -382,12 +438,58 @@
             -coordinates[positive] / values[positive]
     }
     free_newton_step <- drop(vectors %*% step_coordinates)
+    bounded <- !is.null(parameters) || !is.null(lower) || !is.null(upper)
+    bounded_quadratic_converged <- NA
+    constrained_active <- rep.int(FALSE, length(free))
+    if (bounded) {
+        if (is.null(parameters) || is.null(lower) || is.null(upper)) {
+            stop('parameters, lower, and upper must be supplied together')
+        }
+        parameters <- rep_len(as.numeric(parameters), dimension)
+        lower <- rep_len(as.numeric(lower), dimension)
+        upper <- rep_len(as.numeric(upper), dimension)
+        if (anyNA(c(parameters, lower, upper)) ||
+                any(!is.finite(parameters)) || any(lower > upper) ||
+                any(parameters < lower) || any(parameters > upper)) {
+            stop('parameters must lie within valid outer bounds')
+        }
+        if (any(positive)) {
+            positive_hessian <- vectors[, positive, drop=FALSE] %*%
+                (values[positive] * t(vectors[, positive, drop=FALSE]))
+            positive_gradient <- drop(
+                vectors[, positive, drop=FALSE] %*% coordinates[positive]
+            )
+            bounded_step <- .bounded_positive_quadratic_step(
+                positive_hessian,
+                positive_gradient,
+                lower[free] - parameters[free],
+                upper[free] - parameters[free],
+                free_newton_step,
+                gradient_tolerance
+            )
+            bounded_quadratic_converged <- bounded_step$converged
+            if (bounded_step$converged) {
+                free_newton_step <- bounded_step$step
+                constrained_active <- bounded_step$active
+            }
+        } else {
+            bounded_quadratic_converged <- TRUE
+        }
+    }
     newton_step <- numeric(dimension)
     newton_step[free] <- free_newton_step
-    predicted_improvement <- if (any(positive)) {
+    unconstrained_predicted_improvement <- if (any(positive)) {
         sum(coordinates[positive]^2 / values[positive]) / 2
     } else {
         0
+    }
+    predicted_improvement <- if (isTRUE(bounded_quadratic_converged) &&
+            any(positive)) {
+        bounded_step$predicted_improvement
+    } else if (isTRUE(bounded_quadratic_converged)) {
+        0
+    } else {
+        unconstrained_predicted_improvement
     }
     unresolved_gradient <- if (any(!positive)) {
         max(abs(coordinates[!positive]))
@@ -410,7 +512,8 @@
     objective_floor <- max(baseline_objective_floor, objective_noise)
     converged <- is.finite(predicted_improvement) &&
         predicted_improvement <= objective_floor &&
-        unresolved_gradient <= gradient_tolerance
+        unresolved_gradient <= gradient_tolerance &&
+        !identical(bounded_quadratic_converged, FALSE)
     eigenvalue_floor <- scale * 1e-6
     free_restart_hessian <- vectors %*% (
         pmax(values, eigenvalue_floor) * t(vectors)
@@ -424,6 +527,8 @@
     )
     diagnostics <- list(
         predicted_improvement=predicted_improvement,
+        unconstrained_predicted_improvement=
+            unconstrained_predicted_improvement,
         objective_floor=objective_floor,
         baseline_objective_floor=baseline_objective_floor,
         observed_objective_noise=objective_noise,
@@ -433,7 +538,9 @@
         minimum_eigenvalue=min(values),
         positive_directions=sum(positive),
         flat_directions=sum(!positive),
-        active_bound_directions=sum(active),
+        active_bound_directions=sum(active) + sum(constrained_active),
+        bounded_quadratic=bounded,
+        bounded_quadratic_converged=bounded_quadratic_converged,
         dimension=dimension
     )
     list(

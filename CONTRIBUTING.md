@@ -16,10 +16,31 @@ for test_file in cdrgam/tests/*.R; do
 done
 ```
 
+During development, use `scripts/test` to install the current source into a
+temporary library and run one focused scope:
+
+```sh
+./scripts/test api
+./scripts/test design
+./scripts/test gaussian
+./scripts/test generalized
+./scripts/test distributional
+./scripts/test optimizer
+./scripts/test recovery
+```
+
+The script also accepts the stem of one file in `cdrgam/tests/` or `all`.
+
 Use a clean temporary R library when testing package installation or namespace
 behavior. Run relevant scripts under `validation/` for changes to numerical
 methods, scaling behavior, recovery, or empirical model results. Generated
 validation results are not committed.
+
+Downstream packages should use exported functions rather than fitted-object
+implementation fields. Extend `fit_metadata()`, `fit_report()`, or
+`predict_components()` when a downstream tool needs additional stable model
+information. Test changes to these functions against native `mgcv`, block, and
+sparse fits when the reported field differs by backend.
 
 Before merging a release, update `Version` in `cdrgam/DESCRIPTION`, run the
 complete test suite, and run `R CMD check` on a clean source package. Document

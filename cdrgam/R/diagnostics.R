@@ -8,8 +8,13 @@
 fit_diagnostics <- function(object) {
     if (!is_cdrgam(object)) stop('object must be a fitted cdrgam model')
     if (inherits(object, 'cdrgam_distributional_sparse')) {
-        gradient_norm <- if (length(object$optimizer$gradient)) {
-            max(abs(object$optimizer$gradient))
+        diagnostic_gradient <- if (length(
+                object$optimizer$projected_gradient
+            )) object$optimizer$projected_gradient else {
+            object$optimizer$gradient
+        }
+        gradient_norm <- if (length(diagnostic_gradient)) {
+            max(abs(diagnostic_gradient))
         } else NA_real_
         return(list(
             converged=isTRUE(object$converged),

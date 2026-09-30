@@ -1,0 +1,48 @@
+#!/bin/sh
+set -eu
+
+scope=${1:-all}
+case "$scope" in
+    api) tests='formula-streams effects marginaleffects' ;;
+    design) tests='axis-irf automatic-simplification identifiability predictor-scaling' ;;
+    gaussian) tests='compressed boundary-reduction checkpoint-progress randomized-equivalence schur-factor sparse-gcv sparse-robustness' ;;
+    generalized) tests='generalized-families generalized-gcv' ;;
+    distributional) tests='distributional-checkpoint distributional-native distributional-qncv distributional-score' ;;
+    optimizer) tests='boundary-reduction checkpoint-progress hybrid-transition parallelism sparse-gcv generalized-gcv distributional-qncv' ;;
+    recovery) tests='mixed-recovery nonlinear-recovery synthetic-recovery varying-recovery' ;;
+    all) tests='automatic-simplification axis-irf boundary-reduction checkpoint-progress compressed distributional-checkpoint distributional-native distributional-qncv distributional-score effects formula-streams generalized-families generalized-gcv hybrid-transition identifiability marginaleffects mixed-recovery nonlinear-recovery parallelism predictor-scaling randomized-equivalence schur-factor sparse-gcv sparse-robustness synthetic-recovery varying-recovery' ;;
+    *)
+        if [ -f "cdrgam/tests/$scope.R" ]; then
+            tests=$scope
+        else
+            echo "Unknown test scope: $scope" >&2
+            exit 2
+        fi
+        ;;
+esac
+
+if [ "${R_BIN+x}" = x ]; then
+    r_bin=$R_BIN
+else
+    r_bin=$(command -v R)
+fi
+
+temporary_root=${TMPDIR:-/tmp}
+if [ ! -d "$temporary_root" ] || [ ! -w "$temporary_root" ]; then
+    temporary_root=/tmp
+fi
+test_library=$(mktemp -d "$temporary_root/cdrgam-test-lib.XXXXXX")
+source_copy=$(mktemp -d "$temporary_root/cdrgam-test-source.XXXXXX")
+trap 'rm -rf "$test_library" "$source_copy"' EXIT HUP INT TERM
+mkdir -p "$test_library/cache"
+export XDG_CACHE_HOME="$test_library/cache"
+cp -a cdrgam "$source_copy/cdrgam"
+"$r_bin" CMD INSTALL --preclean -l "$test_library" \
+    "$source_copy/cdrgam" >/dev/null
+
+for test_name in $tests; do
+    test_file="$source_copy/cdrgam/tests/$test_name.R"
+    echo "RUN cdrgam/tests/$test_name.R"
+    R_LIBS="$test_library${R_LIBS:+:$R_LIBS}" \
+        "$r_bin" --vanilla --slave -f "$test_file"
+done

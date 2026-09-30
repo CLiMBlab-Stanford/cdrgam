@@ -46,6 +46,63 @@
     plan
 }
 
+.cdrgam_memory_parallel_plan <- function(
+        cores, tasks, workers=NULL, per_worker_bytes,
+        memory_fraction=0.5, reserve_bytes=512 * 1024^2,
+        memory=.cdrgam_memory_availability()
+) {
+    plan <- .cdrgam_parallel_plan(cores, tasks, workers)
+    requested_workers <- plan$workers
+    if (length(per_worker_bytes) != 1L || !is.numeric(per_worker_bytes) ||
+            !is.finite(per_worker_bytes) || per_worker_bytes <= 0) {
+        stop('per_worker_bytes must be one positive finite number')
+    }
+    if (length(memory_fraction) != 1L || !is.numeric(memory_fraction) ||
+            !is.finite(memory_fraction) || memory_fraction <= 0 ||
+            memory_fraction > 1) {
+        stop('memory_fraction must lie in (0, 1]')
+    }
+    if (length(reserve_bytes) != 1L || !is.numeric(reserve_bytes) ||
+            !is.finite(reserve_bytes) || reserve_bytes < 0) {
+        stop('reserve_bytes must be one nonnegative finite number')
+    }
+    available <- memory$available_bytes
+    budget <- if (is.finite(available)) {
+        max(0, min(memory_fraction * available, available - reserve_bytes))
+    } else NA_real_
+    memory_workers <- if (is.finite(budget)) {
+        max(1L, floor(budget / per_worker_bytes))
+    } else plan$workers
+    resolved_workers <- min(plan$workers, memory_workers)
+    plan$workers <- as.integer(resolved_workers)
+    plan$blas_threads <- max(1L, plan$cores %/% plan$workers)
+    plan$requested_workers <- as.integer(requested_workers)
+    plan$per_worker_bytes <- as.numeric(per_worker_bytes)
+    plan$memory_workers <- as.integer(memory_workers)
+    plan$memory_limited <- plan$workers < requested_workers
+    plan$memory_fraction <- memory_fraction
+    plan$memory_reserve_bytes <- reserve_bytes
+    plan$memory_budget_bytes <- budget
+    plan$memory_source <- memory$source
+    plan$memory_available_bytes <- available
+    plan
+}
+
+.cdrgam_sparse_worker_bytes <- function(
+        system, factor, transient_bytes=0
+) {
+    system_nonzeros <- as.double(Matrix::nnzero(system))
+    factor_nonzeros <- as.double(.cdr_factor_nonzeros(factor))
+    if (length(transient_bytes) != 1L || !is.numeric(transient_bytes) ||
+            !is.finite(transient_bytes) || transient_bytes < 0) {
+        stop('transient_bytes must be one nonnegative finite number')
+    }
+    max(
+        1,
+        48 * system_nonzeros + 64 * factor_nonzeros + transient_bytes
+    )
+}
+
 .cdrgam_sparse_score_batch_plan <- function(
         task_count, workers, derivative_bytes, batch_size=NULL
 ) {

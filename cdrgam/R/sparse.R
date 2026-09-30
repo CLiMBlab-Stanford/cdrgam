@@ -1200,6 +1200,137 @@
     )
 }
 
+.sparse_exact_gcv_gradient <- function(
+        factor,
+        sp,
+        components,
+        supports,
+        coefficients,
+        residual_rss,
+        effective_df,
+        observation_count,
+        gamma=1,
+        chunk_size=64L,
+        element_limit=getOption('cdrgam.max_analytic_hessian_elements', 2e8)
+) {
+    penalty_count <- length(components)
+    union_support <- sort(unique(unlist(supports, use.names=FALSE)))
+    support_positions <- lapply(supports, match, table=union_support)
+    stored_elements <- length(union_support) * sum(lengths(supports))
+    if (!is.numeric(element_limit) || length(element_limit) != 1L ||
+            !is.finite(element_limit) || element_limit < 1) {
+        stop('The exact GCV-gradient element limit must be positive')
+    }
+    if (stored_elements > element_limit) {
+        stop(
+            'The exact GCV gradient would retain ',
+            format(stored_elements, scientific=FALSE, big.mark=','),
+            ' selected-inverse elements; the current limit is ',
+            format(element_limit, scientific=FALSE, big.mark=','),
+            '. Use gradient="finite" or raise option ',
+            'cdrgam.max_analytic_hessian_elements explicitly.'
+        )
+    }
+    inverse_derivatives <- vector('list', penalty_count)
+    coefficient_derivatives <- vector('list', penalty_count)
+    system_scores <- numeric(penalty_count)
+    penalty_times_coefficients <- numeric(length(coefficients))
+    for (i in seq_len(penalty_count)) {
+        support <- supports[[i]]
+        positions <- support_positions[[i]]
+        derivative <- sp[[i]] * components[[i]]
+        selected_inverse_derivative <- matrix(
+            0,
+            nrow=length(union_support),
+            ncol=length(support)
+        )
+        if (length(support)) {
+            for (start in seq.int(1L, length(support), by=chunk_size)) {
+                selected <- start:min(
+                    length(support),
+                    start + chunk_size - 1L
+                )
+                columns <- support[selected]
+                solved <- .cdr_factor_solve(
+                    factor,
+                    derivative[, columns, drop=FALSE]
+                )
+                selected_inverse_derivative[, selected] <- as.matrix(
+                    solved[union_support, , drop=FALSE]
+                )
+            }
+            local_rhs <- as.numeric(
+                derivative[support, support, drop=FALSE] %*%
+                    coefficients[support]
+            )
+            penalty_times_coefficients[support] <-
+                penalty_times_coefficients[support] + local_rhs
+            coefficient_derivatives[[i]] <- drop(
+                selected_inverse_derivative %*% coefficients[support]
+            )
+            system_scores[[i]] <- sum(selected_inverse_derivative[cbind(
+                positions,
+                seq_along(support)
+            )])
+        } else {
+            coefficient_derivatives[[i]] <- numeric(length(union_support))
+        }
+        inverse_derivatives[[i]] <- selected_inverse_derivative
+    }
+    trace_cross_sums <- numeric(penalty_count)
+    for (i in seq_len(penalty_count)) {
+        positions_i <- support_positions[[i]]
+        for (j in seq_len(i)) {
+            support_j <- supports[[j]]
+            positions_j <- support_positions[[j]]
+            trace_cross <- 0
+            if (length(support_j)) {
+                for (start in seq.int(
+                        1L,
+                        length(support_j),
+                        by=chunk_size
+                    )) {
+                    selected <- start:min(
+                        length(support_j),
+                        start + chunk_size - 1L
+                    )
+                    left <- inverse_derivatives[[j]][
+                        positions_i,
+                        selected,
+                        drop=FALSE
+                    ]
+                    right <- inverse_derivatives[[i]][
+                        positions_j[selected],
+                        ,
+                        drop=FALSE
+                    ]
+                    trace_cross <- trace_cross + sum(left * t(right))
+                }
+            }
+            trace_cross_sums[[i]] <-
+                trace_cross_sums[[i]] + trace_cross
+            if (i != j) {
+                trace_cross_sums[[j]] <-
+                    trace_cross_sums[[j]] + trace_cross
+            }
+        }
+    }
+    edf_gradient <- -(system_scores - trace_cross_sums)
+    penalized_response <- penalty_times_coefficients[union_support]
+    rss_gradient <- 2 * vapply(
+        coefficient_derivatives,
+        function(direction) sum(direction * penalized_response),
+        numeric(1)
+    )
+    denominator <- observation_count - gamma * effective_df
+    gradient <- observation_count * (
+        rss_gradient / denominator^2 +
+            2 * gamma * residual_rss * edf_gradient / denominator^3
+    )
+    attr(gradient, 'retained_elements') <- stored_elements
+    gradient
+}
+
 .split_sparse_random_effects <- function(formula, data) {
     terms_object <- stats::terms(formula, keep.order=TRUE)
     labels <- attr(terms_object, 'term.labels')
@@ -1346,11 +1477,47 @@
     paste('penalty', penalty_index)
 }
 
+.cdr_boundary_penalty_trace <- function(fit) {
+    value <- fit$sparse$penalty_trace
+    components <- fit$sparse$penalty_components
+    if (is.numeric(value) && length(value) == length(fit$sp) &&
+            all(is.finite(value))) return(value)
+    if (!length(components) || is.null(fit$sparse$factor) ||
+            length(components) != length(fit$sp)) return(NULL)
+    supports <- .sparse_penalty_supports(components)
+    schur_plan <- if (inherits(
+            fit$sparse$factor,
+            'cdrgam_schur_factor'
+    )) {
+        .sparse_schur_trace_plan(
+            list(
+                core=fit$sparse$factor$core,
+                blocks=fit$sparse$factor$blocks
+            ),
+            components
+        )
+    } else NULL
+    tryCatch(
+        .sparse_logdet_scores(
+            fit$sparse$factor,
+            components,
+            fit$sp,
+            supports=supports,
+            chunk_size=if (is.null(
+                fit$sparse$control$trace_chunk_size
+            )) 64L else fit$sparse$control$trace_chunk_size,
+            schur_plan=schur_plan
+        ),
+        error=function(error) NULL
+    )
+}
+
 .cdr_boundary_reduction_plan <- function(
         fit,
         design,
         log_sp_threshold=12,
-        score_tolerance=2e-4
+        score_tolerance=2e-4,
+        edf_tolerance=0.01
 ) {
     empty <- list(entries=list(), table=data.frame(
         term=character(),
@@ -1361,6 +1528,8 @@
         effective_dimension=integer(),
         maximum_log_sp=numeric(),
         maximum_score=numeric(),
+        maximum_projected_score=numeric(),
+        remaining_penalized_edf=numeric(),
         status=character(),
         stringsAsFactors=FALSE
     ))
@@ -1371,11 +1540,24 @@
     score <- as.numeric(fit$optimizer$gradient)
     names(log_sp) <- names(fit$sp)
     names(score) <- names(fit$sp)
+    projected_score <- abs(score)
+    boundary <- fit$sparse$convergence$boundary
+    if (length(boundary)) {
+        upper <- intersect(names(boundary)[boundary == 'upper'], names(score))
+        lower <- intersect(names(boundary)[boundary == 'lower'], names(score))
+        projected_score[upper] <- pmax(score[upper], 0)
+        projected_score[lower] <- pmax(-score[lower], 0)
+    }
     candidate <- which(
         is.finite(log_sp) & log_sp >= log_sp_threshold &
-            is.finite(score) & abs(score) <= score_tolerance
+            is.finite(projected_score) &
+            projected_score <= score_tolerance
     )
     if (!length(candidate)) return(empty)
+    penalty_trace <- .cdr_boundary_penalty_trace(fit)
+    trace_available <- is.numeric(penalty_trace) &&
+        length(penalty_trace) == length(log_sp) &&
+        all(is.finite(penalty_trace))
     expression <- regexec(
         '^s\\(cdr_term_([0-9]+)\\)([0-9]*)$',
         names(log_sp)[candidate]
@@ -1409,6 +1591,8 @@
             effective_dimension=NA_integer_,
             maximum_log_sp=log_sp[[global]],
             maximum_score=abs(score[[global]]),
+            maximum_projected_score=projected_score[[global]],
+            remaining_penalized_edf=NA_real_,
             status='diagnostic_only_non_irf',
             stringsAsFactors=FALSE
         )
@@ -1455,6 +1639,10 @@
                 effective_dimension=0L,
                 maximum_log_sp=max(log_sp[full_global]),
                 maximum_score=max(abs(score[full_global])),
+                maximum_projected_score=max(
+                    projected_score[full_global]
+                ),
+                remaining_penalized_edf=NA_real_,
                 status='full_term_boundary_requires_confirmation',
                 stringsAsFactors=FALSE
             )
@@ -1470,6 +1658,15 @@
         basis <- .cdr_penalty_null_basis(term$S[penalty_indices])
         if (is.null(basis) || !ncol(basis) ||
                 ncol(basis) >= ncol(term$X)) next
+        repetitions <- if (is.null(term$group_levels)) {
+            1L
+        } else length(term$group_levels)
+        removed_dimension <- repetitions * (ncol(term$X) - ncol(basis))
+        remaining_edf <- if (trace_available) {
+            max(0, removed_dimension - sum(penalty_trace[global]))
+        } else NA_real_
+        saturated <- is.finite(remaining_edf) &&
+            remaining_edf <= edf_tolerance
         entry <- list(
             term_index=term_index,
             penalty_indices=penalty_indices,
@@ -1480,7 +1677,9 @@
             log_sp=unname(log_sp[global]),
             score=unname(score[global])
         )
-        if (exact_score) entries[[length(entries) + 1L]] <- entry
+        if (exact_score && saturated) {
+            entries[[length(entries) + 1L]] <- entry
+        }
         reports[[length(reports) + 1L]] <- data.frame(
             term=names(design$terms)[[term_index]],
             term_index=term_index,
@@ -1494,10 +1693,16 @@
             effective_dimension=entry$effective_dimension,
             maximum_log_sp=max(entry$log_sp),
             maximum_score=max(abs(entry$score)),
-            status=if (exact_score) {
-                'certified_boundary_candidate'
-            } else {
+            maximum_projected_score=max(projected_score[global]),
+            remaining_penalized_edf=remaining_edf,
+            status=if (!exact_score) {
                 'requires_exact_score_for_reduction'
+            } else if (!trace_available) {
+                'requires_effective_df_for_reduction'
+            } else if (!saturated) {
+                'active_penalized_subspace'
+            } else {
+                'certified_boundary_candidate'
             },
             stringsAsFactors=FALSE
         )
@@ -1624,6 +1829,7 @@
         initial_log_sp=NULL,
         initial_source=NULL,
         setup_only=FALSE,
+        gamma=1,
         ...
 ) {
     family <- .as_family(family)
@@ -1631,8 +1837,16 @@
             !identical(family$link, 'identity'))) {
         stop('The sparse backend currently supports only gaussian(identity)')
     }
-    if (!is.null(method) && !(method %in% c('REML', 'fREML'))) {
-        stop('The sparse backend currently supports only REML')
+    if (!is.null(method) && !(method %in% c('REML', 'fREML', 'GCV.Cp'))) {
+        stop('The sparse Gaussian backend supports REML and GCV.Cp')
+    }
+    criterion_method <- if (is.null(method) || method %in% c(
+            'REML', 'fREML'
+        )) 'REML' else 'GCV.Cp'
+    gcv <- identical(criterion_method, 'GCV.Cp')
+    if (length(gamma) != 1L || !is.numeric(gamma) || !is.finite(gamma) ||
+            gamma <= 0) {
+        stop('gamma must be one positive finite number')
     }
     if (!is.list(sparse_control)) {
         stop('sparse_control must be a named list')
@@ -1648,7 +1862,8 @@
             'cores', 'gradient_workers', 'finite_difference_step', 'hessian',
             'hessian_step', 'outer_optimizer', 'optimizer_maxit',
             'optimizer_gradient_tolerance', 'optimizer_trust_radius',
-            'boundary_action', 'boundary_log_sp'
+            'boundary_action', 'boundary_log_sp',
+            'boundary_edf_tolerance'
         )
     )
     if (length(unknown_control)) {
@@ -1661,6 +1876,11 @@
         match.arg(
             control('gradient'),
             c('auto', 'finite', 'exact', 'stochastic', 'hybrid')
+        )
+    }
+    if (gcv && !(gradient_requested %in% c('auto', 'finite', 'exact'))) {
+        stop(
+            'Sparse GCV.Cp supports gradient="auto", "exact", or "finite"'
         )
     }
     gradient_probes <- if (is.null(control('gradient_probes'))) {
@@ -1704,6 +1924,12 @@
             )
         )
     }
+    if (gcv && !(hessian_requested %in% c('auto', 'none'))) {
+        stop(
+            'Sparse GCV.Cp currently supports hessian="auto" or ',
+            'hessian="none"'
+        )
+    }
     hessian_step <- if (is.null(control('hessian_step'))) {
         1e-2
     } else {
@@ -1721,6 +1947,9 @@
             control('outer_optimizer'),
             c('auto', 'lbfgsb', 'bfgs_trust')
         )
+    }
+    if (gcv && identical(outer_optimizer_requested, 'bfgs_trust')) {
+        stop('Sparse GCV.Cp currently supports outer_optimizer="lbfgsb"')
     }
     optimizer_maxit_explicit <- !is.null(control('optimizer_maxit'))
     optimizer_maxit <- if (!optimizer_maxit_explicit) {
@@ -1769,12 +1998,33 @@
     } else {
         match.arg(control('boundary_action'), c('report', 'reduce', 'error'))
     }
+    if (gcv && identical(boundary_action, 'reduce')) {
+        stop(
+            'Sparse GCV.Cp does not yet support boundary_action="reduce"; ',
+            'use "report" or "error"'
+        )
+    }
     boundary_log_sp <- if (is.null(control('boundary_log_sp'))) {
         12
     } else {
         value <- control('boundary_log_sp')
         if (length(value) != 1L || !is.numeric(value) || !is.finite(value)) {
             stop('sparse_control$boundary_log_sp must be finite')
+        }
+        value
+    }
+    boundary_edf_tolerance <- if (is.null(
+            control('boundary_edf_tolerance')
+    )) {
+        0.01
+    } else {
+        value <- control('boundary_edf_tolerance')
+        if (length(value) != 1L || !is.numeric(value) || !is.finite(value) ||
+                value < 0) {
+            stop(
+                'sparse_control$boundary_edf_tolerance must be ',
+                'non-negative and finite'
+            )
         }
         value
     }
@@ -2244,11 +2494,11 @@
         penalties=penalty_count
     )
 
-    # Every REML evaluation has the same structural nonzero pattern. Build its
-    # union once, map each penalty component into the compressed-column value
-    # slot, and subsequently update only those numeric values. Absolute values
-    # prevent cancellation from accidentally removing a structurally possible
-    # entry from the symbolic factorization.
+    # Every smoothing-criterion evaluation has the same structural nonzero
+    # pattern. Build its union once, map each penalty component into the
+    # compressed-column value slot, and subsequently update only those numeric
+    # values. Absolute values prevent cancellation from accidentally removing
+    # a structurally possible entry from the symbolic factorization.
     system_pattern <- abs(Matrix::forceSymmetric(XtX, uplo='U'))
     for (component in penalty_components) {
         system_pattern <- system_pattern + abs(component)
@@ -2295,6 +2545,12 @@
         penalty_strength
     )
     fixed_ridge <- rank_resolution$value
+    if (gcv && fixed_ridge > 0) {
+        stop(
+            'Sparse GCV.Cp does not yet support rank_action="penalize"; ',
+            'use an identifiable design or another rank action'
+        )
+    }
     if (fixed_ridge > 0) {
         diagonal_keys <- .sparse_matrix_keys(
             seq_len(dimension) - 1L,
@@ -2322,6 +2578,9 @@
     )
     checkpoint_signature$optimizer <- list(
         optimizer_selection_policy=1L,
+        criterion=criterion_method,
+        gamma=if (gcv) gamma else NA_real_,
+        gcv_initialization_policy=if (gcv) 1L else NA_integer_,
         outer_optimizer=outer_optimizer_requested,
         gradient=gradient_requested,
         trace_method=trace_method_requested,
@@ -2551,9 +2810,11 @@
             }
             return(if (retain) NULL else .Machine$double.xmax / 100)
         }
-        penalty_det <- .sparse_penalty_logdet(blocks, sp)
-        residual_df <- observation_count - (dimension - penalty_det$rank)
-        if (residual_df <= 0) {
+        penalty_det <- if (gcv) NULL else
+            .sparse_penalty_logdet(blocks, sp)
+        residual_df <- if (gcv) NA_real_ else
+            observation_count - (dimension - penalty_det$rank)
+        if (!gcv && residual_df <= 0) {
             stop('Insufficient observations for Gaussian REML estimation')
         }
         coefficients <- .cdr_factor_solve(factored$factor, Xty)
@@ -2565,10 +2826,44 @@
         if (!is.finite(penalized_rss) || penalized_rss <= 0) {
             return(if (retain) NULL else .Machine$double.xmax / 100)
         }
-        log_det_system <- .cdr_factor_logdet(factored$factor)
-        criterion <- as.numeric(residual_df * log(penalized_rss / residual_df) +
-            log_det_system - penalty_det$value
-        )
+        if (gcv) {
+            penalty_quadratic <- sum(vapply(
+                seq_len(penalty_count),
+                function(i) as.numeric(Matrix::crossprod(
+                    coefficients,
+                    (sp[[i]] * penalty_components[[i]]) %*% coefficients
+                )),
+                numeric(1)
+            ))
+            residual_rss <- penalized_rss - penalty_quadratic
+            penalty_trace <- .sparse_logdet_scores(
+                factored$factor,
+                penalty_components,
+                sp,
+                supports=penalty_supports,
+                chunk_size=trace_chunk_size,
+                schur_plan=active_schur_trace_plan
+            )
+            effective_df <- dimension - sum(penalty_trace)
+            denominator <- observation_count - gamma * effective_df
+            if (!is.finite(residual_rss) || residual_rss <= 0 ||
+                    !is.finite(effective_df) || denominator <= 0) {
+                return(if (retain) NULL else .Machine$double.xmax / 100)
+            }
+            criterion <- as.numeric(
+                observation_count * residual_rss / denominator^2
+            )
+            log_det_system <- NA_real_
+        } else {
+            residual_rss <- NA_real_
+            penalty_trace <- NULL
+            effective_df <- NA_real_
+            log_det_system <- .cdr_factor_logdet(factored$factor)
+            criterion <- as.numeric(
+                residual_df * log(penalized_rss / residual_df) +
+                    log_det_system - penalty_det$value
+            )
+        }
         elapsed_objective <- proc.time()[['elapsed']] - evaluation_started
         objective_seconds <<- c(
             utils::tail(objective_seconds, 99L),
@@ -2615,9 +2910,12 @@
             sp=sp,
             coefficients=as.numeric(coefficients),
             penalized_rss=penalized_rss,
+            residual_rss=residual_rss,
+            effective_df=effective_df,
+            penalty_trace=penalty_trace,
             reml_df=residual_df,
             log_det_system=log_det_system,
-            penalty_logdet=penalty_det$value
+            penalty_logdet=if (gcv) NA_real_ else penalty_det$value
         ))
         last_solution_key <<- key
         last_solution <<- retained
@@ -2640,30 +2938,58 @@
         retained <- retained_solution(log_sp)
         if (is.null(retained)) return(rep.int(0, penalty_count))
         sp <- exp(log_sp)
-        penalty_score <- .sparse_penalty_logdet_score(
-            blocks,
-            sp,
-            penalty_count
-        )
-        determinant_scores <- .sparse_logdet_scores(
-            retained$factor,
-            penalty_components,
-            sp,
-            supports=penalty_supports,
-            chunk_size=trace_chunk_size,
-            schur_plan=active_schur_trace_plan
-        )
-        score <- numeric(penalty_count)
-        coefficients <- retained$coefficients
-        for (i in seq_len(penalty_count)) {
-            derivative <- sp[[i]] * penalty_components[[i]]
-            rss_score <- as.numeric(Matrix::crossprod(
-                coefficients,
-                derivative %*% coefficients
-            ))
-            score[[i]] <- retained$reml_df * rss_score /
-                retained$penalized_rss + determinant_scores[[i]] -
-                penalty_score[[i]]
+        score <- if (gcv) {
+            .sparse_exact_gcv_gradient(
+                retained$factor,
+                sp,
+                penalty_components,
+                penalty_supports,
+                retained$coefficients,
+                retained$residual_rss,
+                retained$effective_df,
+                observation_count,
+                gamma=gamma,
+                chunk_size=trace_chunk_size,
+                element_limit=if (identical(
+                    gradient_requested,
+                    'auto'
+                )) {
+                    max(
+                        1,
+                        optimizer_selection$gcv_gradient_memory$retained_elements
+                    )
+                } else {
+                    getOption(
+                        'cdrgam.max_analytic_hessian_elements',
+                        2e8
+                    )
+                }
+            )
+        } else {
+            penalty_score <- .sparse_penalty_logdet_score(
+                blocks,
+                sp,
+                penalty_count
+            )
+            determinant_scores <- .sparse_logdet_scores(
+                retained$factor,
+                penalty_components,
+                sp,
+                supports=penalty_supports,
+                chunk_size=trace_chunk_size,
+                schur_plan=active_schur_trace_plan
+            )
+            coefficients <- retained$coefficients
+            vapply(seq_len(penalty_count), function(i) {
+                derivative <- sp[[i]] * penalty_components[[i]]
+                rss_score <- as.numeric(Matrix::crossprod(
+                    coefficients,
+                    derivative %*% coefficients
+                ))
+                retained$reml_df * rss_score /
+                    retained$penalized_rss + determinant_scores[[i]] -
+                    penalty_score[[i]]
+            }, numeric(1))
         }
         elapsed_gradient <- proc.time()[['elapsed']] - gradient_started
         exact_gradient_seconds <<- c(
@@ -2743,20 +3069,16 @@
                 retained_elements=0
             )
         }
-        projected <- gradient
-        at_lower <- log_sp <= lower_bound + 1e-10
-        at_upper <- log_sp >= upper_bound - 1e-10
-        active <- (at_lower & projected > 0) |
-            (at_upper & projected < 0)
-        projected[active] <- 0
         assessment <- .analytic_outer_convergence_assessment(
             curvature$hessian,
-            projected,
+            gradient,
             criterion,
             optimizer_gradient_tolerance,
             optimizer_trust_radius,
             objective_noise,
-            active=active
+            parameters=log_sp,
+            lower=lower_bound,
+            upper=upper_bound
         )
         assessment$message <- sub('^analytic', method, assessment$message)
         assessment$diagnostics$method <- method
@@ -2912,9 +3234,20 @@
         score
     }
 
-    canonical_initial <- rep.int(0, penalty_count)
+    canonical_initial <- if (gcv) {
+        log(.cdrgam_initial_sp_from_diagonal(
+            abs(Matrix::diag(XtX)),
+            penalty_components
+        ))
+    } else {
+        rep.int(0, penalty_count)
+    }
     initial <- canonical_initial
-    initialization <- 'canonical unit smoothing parameters'
+    initialization <- if (gcv) {
+        'GCV information-to-penalty scale'
+    } else {
+        'canonical unit smoothing parameters'
+    }
     checkpoint_initial <- if (!is.null(checkpoint_state$current_log_sp)) {
         checkpoint_state$current_log_sp
     } else {
@@ -2954,11 +3287,30 @@
         record=!checkpoint_complete
     )
     if (!is.finite(probe_value) || is.null(last_solution)) {
-        stop('Could not evaluate the initial sparse REML objective')
+        stop(
+            'Could not evaluate the initial sparse ',
+            criterion_method,
+            ' objective'
+        )
     }
+    gradient_worker_bytes <- .cdrgam_sparse_worker_bytes(
+        last_solution$system,
+        last_solution$factor
+    )
+    gradient_plan <- .cdrgam_memory_parallel_plan(
+        cores,
+        max(1L, 2L * gradient_penalty_count),
+        gradient_workers_requested,
+        gradient_worker_bytes
+    )
+    gradient_workers <- gradient_plan$workers
+    selection_gradient_requested <- gradient_requested
+    selection_outer_optimizer_requested <- if (gcv && identical(
+            outer_optimizer_requested, 'auto'
+        )) 'lbfgsb' else outer_optimizer_requested
     optimizer_selection <- .sparse_optimizer_selection(
-        gradient_requested=gradient_requested,
-        outer_optimizer_requested=outer_optimizer_requested,
+        gradient_requested=selection_gradient_requested,
+        outer_optimizer_requested=selection_outer_optimizer_requested,
         trace_method=trace_method,
         factor=last_solution$factor,
         objective_seconds=utils::tail(objective_seconds, 1L),
@@ -2968,6 +3320,30 @@
         dimension=dimension,
         saved=checkpoint_state$optimizer_selection
     )
+    if (gcv) {
+        gcv_gradient_memory <- .sparse_select_hessian_method(
+            'auto',
+            penalty_supports,
+            dimension,
+            trace_chunk_size
+        )
+        if (identical(gradient_requested, 'auto') &&
+                identical(optimizer_selection$gradient, 'exact') &&
+                !identical(gcv_gradient_memory$method, 'analytic')) {
+            optimizer_selection$gradient <- 'finite'
+            optimizer_selection$reason <- paste(
+                'exact GCV gradient exceeds the automatic memory budget;',
+                'using finite differences'
+            )
+        } else {
+            optimizer_selection$reason <- paste0(
+                optimizer_selection$reason,
+                '; sparse GCV uses L-BFGS-B'
+            )
+        }
+        optimizer_selection$outer_optimizer <- 'lbfgsb'
+        optimizer_selection$gcv_gradient_memory <- gcv_gradient_memory
+    }
     gradient_method <- optimizer_selection$gradient
     outer_optimizer <- optimizer_selection$outer_optimizer
     exact_gradient_seconds <- optimizer_selection$measured_exact_seconds
@@ -3017,7 +3393,7 @@
         maximum_log_sp=format(max(initial), digits=5)
     )
     lower_bound <- rep.int(-25, penalty_count)
-    upper_bound <- rep.int(25, penalty_count)
+    upper_bound <- rep.int(if (gcv) 35 else 25, penalty_count)
     optimization_arguments <- list(
         par=initial,
         fn=evaluate,
@@ -3040,6 +3416,16 @@
         dimension,
         trace_chunk_size
     )
+    if (gcv) {
+        hessian_selection$method <- 'none'
+        hessian_selection$reason <- paste(
+            'the initial sparse GCV.Cp implementation does not estimate',
+            'smoothing-parameter covariance'
+        )
+        hessian_selection$estimated_peak_bytes <- 0
+        hessian_selection$retained_elements <- 0
+        hessian_selection$transient_bytes <- 0
+    }
     hessian_method <- hessian_selection$method
     expected_hessian_factorizations <- switch(
         hessian_method,
@@ -3284,11 +3670,17 @@
     solution <- evaluate(optimization$par, retain=TRUE)
     if (is.null(solution) || !is.numeric(solution$sp)) {
         stop(
-            'Sparse REML failed to retain a numeric solution; fields: ',
+            'Sparse ', criterion_method,
+            ' failed to retain a numeric solution; fields: ',
             paste(names(solution), collapse=', ')
         )
     }
-    scale <- solution$penalized_rss / solution$reml_df
+    scale <- if (gcv) {
+        solution$residual_rss /
+            (observation_count - solution$effective_df)
+    } else {
+        solution$penalized_rss / solution$reml_df
+    }
 
     evaluate_unprofiled <- function(parameters) {
         log_sp <- parameters[seq_len(penalty_count)]
@@ -3434,7 +3826,9 @@
         hessian_retained_elements <- 0
         outer_hessian <- NULL
     }
-    effective_df_at_solution <- if (!is.null(analytic)) {
+    effective_df_at_solution <- if (gcv) {
+        solution$effective_df
+    } else if (!is.null(analytic)) {
         dimension - sum(analytic$system_scores)
     } else {
         NA_real_
@@ -3503,14 +3897,16 @@
     )
     if (!convergence$converged && identical(boundary_action, 'error')) {
         stop(
-            'Sparse REML optimizer did not converge (code ',
+            'Sparse ', criterion_method,
+            ' optimizer did not converge (code ',
             convergence$code, '): ', convergence$message,
             call.=FALSE
         )
     }
     if (!convergence$converged && identical(boundary_action, 'report')) {
         warning(
-            'Sparse REML optimizer did not converge (code ',
+            'Sparse ', criterion_method,
+            ' optimizer did not converge (code ',
             convergence$code, '): ', convergence$message,
             call.=FALSE
         )
@@ -3518,7 +3914,8 @@
     if (identical(hessian_positive_definite, FALSE) &&
             !identical(boundary_action, 'reduce')) {
         warning(
-            'Sparse REML outer Hessian is not positive definite; ',
+            'Sparse ', criterion_method,
+            ' outer Hessian is not positive definite; ',
             'variance-component intervals may be unreliable',
             call.=FALSE
         )
@@ -3574,7 +3971,9 @@
     }
 
     reporter$phase('finalization')
-    solver_label <- if (identical(outer_optimizer, 'bfgs_trust')) {
+    solver_label <- if (gcv) {
+        'sparse Gaussian GCV solver'
+    } else if (identical(outer_optimizer, 'bfgs_trust')) {
         paste(
             'sparse Gaussian REML solver',
             '(safeguarded trust-region BFGS)'
@@ -3591,8 +3990,9 @@
         sp=sp,
         scale=scale,
         sig2=scale,
-        reml.scale=scale,
-        method='REML',
+        scale.estimated=TRUE,
+        reml.scale=if (gcv) NULL else scale,
+        method=criterion_method,
         smooth=smooths,
         paraPen=setup$paraPen,
         full.sp=setup$full.sp,
@@ -3602,14 +4002,23 @@
             message=convergence$message
         ),
         converged=convergence$converged,
-        df.residual=NA_real_,
+        df.residual=if (gcv) {
+            observation_count - solution$effective_df
+        } else NA_real_,
+        deviance=if (gcv) solution$residual_rss else NULL,
         y=setup$y,
         prior.weights=weights,
         offset=setup$offset,
-        reml=solution$criterion,
+        reml=if (gcv) NULL else solution$criterion,
+        gcv.ubre=if (gcv) stats::setNames(
+            solution$criterion,
+            'GCV.Cp'
+        ) else NULL,
         optimizer=optimization,
         sparse=list(
             control=list(
+                method=criterion_method,
+                gamma=gamma,
                 gradient_requested=gradient_requested,
                 gradient=gradient_method,
                 gradient_probes=gradient_probes,
@@ -3618,6 +4027,14 @@
                 gradient_workers=gradient_workers,
                 gradient_blas_threads=gradient_plan$blas_threads,
                 gradient_core_source=gradient_plan$worker_source,
+                gradient_workers_requested=gradient_plan$requested_workers,
+                gradient_memory_limited=gradient_plan$memory_limited,
+                gradient_worker_bytes=gradient_plan$per_worker_bytes,
+                gradient_memory_source=gradient_plan$memory_source,
+                gradient_memory_available_bytes=
+                    gradient_plan$memory_available_bytes,
+                gradient_memory_budget_bytes=
+                    gradient_plan$memory_budget_bytes,
                 finite_difference_step=finite_difference_step,
                 hessian_requested=hessian_requested,
                 hessian=hessian_method,
@@ -3630,6 +4047,7 @@
                 optimizer_trust_radius=optimizer_trust_radius,
                 boundary_action=boundary_action,
                 boundary_log_sp=boundary_log_sp,
+                boundary_edf_tolerance=boundary_edf_tolerance,
                 supernodal=supernodal,
                 trace_method_requested=trace_method_requested,
                 trace_method=trace_method,
@@ -3677,8 +4095,8 @@
             streamed_grouped_terms=streamed_grouped_terms,
             convergence=convergence,
             penalty_components=penalty_components,
-            penalty_trace=if (is.null(analytic)) NULL else
-                analytic$system_scores,
+            penalty_trace=if (gcv) solution$penalty_trace else
+                if (is.null(analytic)) NULL else analytic$system_scores,
             observation_count=observation_count,
             schur_group=if (!inherits(
                 solution$factor,
@@ -3735,12 +4153,14 @@
         out,
         design,
         log_sp_threshold=boundary_log_sp,
-        score_tolerance=optimizer_gradient_tolerance
+        score_tolerance=optimizer_gradient_tolerance,
+        edf_tolerance=boundary_edf_tolerance
     )
     out$cdrgam$boundary_reductions <- boundary_plan$table
     out$sparse$convergence$boundary_reductions <- boundary_plan$table
     out$sparse$boundary_action <- boundary_action
     out$sparse$boundary_log_sp <- boundary_log_sp
+    out$sparse$boundary_edf_tolerance <- boundary_edf_tolerance
     checkpoint_state$stage <- 'complete'
     checkpoint_state$optimization <- optimization
     checkpoint_state$best_log_sp <- optimization$par
@@ -3769,7 +4189,7 @@
 .fit_sparse_generalized <- function(
         design, family, method, checkpoint=NULL, trace=FALSE,
         sparse_control=list(), rank_action='error', rank_tol=NULL,
-        rank_penalty=NULL, ...
+        rank_penalty=NULL, gamma=1, ...
 ) {
     family <- .as_family(family)
     canonical <- (identical(family$family, 'binomial') &&
@@ -3784,8 +4204,17 @@
             'binomial(logit), poisson(log), and Gamma(log)'
         )
     }
-    if (!is.null(method) && !(method %in% c('REML', 'fREML'))) {
-        stop('The generalized sparse backend currently supports only REML')
+    if (!is.null(method) &&
+            !(method %in% c('REML', 'fREML', 'GCV.Cp'))) {
+        stop(
+            'The generalized sparse backend supports REML and GCV.Cp'
+        )
+    }
+    criterion_method <- if (identical(method, 'GCV.Cp')) 'GCV.Cp' else 'REML'
+    prediction_error <- identical(criterion_method, 'GCV.Cp')
+    if (length(gamma) != 1L || !is.numeric(gamma) ||
+            !is.finite(gamma) || gamma <= 0) {
+        stop('gamma must be one positive finite number')
     }
     if (!is.null(checkpoint)) {
         stop('Generalized sparse-backend checkpoints are not yet supported')
@@ -3797,7 +4226,8 @@
     allowed_control <- c(
         'crossprod_chunk_size', 'supernodal', 'optimizer_maxit',
         'optimizer_gradient_tolerance', 'optimizer_trust_radius', 'cores',
-        'score_workers', 'score_batch_size'
+        'score_workers', 'score_batch_size', 'finite_difference_step',
+        'gradient'
     )
     unknown <- setdiff(names(sparse_control), allowed_control)
     if (length(unknown)) {
@@ -3813,10 +4243,21 @@
     max_iterations <- as.integer(control('optimizer_maxit', 100L))
     gradient_tolerance <- control('optimizer_gradient_tolerance', 1e-4)
     trust_radius <- control('optimizer_trust_radius', 2)
+    finite_difference_step <- control('finite_difference_step', 1e-3)
+    gradient_requested <- if (is.null(sparse_control$gradient)) {
+        'auto'
+    } else match.arg(
+        sparse_control$gradient, c('auto', 'exact', 'finite')
+    )
+    if (!prediction_error && !identical(gradient_requested, 'auto')) {
+        stop('Generalized REML always uses its exact gradient')
+    }
     cores <- .cdrgam_available_cores(sparse_control$cores)
     if (!is.finite(max_iterations) || max_iterations < 1L ||
             !is.finite(gradient_tolerance) || gradient_tolerance <= 0 ||
-            !is.finite(trust_radius) || trust_radius <= 0) {
+            !is.finite(trust_radius) || trust_radius <= 0 ||
+            !is.finite(finite_difference_step) ||
+            finite_difference_step <= 0) {
         stop('Invalid generalized sparse optimizer control')
     }
     reporter <- .new_solver_reporter(trace, 'sparse')
@@ -3854,6 +4295,11 @@
         sparse_control$score_batch_size,
         'sparse_control$score_batch_size'
     )
+    prediction_gradient_selection <- if (prediction_error) {
+        .cdrgam_generalized_gcv_gradient_selection(
+            gradient_requested, assembly
+        )
+    } else NULL
     previous_blas_threads <- .cdrgam_blas_threads()
     on.exit(
         RhpcBLASctl::blas_set_num_threads(previous_blas_threads),
@@ -3861,43 +4307,80 @@
     )
     RhpcBLASctl::blas_set_num_threads(cores)
     reporter$phase(
-        'generalized smoothing-parameter optimization',
+        if (prediction_error) {
+            'generalized prediction-error optimization'
+        } else 'generalized smoothing-parameter optimization',
         smoothing_parameters=length(assembly$penalty_components),
-        gradient='exact',
+        criterion=if (prediction_error) {
+            if (estimated_gamma) 'GCV' else 'UBRE'
+        } else 'REML',
+        requested_gradient=if (prediction_error) {
+            gradient_requested
+        } else 'exact',
+        gradient=if (prediction_error) {
+            prediction_gradient_selection$method
+        } else 'exact',
         cores=cores,
         inner_blas_threads=cores,
         score_workers=score_plan$workers,
         score_blas_threads=score_plan$blas_threads,
-        score_batching='memory-bounded shared traces',
+        score_batching=if (prediction_error) {
+            'parallel central differences'
+        } else 'memory-bounded shared traces',
         inner_solver='streamed sparse PIRLS'
     )
-    optimized <- .cdrgam_optimize_streamed_sparse_laml(
-        assembly,
-        family,
-        max_iterations=max_iterations,
-        gradient_tolerance=gradient_tolerance,
-        trust_radius=trust_radius,
-        score_workers=score_plan$workers,
-        score_batch_size=score_batch_size,
-        score_blas_threads=score_plan$blas_threads,
-        reporter=reporter
-    )
+    optimized <- if (prediction_error) {
+        .cdrgam_optimize_streamed_sparse_prediction_error(
+            assembly,
+            family,
+            gamma=gamma,
+            max_iterations=max_iterations,
+            gradient_tolerance=gradient_tolerance,
+            finite_difference_step=finite_difference_step,
+            cores=cores,
+            gradient_workers_requested=sparse_control$score_workers,
+            gradient_requested=gradient_requested,
+            score_batch_size=score_batch_size,
+            reporter=reporter
+        )
+    } else {
+        .cdrgam_optimize_streamed_sparse_laml(
+            assembly,
+            family,
+            max_iterations=max_iterations,
+            gradient_tolerance=gradient_tolerance,
+            trust_radius=trust_radius,
+            score_workers=score_plan$workers,
+            score_batch_size=score_batch_size,
+            score_blas_threads=score_plan$blas_threads,
+            reporter=reporter
+        )
+    }
     retained <- optimized$retained
+    resolved_score_plan <- if (prediction_error) {
+        optimized$gradient_plan
+    } else optimized$score_plan
     solution <- retained$solution
     coefficients <- stats::setNames(
         solution$coefficients,
         assembly$coefficient_names
     )
     sp <- stats::setNames(retained$sp, assembly$sp_names)
-    penalty_trace <- vapply(seq_along(sp), function(i) {
+    penalty_trace <- if (prediction_error) {
+        retained$penalty_trace
+    } else vapply(seq_along(sp), function(i) {
         .sparse_logdet_score(
             solution$factor,
             sp[[i]] * assembly$penalty_components[[i]],
             chunk_size=256L
         )
     }, numeric(1))
-    effective_df <- assembly$dimension - sum(penalty_trace)
-    reported_scale <- if (estimated_gamma) {
+    effective_df <- if (prediction_error) {
+        retained$effective_df
+    } else assembly$dimension - sum(penalty_trace)
+    reported_scale <- if (prediction_error) {
+        retained$scale
+    } else if (estimated_gamma) {
         .cdrgam_gamma_reported_scale(
             assembly$setup$y,
             solution$fitted_values,
@@ -3905,13 +4388,18 @@
             effective_df
         )
     } else retained$scale
+    convergence_gradient <- if (!is.null(
+            optimized$optimization$projected_gradient
+        )) optimized$optimization$projected_gradient else {
+        optimized$optimization$gradient
+    }
     convergence <- list(
         converged=identical(optimized$optimization$convergence, 0L) &&
             isTRUE(solution$converged),
         code=optimized$optimization$convergence,
         message=optimized$optimization$message,
         gradient=optimized$optimization$gradient,
-        projected_gradient_max=max(abs(optimized$optimization$gradient)),
+        projected_gradient_max=max(abs(convergence_gradient)),
         hessian_positive_definite=NA,
         boundary=numeric()
     )
@@ -3932,8 +4420,9 @@
         sp=sp,
         scale=reported_scale,
         sig2=reported_scale,
-        reml.scale=retained$scale,
-        method='REML',
+        scale.estimated=estimated_gamma,
+        reml.scale=if (prediction_error) NULL else retained$scale,
+        method=criterion_method,
         smooth=assembly$smooth,
         paraPen=assembly$setup$paraPen,
         full.sp=assembly$setup$full.sp,
@@ -3948,23 +4437,57 @@
         working.weights=solution$working_weights,
         offset=assembly$setup$offset,
         deviance=solution$deviance,
-        reml=retained$criterion,
+        reml=if (prediction_error) NULL else retained$criterion,
+        gcv.ubre=if (prediction_error) stats::setNames(
+            retained$criterion,
+            'GCV.Cp'
+        ) else NULL,
         optimizer=optimized$optimization
     )
     output$sparse <- list(
         control=list(
-            gradient='exact',
-            outer_optimizer=if (estimated_gamma) 'lbfgsb' else 'bfgs_trust',
+            criterion=if (prediction_error) retained$criterion_name else 'REML',
+            gamma=if (prediction_error) gamma else NA_real_,
+            gradient=if (prediction_error) {
+                optimized$gradient_method
+            } else 'exact',
+            gradient_requested=if (prediction_error) {
+                gradient_requested
+            } else 'exact',
+            outer_optimizer=if (prediction_error || estimated_gamma) {
+                'lbfgsb'
+            } else 'bfgs_trust',
             cores=cores,
             serial_blas_threads=cores,
-            score_workers=score_plan$workers,
-            score_blas_threads=score_plan$blas_threads,
+            score_workers=resolved_score_plan$workers,
+            score_blas_threads=resolved_score_plan$blas_threads,
+            score_workers_requested=if (prediction_error) {
+                resolved_score_plan$requested_workers
+            } else score_plan$workers,
+            score_memory_limited=if (prediction_error) {
+                resolved_score_plan$memory_limited
+            } else FALSE,
+            score_worker_bytes=if (prediction_error) {
+                resolved_score_plan$per_worker_bytes
+            } else NA_real_,
+            score_memory_source=if (prediction_error) {
+                resolved_score_plan$memory_source
+            } else NA_character_,
+            score_memory_available_bytes=if (prediction_error) {
+                resolved_score_plan$memory_available_bytes
+            } else NA_real_,
+            score_memory_budget_bytes=if (prediction_error) {
+                resolved_score_plan$memory_budget_bytes
+            } else NA_real_,
             score_batch_size=score_batch_size,
             crossprod_chunk_size=assembly$crossprod_chunk_size,
             supernodal=assembly$supernodal,
             optimizer_maxit=max_iterations,
             optimizer_gradient_tolerance=gradient_tolerance,
-            optimizer_trust_radius=trust_radius
+            optimizer_trust_radius=trust_radius,
+            finite_difference_step=if (prediction_error) {
+                finite_difference_step
+            } else NA_real_
         ),
         factor=solution$factor,
         dimension=assembly$dimension,
@@ -3987,9 +4510,14 @@
         observation_count=assembly$observation_count,
         warm_starts=optimized$warm_starts,
         cold_fallbacks=optimized$cold_fallbacks,
-        score_plan=optimized$score_plan,
+        score_plan=resolved_score_plan,
+        gradient_selection=if (prediction_error) {
+            optimized$gradient_selection
+        } else NULL,
         evaluations=optimized$evaluations,
-        score_evaluations=optimized$score_evaluations
+        score_evaluations=if (prediction_error) {
+            optimized$gradient_evaluations
+        } else optimized$score_evaluations
     )
     output$cdrgam <- list(
         schema_version=1L,
@@ -4025,7 +4553,19 @@
             setup=.cdr_prediction_setup(assembly$setup),
             random_effects=assembly$random_prediction
         ),
-        solver=if (estimated_gamma) {
+        solver=if (prediction_error) {
+            paste(
+                'sparse generalized', retained$criterion_name, 'solver',
+                if (identical(optimized$gradient_method, 'exact')) {
+                    paste(
+                        '(streamed PIRLS, selected-inverse exact gradient,',
+                        'L-BFGS-B)'
+                    )
+                } else {
+                    '(streamed PIRLS, parallel finite gradient, L-BFGS-B)'
+                }
+            )
+        } else if (estimated_gamma) {
             paste(
                 'sparse generalized LAML solver',
                 '(streamed PIRLS, exact score, L-BFGS-B)'
@@ -4045,7 +4585,9 @@
         converged=convergence$converged,
         iterations=solution$iterations,
         evaluations=optimized$evaluations,
-        score_evaluations=optimized$score_evaluations,
+        score_evaluations=if (prediction_error) {
+            optimized$gradient_evaluations
+        } else optimized$score_evaluations,
         warm_starts=optimized$warm_starts,
         cold_fallbacks=optimized$cold_fallbacks
     )
@@ -4421,12 +4963,26 @@ print.cdrgam_sparse <- function(x, ...) {
     cat('  backend:', x$cdrgam$solver, '\n')
     cat('  IRF terms:', paste(x$cdrgam$term_labels, collapse=', '), '\n')
     cat('  coefficients:', length(x$coefficients), '\n')
-    cat('  REML criterion:', format(x$reml, digits=7), '\n')
+    if (identical(x$method, 'GCV.Cp')) {
+        criterion <- x$sparse$control$criterion
+        if (is.null(criterion)) criterion <- 'GCV'
+        cat(
+            ' ', criterion, ' score:',
+            format(unname(x$gcv.ubre), digits=7), '\n'
+        )
+    } else {
+        cat('  REML criterion:', format(x$reml, digits=7), '\n')
+    }
     reductions <- x$cdrgam$boundary_reductions
     if (!is.null(reductions) && nrow(reductions)) {
         applied <- sum(reductions$status == 'applied_and_reoptimized')
-        cat('  boundary reductions:', nrow(reductions),
-            'identified,', applied, 'applied\n')
+        candidates <- sum(
+            reductions$status == 'certified_boundary_candidate'
+        )
+        cat(
+            '  boundary reductions:', applied, 'applied,',
+            candidates, 'additional candidates\n'
+        )
     }
     cat('  converged:', if (isTRUE(x$converged)) 'yes' else 'no', '\n')
     if (length(x$sparse$convergence$boundary)) {
@@ -4482,11 +5038,29 @@ print.summary.cdrgam_sparse <- function(x, ...) {
             !identical(x$rank_metadata$resolution, 'none')) {
         cat('Rank resolution:', x$rank_metadata$resolution, '\n')
     }
-    if (!is.null(x$boundary_reductions) && nrow(x$boundary_reductions)) {
-        cat('\nBoundary penalty reductions:\n')
-        print(x$boundary_reductions, row.names=FALSE)
-        if (isTRUE(x$conditional_on_boundary_reduction)) {
+    reductions <- x$boundary_reductions
+    if (!is.null(reductions) && nrow(reductions)) {
+        applied <- reductions$status == 'applied_and_reoptimized'
+        if (any(applied)) {
+            cat('\nApplied boundary penalty reductions:\n')
+            print(reductions[applied, , drop=FALSE], row.names=FALSE)
             cat('Inference is conditional on the applied boundary reductions.\n')
+        }
+        diagnostics <- reductions[!applied, , drop=FALSE]
+        if (nrow(diagnostics)) {
+            names(diagnostics)[
+                names(diagnostics) == 'effective_dimension'
+            ] <- 'candidate_dimension'
+            heading <- if (any(applied)) {
+                '\nAdditional boundary reduction diagnostics:\n'
+            } else {
+                '\nBoundary reduction diagnostics (no reductions applied):\n'
+            }
+            cat(heading)
+            print(diagnostics, row.names=FALSE)
+            cat(
+                'Diagnostic rows do not change the fitted basis dimensions.\n'
+            )
         }
     }
     if (length(x$convergence$boundary)) {

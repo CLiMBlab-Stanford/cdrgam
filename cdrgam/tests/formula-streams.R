@@ -179,6 +179,18 @@ stream_prediction <- predict(
     )
 )
 stopifnot(max(abs(stream_prediction - fitted(fit))) < 1e-8)
+prediction_components <- predict_components(
+    fit,
+    list(
+        impulses=impulses,
+        responses=responses[names(responses) != 'rt']
+    )
+)
+stopifnot(
+    identical(prediction_components$distributional, FALSE),
+    max(abs(prediction_components$prediction - fitted(fit))) < 1e-8,
+    length(prediction_components$prediction_se) == nrow(responses)
+)
 
 fit_from_streams <- cdrgam(
     user_formula,
@@ -196,6 +208,19 @@ stopifnot(isTRUE(all.equal(
     tolerance=1e-8
 )))
 stopifnot(identical(fit_from_streams$call[[1L]], as.name('cdrgam')))
+
+report <- fit_report(fit)
+metadata <- fit_metadata(fit)
+stopifnot(
+    is.character(report$summary_text),
+    is.data.frame(report$coefficients),
+    is.data.frame(report$smooths),
+    identical(report$fitting$backend, 'mgcv'),
+    identical(report$distributional, FALSE),
+    identical(report$plotting$term_count, length(fit$cdrgam$terms)),
+    all(c('user', 'normalized', 'effective') %in% names(report$formulas)),
+    identical(metadata, report[names(metadata)])
+)
 
 block_fit <- cdrgam.fit(
     dense,

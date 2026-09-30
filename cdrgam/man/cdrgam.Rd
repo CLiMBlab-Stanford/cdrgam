@@ -96,19 +96,36 @@ it.}
 \item{family}{A standard family object or a family name accepted by
 \code{cdrgam_family()}. \code{gaulss} rejects non-unit prior weights because
 mgcv's family accepts but does not use them.}
-\item{method}{Smoothing-parameter estimation method.}
+\item{method}{Smoothing-parameter estimation method. The sparse Gaussian
+backend accepts REML (the default, also spelled \code{"fREML"}) and
+\code{"GCV.Cp"}. Sparse GCV uses the exact effective degrees of freedom in the
+GCV score and accepts mgcv's positive \code{gamma} multiplier through
+\code{...}. Its initial implementation uses L-BFGS-B with a memory-gated exact
+gradient and a parallel finite-difference fallback. It omits
+smoothing-parameter uncertainty and does not support automatic boundary
+reduction or rank regularization. The single-predictor generalized sparse
+solver also accepts \code{"GCV.Cp"}: it minimizes UBRE for binomial and
+Poisson fits and GCV for Gamma fits using streamed PIRLS and parallel finite
+differences. The sparse \code{gaulss} solver accepts REML (the default) and
+\code{"QNCV"}. QNCV uses a streamed quadratic leave-one-response-out
+approximation and an exact analytic smoothing-parameter gradient. It accepts
+mgcv's positive \code{gamma} multiplier through \code{...}; custom
+neighborhoods are not yet supported.}
 \item{engine}{Either \code{"bam"} or \code{"gam"}.}
 \item{backend}{Fitting backend. \code{"mgcv"} uses native fitting,
 \code{"block"} selects the dense reference solver (Gaussian REML,
 generalized LAML, or joint Gaussian location--scale LAML), and
 \code{"sparse"} uses streamed sparse Gaussian, supported generalized, or
-joint Gaussian location--scale optimization. The distributional sparse solver
-ends with exact outer scores; large systems use matrix-free stochastic scores
-for a warm-up by default. Select the Gaussian trust-region
+joint Gaussian location--scale optimization. Under REML, the distributional
+sparse solver ends with exact outer scores; large systems use matrix-free
+stochastic scores for a warm-up by default, then use safeguarded trust-region
+BFGS for exact refinement. Distributional QNCV uses exact gradients
+throughout. Select the Gaussian trust-region
 optimizer with
 \code{sparse_control=list(gradient="exact", outer_optimizer="bfgs_trust")}.}
 \item{checkpoint}{Optional checkpoint path for a custom backend. Checkpoints
-are written atomically after periodic REML evaluations and contain validated
+are written atomically after periodic smoothing-criterion evaluations and
+contain validated
 optimization and restart state. The trust optimizer checkpoints its dense
 curvature approximation, trust radius, counters, parameters, score, and
 criterion so interruption resumes the same optimization trajectory; older
@@ -133,17 +150,26 @@ A function receives the progress events as named lists.}
 single-predictor generalized sparse solver accepts
 \code{crossprod_chunk_size}, \code{supernodal}, \code{optimizer_maxit},
 \code{optimizer_gradient_tolerance}, \code{optimizer_trust_radius},
-\code{cores}, \code{score_workers}, and \code{score_batch_size}; its exact
-gradient and safeguarded trust-region optimizer are fixed. The
+\code{cores}, \code{gradient}, \code{score_workers},
+\code{score_batch_size}, and \code{finite_difference_step}. Generalized REML
+uses an exact gradient and safeguarded trust-region optimization. Generalized
+\code{"GCV.Cp"} uses L-BFGS-B and accepts \code{gradient="auto"} (the
+default), \code{"exact"}, or \code{"finite"}. Automatic selection compares
+the memory and structural cost of a selected-inverse analytic gradient with
+two conditional PIRLS fits per smoothing parameter. The exact calculation
+differentiates the deviance, working weights, and effective degrees of freedom
+through the converged PIRLS equations. The
 remaining controls below apply to Gaussian sparse fits. The distributional
 sparse solver accepts \code{crossprod_chunk_size}, \code{supernodal},
 \code{optimizer_maxit}, \code{optimizer_gradient_tolerance},
 \code{inner_tolerance}, \code{inner_maxit}, \code{cores}, \code{gradient},
-\code{gradient_probes}, \code{gradient_workers}, and
-\code{score_batch_size}. Its \code{gradient} may be \code{"auto"} (the
+\code{gradient_probes}, \code{gradient_workers}, \code{score_batch_size}, and
+\code{qncv_batch_size}. Its \code{gradient} may be \code{"auto"} (the
 default), \code{"exact"}, or \code{"hybrid"}. Automatic selection uses exact
 scores for small joint systems and a deterministic matrix-free stochastic
 warm-up followed by exact-score refinement for large systems.
+QNCV resolves \code{"auto"} to \code{"exact"} and rejects \code{"hybrid"}
+because its analytic score is evaluated in streamed response batches.
 Hybrid warm-up stops early when rejected conditional fits exhaust a budget
 based on recent fit times, then refines from the best valid point.
 \code{gradient_probes} defaults to 64. Both generalized solvers warm-start each inner fit from
@@ -156,11 +182,14 @@ Serial factorization phases use that budget for BLAS threads. Independent
 score or finite-difference tasks divide it between processes and BLAS threads
 without nested oversubscription. \code{score_workers} for the single-predictor
 generalized solver and \code{gradient_workers} for the distributional solver
-optionally override the number of exact-score processes; the resolved value is
-capped by the core budget and available task count. By default,
-single-predictor exact-score phases use the integer square root of the core
-budget as workers. Distributional exact scores use the full core budget when
-a memory estimate permits a shared full-design cache; workers divide
+optionally override the number of exact-score processes or generalized
+finite-difference prediction-error directions. Exact generalized GCV
+gradients instead use one process and the full BLAS thread budget. The
+resolved worker value is capped by the core budget and available task count.
+By default, single-predictor score phases use the
+integer square root of the core budget as workers. Distributional exact
+scores use the full core budget when a memory estimate permits a shared
+full-design cache; workers divide
 likelihood-curvature directions and inverse columns while sharing read-only
 inputs through copy-on-write memory. Otherwise the likelihood derivatives
 retain the streamed serial path. Each process receives the remaining BLAS
@@ -171,6 +200,9 @@ they share multi-right-hand-side solves.
 uses its available-memory estimate to retain the largest safe shared batch.
 The inverse-column chunk width also grows with available memory, up to a fixed
 cap, to improve sparse-solve throughput.
+\code{qncv_batch_size} optionally caps the number of responses evaluated at
+once by distributional QNCV. Its default is calibrated from available process
+memory and the joint coefficient dimension.
 \code{gradient} entry may be \code{"auto"} (the default), \code{"finite"},
 \code{"exact"}, \code{"stochastic"}, or \code{"hybrid"}.
 \code{gradient_probes} controls the fixed Rademacher trace probes used by the
@@ -182,6 +214,8 @@ automatically selected number of central finite-difference worker processes.
 The resolved value is capped by \code{cores} and the number of directions and
 falls back to one on Windows.
 \code{finite_difference_step} defaults to \code{1e-3}.
+Sparse \code{"GCV.Cp"} uses the same cost-aware choice between exact and finite
+gradients but always uses L-BFGS-B.
 \code{outer_optimizer} may be \code{"auto"} (the default), \code{"lbfgsb"},
 or the experimental safeguarded \code{"bfgs_trust"}. Automatic selection uses
 trust-region BFGS for exact gradients and L-BFGS-B otherwise. Explicitly
@@ -205,7 +239,9 @@ the gradient-based Hessian on the first unconditional-inference request, and
 check honors the effective Linux cgroup or SLURM allocation when available.
 On other systems, automatic selection uses the gradient Hessian when available
 memory cannot be determined; the \code{cdrgam.memory_limit_bytes} option can
-provide an explicit process limit. \code{hessian_step} controls the
+provide an explicit process limit. Sparse \code{"GCV.Cp"} resolves
+\code{hessian="auto"} to \code{"none"} because smoothing-parameter
+uncertainty is not yet implemented. \code{hessian_step} controls the
 finite-difference step and defaults
 to \code{1e-2}.
 \code{supernodal} optionally overrides the automatically selected CHOLMOD
@@ -219,10 +255,13 @@ penalty subspaces: \code{"report"} (the default) records them,
 null space and reoptimizes until no newly certified boundary remains, and
 \code{"error"} turns optimizer nonconvergence
 into an error. \code{boundary_log_sp} is the minimum log smoothing parameter
-considered for reduction and defaults to \code{12}. Reduced-model inference
-is conditional on the recorded data-selected boundary reduction. Full-rank
-boundaries that would remove an entire term are reported but require user
-confirmation.
+considered for reduction and defaults to \code{12}.
+\code{boundary_edf_tolerance} is the maximum effective degrees of freedom that
+the penalized subspace may retain before reduction and defaults to \code{0.01}.
+This scale-invariant check prevents a numerically large smoothing parameter
+from removing active curvature. Reduced-model inference is conditional on the
+recorded data-selected boundary reduction. Full-rank boundaries that would
+remove an entire term are reported but require user confirmation.
 \code{schur = "always"} enables the experimental
 response-group Schur solver instead of the default \code{"never"}. It batches
 block elimination, exact traces, and solves through BLAS; a threaded BLAS

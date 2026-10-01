@@ -132,7 +132,8 @@
     list(setup=setup, info=info)
 }
 
-.rank_regularization <- function(system, action, tolerance, penalty) {
+.rank_regularization <- function(
+        system, action, tolerance, penalty, supernodal=FALSE) {
     dense <- is.matrix(system)
     factorable <- function(candidate) {
         if (dense) {
@@ -143,7 +144,7 @@
         !is.null(tryCatch(
             suppressWarnings(Matrix::Cholesky(
                 Matrix::Matrix(candidate, sparse=TRUE),
-                LDL=FALSE, perm=TRUE, super=FALSE
+                LDL=FALSE, perm=TRUE, super=supernodal
             )),
             error=function(e) NULL
         ))

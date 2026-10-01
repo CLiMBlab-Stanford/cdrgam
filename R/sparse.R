@@ -2543,7 +2543,8 @@
         unit_system,
         rank_action,
         tolerance,
-        penalty_strength
+        penalty_strength,
+        supernodal=supernodal
     )
     fixed_ridge <- rank_resolution$value
     if (gcv && fixed_ridge > 0) {

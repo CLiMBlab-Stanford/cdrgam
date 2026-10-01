@@ -75,7 +75,7 @@
 </div>
 <div class="section level2">
 <h2 id="commits-and-publication">Commits and publication<a class="anchor" aria-label="anchor" href="#commits-and-publication"></a></h2>
-<p>Commit, push, tag, or create or update a pull request only when the user explicitly requests that action. Development belongs on <code>dev</code> or a feature branch; <code>main</code> is reserved for reviewed releases.</p>
+<p>Commit, push, tag, or create or update a pull request only when the user explicitly requests that action. Development belongs on <code>dev</code> or a feature branch. Changes enter the release-only <code>main</code> branch through a pull request after its hosted release gate and cross-platform checks pass.</p>
 <p>Before committing, verify that the existing Git configuration provides both the requesting human’s <code>user.name</code> and <code>user.email</code>. Before using a hosting CLI or API, verify that the authenticated session belongs to that human. Do not change identity settings, use <code>--author</code>, or silently substitute an agent, bot, service account, or another person.</p>
 <p>If identity is missing or ambiguous, stop before publication. Leave the work ready and provide the proposed commit message and applicable <code>Assisted-by:</code> trailers. Never request, print, store, or copy authentication secrets into the repository.</p>
 <p>AI systems must not be Git authors, copyright holders, DCO signatories, or <code>Signed-off-by:</code> identities. The human contributor owns and approves the change. Follow the attribution and signing rules in <code>CONTRIBUTING.md</code>.</p>

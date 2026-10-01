@@ -41,8 +41,8 @@ prepare_cdrgam(
 - formula:
 
   Extended formula containing ordinary terms and optional
-  [`irf()`](https://climblab-stanford.github.io/cdrgam/reference/irf.md)
-  terms. An implicit `irf(1)` is added unless suppressed.
+  [`irf()`](https://climblab.org/cdrgam/reference/irf.md) terms. An
+  implicit `irf(1)` is added unless suppressed.
 
 - impulses:
 
@@ -55,30 +55,30 @@ prepare_cdrgam(
 - window:
 
   Default inclusive lag window inherited by each
-  [`irf()`](https://climblab-stanford.github.io/cdrgam/reference/irf.md)
-  term that does not supply its own window. `NULL` retains the
-  term-level default `c(0, Inf)`. Every impulse in the applicable series
-  and window is included in the response-level design.
+  [`irf()`](https://climblab.org/cdrgam/reference/irf.md) term that does
+  not supply its own window. `NULL` retains the term-level default
+  `c(0, Inf)`. Every impulse in the applicable series and window is
+  included in the response-level design.
 
 - knots_l:
 
   Optional model-level default for
-  [`irf()`](https://climblab-stanford.github.io/cdrgam/reference/irf.md)
-  lag-basis construction points. A term-level value, including `NULL`,
-  takes precedence.
+  [`irf()`](https://climblab.org/cdrgam/reference/irf.md) lag-basis
+  construction points. A term-level value, including `NULL`, takes
+  precedence.
 
 - k_l, k_t, k_p:
 
   Optional model-level defaults for the corresponding
-  [`irf()`](https://climblab-stanford.github.io/cdrgam/reference/irf.md)
-  axis dimensions. An argument supplied by an individual term, including
-  an explicit `NULL`, overrides its model-level default.
+  [`irf()`](https://climblab.org/cdrgam/reference/irf.md) axis
+  dimensions. An argument supplied by an individual term, including an
+  explicit `NULL`, overrides its model-level default.
 
 - bs_l, bs_t, bs_p:
 
   Optional model-level defaults for the corresponding
-  [`irf()`](https://climblab-stanford.github.io/cdrgam/reference/irf.md)
-  marginal basis names. Term-level arguments take precedence.
+  [`irf()`](https://climblab.org/cdrgam/reference/irf.md) marginal basis
+  names. Term-level arguments take precedence.
 
 - series:
 

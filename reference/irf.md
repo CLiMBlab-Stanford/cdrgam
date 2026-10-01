@@ -1,25 +1,25 @@
 # Specify an impulse-response term
 
 Use `irf()` as a top-level additive term inside a
-[`cdrgam()`](https://climblab-stanford.github.io/cdrgam/reference/cdrgam.md)
-formula. Ordinary terms retain their usual R and mgcv meanings. By
-default each predictor enters linearly as a convolution weight. Numeric
-`k_p` entries add smooth predictor marginals and `k_t` adds a
-response-time marginal. Smooth non-lag marginals are centered, so a
-tensor term represents the interaction beyond its lower-order terms.
-Before constraints, a tensor term's coefficient count grows as the
-product of its axis dimensions. Larger bases are supported, but each
-added axis therefore increases preparation, fitting, and inference costs
-multiplicatively. With `group`, the term is expanded into
-factor-specific deviations with shared roughness penalties and an
-additional full-rank shrinkage penalty. Unless explicitly removed with
-`- irf(1)`, the formula compiler inserts an implicit `irf(1)`. An
-implicit rate term that has zero design after the required centering
-constraint is removed with a warning; the same situation is an error
-when `irf(1)` was explicitly requested. Requested axis basis dimensions
-are upper bounds. The stream compiler reduces a dimension when the
-linked data contain fewer distinct values, subject to the marginal basis
-minimum, and records the change in the prepared design.
+[`cdrgam()`](https://climblab.org/cdrgam/reference/cdrgam.md) formula.
+Ordinary terms retain their usual R and mgcv meanings. By default each
+predictor enters linearly as a convolution weight. Numeric `k_p` entries
+add smooth predictor marginals and `k_t` adds a response-time marginal.
+Smooth non-lag marginals are centered, so a tensor term represents the
+interaction beyond its lower-order terms. Before constraints, a tensor
+term's coefficient count grows as the product of its axis dimensions.
+Larger bases are supported, but each added axis therefore increases
+preparation, fitting, and inference costs multiplicatively. With
+`group`, the term is expanded into factor-specific deviations with
+shared roughness penalties and an additional full-rank shrinkage
+penalty. Unless explicitly removed with `- irf(1)`, the formula compiler
+inserts an implicit `irf(1)`. An implicit rate term that has zero design
+after the required centering constraint is removed with a warning; the
+same situation is an error when `irf(1)` was explicitly requested.
+Requested axis basis dimensions are upper bounds. The stream compiler
+reduces a dimension when the linked data contain fewer distinct values,
+subject to the marginal basis minimum, and records the change in the
+prepared design.
 
 ## Usage
 

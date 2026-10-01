@@ -39,17 +39,17 @@ results. Generated validation results are not committed.
 
 Downstream packages should use exported functions rather than
 fitted-object implementation fields. Extend
-[`fit_metadata()`](https://climblab-stanford.github.io/cdrgam/reference/fit_report.md),
-[`fit_report()`](https://climblab-stanford.github.io/cdrgam/reference/fit_report.md),
+[`fit_metadata()`](https://climblab.org/cdrgam/reference/fit_report.md),
+[`fit_report()`](https://climblab.org/cdrgam/reference/fit_report.md),
 or
-[`predict_components()`](https://climblab-stanford.github.io/cdrgam/reference/predict_components.md)
+[`predict_components()`](https://climblab.org/cdrgam/reference/predict_components.md)
 when a downstream tool needs additional stable model information. Test
 changes to these functions against native `mgcv`, block, and sparse fits
 when the reported field differs by backend.
 
-Before merging a release, update `Version` in `DESCRIPTION`, run the
-complete test suite, and run `R CMD check` on a clean source package.
-Document intentional incompatibilities and migration steps.
+Before proposing a release, update `Version` in `DESCRIPTION` and
+document intentional incompatibilities and migration steps. The hosted
+release gate is the authoritative clean-environment check.
 
 ## AI-assisted contributions
 
@@ -106,13 +106,23 @@ pull-request metadata instead of ordinary technical documentation.
 
 ## Releases and compatibility
 
+`main` contains released code. Prepare releases on `dev` or a release
+branch and merge them into `main` only through a pull request. Every
+pull request to `main` must change `Version` in `DESCRIPTION` to a later
+`MAJOR.MINOR.PATCH` value. Repository protection requires the release
+gate and the Linux, macOS, and Windows package checks to pass before
+merge. The release gate runs the complete test suite through
+`R CMD check` and builds the complete pkgdown site.
+
 Use patch releases for compatible fixes. During the 0.x series, use
 minor releases for new features and intentional interface changes.
 Retain older behavior when the benefit is clear and the implementation
 remains readable and inexpensive to maintain or run.
 
-Publish a release only when explicitly requested. A release consists of
-an annotated `vMAJOR.MINOR.PATCH` tag and a corresponding
-hosting-platform release whose description begins with a concise
-human-written summary. Verify the tag, automated checks, and release
-description before treating publication as complete.
+After the pull request merges, create an annotated `vMAJOR.MINOR.PATCH`
+tag on the validated merge commit, using a concise human-written release
+summary as the tag message. The tag workflow rejects versions that do
+not match `DESCRIPTION`, lightweight or empty tags, and commits outside
+`main`, then uses that message as the corresponding GitHub Release
+description. Verify the tag workflow and final description before
+treating publication as complete. Never move or replace a published tag.

@@ -54,7 +54,7 @@
 <p>The script also accepts the stem of one file in <code>tests/</code> or <code>all</code>.</p>
 <p>Use a clean temporary R library when testing package installation or namespace behavior. Run relevant scripts under <code>validation/</code> for changes to numerical methods, scaling behavior, recovery, or empirical model results. Generated validation results are not committed.</p>
 <p>Downstream packages should use exported functions rather than fitted-object implementation fields. Extend <code><a href="reference/fit_report.html">fit_metadata()</a></code>, <code><a href="reference/fit_report.html">fit_report()</a></code>, or <code><a href="reference/predict_components.html">predict_components()</a></code> when a downstream tool needs additional stable model information. Test changes to these functions against native <code>mgcv</code>, block, and sparse fits when the reported field differs by backend.</p>
-<p>Before merging a release, update <code>Version</code> in <code>DESCRIPTION</code>, run the complete test suite, and run <code>R CMD check</code> on a clean source package. Document intentional incompatibilities and migration steps.</p>
+<p>Before proposing a release, update <code>Version</code> in <code>DESCRIPTION</code> and document intentional incompatibilities and migration steps. The hosted release gate is the authoritative clean-environment check.</p>
 </div>
 <div class="section level2">
 <h2 id="ai-assisted-contributions">AI-assisted contributions<a class="anchor" aria-label="anchor" href="#ai-assisted-contributions"></a></h2>
@@ -82,8 +82,9 @@
 </div>
 <div class="section level2">
 <h2 id="releases-and-compatibility">Releases and compatibility<a class="anchor" aria-label="anchor" href="#releases-and-compatibility"></a></h2>
+<p><code>main</code> contains released code. Prepare releases on <code>dev</code> or a release branch and merge them into <code>main</code> only through a pull request. Every pull request to <code>main</code> must change <code>Version</code> in <code>DESCRIPTION</code> to a later <code>MAJOR.MINOR.PATCH</code> value. Repository protection requires the release gate and the Linux, macOS, and Windows package checks to pass before merge. The release gate runs the complete test suite through <code>R CMD check</code> and builds the complete pkgdown site.</p>
 <p>Use patch releases for compatible fixes. During the 0.x series, use minor releases for new features and intentional interface changes. Retain older behavior when the benefit is clear and the implementation remains readable and inexpensive to maintain or run.</p>
-<p>Publish a release only when explicitly requested. A release consists of an annotated <code>vMAJOR.MINOR.PATCH</code> tag and a corresponding hosting-platform release whose description begins with a concise human-written summary. Verify the tag, automated checks, and release description before treating publication as complete.</p>
+<p>After the pull request merges, create an annotated <code>vMAJOR.MINOR.PATCH</code> tag on the validated merge commit, using a concise human-written release summary as the tag message. The tag workflow rejects versions that do not match <code>DESCRIPTION</code>, lightweight or empty tags, and commits outside <code>main</code>, then uses that message as the corresponding GitHub Release description. Verify the tag workflow and final description before treating publication as complete. Never move or replace a published tag.</p>
 </div>
 </div>
 

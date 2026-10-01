@@ -20,7 +20,7 @@ predict_components(object, newdata)
 - newdata:
 
   Prediction data accepted by
-  [`predict.cdrgam()`](https://climblab-stanford.github.io/cdrgam/reference/predict.cdrgam.md).
+  [`predict.cdrgam()`](https://climblab.org/cdrgam/reference/predict.cdrgam.md).
 
 ## Value
 

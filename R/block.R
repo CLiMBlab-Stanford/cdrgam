@@ -134,23 +134,27 @@
 
 .rank_regularization <- function(system, action, tolerance, penalty) {
     dense <- is.matrix(system)
-    probe <- if (dense) {
-        tryCatch(chol(system), error=function(e) NULL)
-    } else {
-        tryCatch(
+    factorable <- function(candidate) {
+        if (dense) {
+            return(!is.null(tryCatch(
+                chol(candidate), error=function(e) NULL
+            )))
+        }
+        !is.null(tryCatch(
             suppressWarnings(Matrix::Cholesky(
-                Matrix::Matrix(system, sparse=TRUE),
+                Matrix::Matrix(candidate, sparse=TRUE),
                 LDL=FALSE, perm=TRUE, super=FALSE
             )),
             error=function(e) NULL
-        )
+        ))
     }
-    condition <- if (dense && !is.null(probe)) {
+    probe <- factorable(system)
+    condition <- if (dense && isTRUE(probe)) {
         tryCatch(rcond(system), error=function(e) 0)
     } else {
         NA_real_
     }
-    if (!is.null(probe) && (!dense ||
+    if (isTRUE(probe) && (!dense ||
             (is.finite(condition) && condition > tolerance))) {
         return(list(value=0, resolution='none'))
     }
@@ -158,6 +162,22 @@
     diagonal_scale <- max(abs(Matrix::diag(system)), 1)
     relative <- if (identical(action, 'minimum_norm')) tolerance else penalty
     value <- relative * diagonal_scale
+    if (identical(action, 'minimum_norm')) {
+        diagonal <- if (dense) diag(nrow(system)) else {
+            Matrix::Diagonal(nrow(system))
+        }
+        while (!factorable(system + value * diagonal)) {
+            relative <- relative * 10
+            value <- relative * diagonal_scale
+            if (!is.finite(value) || relative > 1) {
+                stop(
+                    'Unable to construct a stable minimum-norm ridge ',
+                    'approximation for the rank-deficient model',
+                    call.=FALSE
+                )
+            }
+        }
+    }
     warning(
         if (identical(action, 'minimum_norm')) {
             paste0(

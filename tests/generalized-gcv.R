@@ -39,6 +39,13 @@ compare_family <- function(response, family, gamma=1) {
         gamma=gamma,
         weights=weights
     )
+    previous_memory_limit <- getOption('cdrgam.memory_limit_bytes')
+    on.exit(options(cdrgam.memory_limit_bytes=previous_memory_limit), add=TRUE)
+    process_memory <- max(c(
+        cdrgam:::.cdrgam_proc_memory('VmRSS'),
+        cdrgam:::.cdrgam_r_memory()
+    ), na.rm=TRUE)
+    options(cdrgam.memory_limit_bytes=process_memory + 8 * 1024^3)
     sparse <- cdrgam.fit(
         design,
         family=family,

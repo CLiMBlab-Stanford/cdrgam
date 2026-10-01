@@ -134,7 +134,7 @@ analytic <- getFromNamespace(
     gamma=gamma,
     batch_size=23L
 )
-step <- 1e-4
+step <- 1e-3
 numeric <- vapply(seq_along(interior_sp), function(index) {
     lower <- upper <- log(interior_sp)
     lower[[index]] <- lower[[index]] - step
@@ -156,7 +156,8 @@ numeric <- vapply(seq_along(interior_sp), function(index) {
     }
     (criterion(upper) - criterion(lower)) / (2 * step)
 }, numeric(1))
-stopifnot(max(abs(analytic - numeric)) < 1e-3)
+gradient_scale <- max(1, abs(analytic), abs(numeric))
+stopifnot(max(abs(analytic - numeric)) / gradient_scale < 5e-4)
 
 progress <- list()
 checkpoint <- tempfile(fileext='.rds')

@@ -363,7 +363,7 @@
 
 .cdrgam_proc_memory <- function(field) {
     lines <- tryCatch(
-        readLines('/proc/self/status', warn=FALSE),
+        suppressWarnings(readLines('/proc/self/status', warn=FALSE)),
         error=function(e) character()
     )
     line <- grep(paste0('^', field, ':'), lines, value=TRUE)
@@ -384,7 +384,7 @@
 .cdrgam_cgroup_memory_directories <- function() {
     directories <- '/sys/fs/cgroup'
     entries <- tryCatch(
-        readLines('/proc/self/cgroup', warn=FALSE),
+        suppressWarnings(readLines('/proc/self/cgroup', warn=FALSE)),
         error=function(e) character()
     )
     for (entry in entries) {
@@ -477,7 +477,7 @@
     }
 
     meminfo <- tryCatch(
-        readLines('/proc/meminfo', warn=FALSE),
+        suppressWarnings(readLines('/proc/meminfo', warn=FALSE)),
         error=function(e) character()
     )
     available_line <- grep('^MemAvailable:', meminfo, value=TRUE)

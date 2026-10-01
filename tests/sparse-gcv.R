@@ -135,6 +135,12 @@ native_gamma <- cdrgam.fit(
     method='GCV.Cp',
     gamma=1.4
 )
+previous_memory_limit <- getOption('cdrgam.memory_limit_bytes')
+process_memory <- max(c(
+    cdrgam:::.cdrgam_proc_memory('VmRSS'),
+    cdrgam:::.cdrgam_r_memory()
+), na.rm=TRUE)
+options(cdrgam.memory_limit_bytes=process_memory + 8 * 1024^3)
 sparse_gamma <- cdrgam.fit(
     design,
     backend='sparse',
@@ -146,6 +152,7 @@ sparse_gamma <- cdrgam.fit(
         restarts=0
     )
 )
+options(cdrgam.memory_limit_bytes=previous_memory_limit)
 stopifnot(
     isTRUE(sparse_gamma$converged),
     identical(sparse_gamma$sparse$control$gradient, 'exact'),

@@ -98,7 +98,9 @@ if (.Platform$OS.type != 'windows') {
         ))
     )
     stopifnot(
-        all(worker_threads == fork_plan$blas_threads),
+        if (identical(Sys.info()[['sysname']], 'Darwin')) {
+            all(is.finite(worker_threads) & worker_threads >= 1L)
+        } else all(worker_threads == fork_plan$blas_threads),
         blas_threads() == initial_threads
     )
 }

@@ -23,6 +23,13 @@ if (!identical(substring(tag, 2L), package_version)) {
 if (!identical(git_output('cat-file', '-t', paste0('refs/tags/', tag)), 'tag')) {
     stop('release tag ', tag, ' must be annotated', call.=FALSE)
 }
+annotation <- trimws(git_output(
+    'for-each-ref', '--format=%(contents)', paste0('refs/tags/', tag)
+))
+if (nchar(annotation) < 20L) {
+    stop('release tag ', tag, ' must include a meaningful release summary',
+        call.=FALSE)
+}
 head <- git_output('rev-parse', 'HEAD')
 target <- git_output('rev-parse', paste0('refs/tags/', tag, '^{commit}'))
 if (!identical(target, head)) {

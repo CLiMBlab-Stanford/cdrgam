@@ -34,6 +34,6 @@ jobs:
             gh release create "$GITHUB_REF_NAME" \
               --verify-tag \
               --title "cdrgam ${GITHUB_REF_NAME#v}" \
-              --generate-notes \
+              --notes-from-tag \
               --latest
           fi

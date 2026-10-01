@@ -61,11 +61,11 @@ cdrgam.fit(
 - formula:
 
   An extended formula containing ordinary mgcv terms and optional
-  [`irf()`](https://climblab.org/cdrgam/dev/reference/irf.md) terms. An
-  implicit `irf(1)` is added unless suppressed with `- irf(1)`. For
-  `family="gaulss"`, this may instead be a named list with `location`
-  and `scale` formulas. The location formula supplies the response; the
-  scale formula may be one-sided.
+  [`irf()`](https://climblab-stanford.github.io/cdrgam/dev/reference/irf.md)
+  terms. An implicit `irf(1)` is added unless suppressed with
+  `- irf(1)`. For `family="gaulss"`, this may instead be a named list
+  with `location` and `scale` formulas. The location formula supplies
+  the response; the scale formula may be one-sided.
 
 - impulses:
 
@@ -78,30 +78,30 @@ cdrgam.fit(
 - window:
 
   Default inclusive lag window inherited by each
-  [`irf()`](https://climblab.org/cdrgam/dev/reference/irf.md) term that
-  does not supply its own window. `NULL` retains the term-level default
-  `c(0, Inf)`. Every impulse in the applicable series and window is
-  included in the response-level design.
+  [`irf()`](https://climblab-stanford.github.io/cdrgam/dev/reference/irf.md)
+  term that does not supply its own window. `NULL` retains the
+  term-level default `c(0, Inf)`. Every impulse in the applicable series
+  and window is included in the response-level design.
 
 - knots_l:
 
   Optional model-level default for
-  [`irf()`](https://climblab.org/cdrgam/dev/reference/irf.md) lag-basis
-  construction points. A term-level value, including `NULL`, takes
-  precedence.
+  [`irf()`](https://climblab-stanford.github.io/cdrgam/dev/reference/irf.md)
+  lag-basis construction points. A term-level value, including `NULL`,
+  takes precedence.
 
 - k_l, k_t, k_p:
 
   Optional model-level defaults for the corresponding
-  [`irf()`](https://climblab.org/cdrgam/dev/reference/irf.md) axis
-  dimensions. An argument supplied by an individual term, including an
-  explicit `NULL`, overrides its model-level default.
+  [`irf()`](https://climblab-stanford.github.io/cdrgam/dev/reference/irf.md)
+  axis dimensions. An argument supplied by an individual term, including
+  an explicit `NULL`, overrides its model-level default.
 
 - bs_l, bs_t, bs_p:
 
   Optional model-level defaults for the corresponding
-  [`irf()`](https://climblab.org/cdrgam/dev/reference/irf.md) marginal
-  basis names. Term-level arguments take precedence.
+  [`irf()`](https://climblab-stanford.github.io/cdrgam/dev/reference/irf.md)
+  marginal basis names. Term-level arguments take precedence.
 
 - series:
 
@@ -145,7 +145,7 @@ cdrgam.fit(
 - family:
 
   A standard family object or a family name accepted by
-  [`cdrgam_family()`](https://climblab.org/cdrgam/dev/reference/cdrgam_family.md).
+  [`cdrgam_family()`](https://climblab-stanford.github.io/cdrgam/dev/reference/cdrgam_family.md).
   `gaulss` rejects non-unit prior weights because mgcv's family accepts
   but does not use them.
 
@@ -363,7 +363,7 @@ cdrgam.fit(
 - design:
 
   A reusable `cdrgam_design` returned by
-  [`prepare_cdrgam()`](https://climblab.org/cdrgam/dev/reference/prepare_cdrgam.md).
+  [`prepare_cdrgam()`](https://climblab-stanford.github.io/cdrgam/dev/reference/prepare_cdrgam.md).
 
 ## Value
 

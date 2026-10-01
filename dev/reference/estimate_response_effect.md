@@ -30,7 +30,7 @@ estimate_response_effect(
 - newdata:
 
   Scenario data, usually returned by
-  [`response_scenarios()`](https://climblab.org/cdrgam/dev/reference/response_scenarios.md).
+  [`response_scenarios()`](https://climblab-stanford.github.io/cdrgam/dev/reference/response_scenarios.md).
   The default uses the unmodified incidences in the view.
 
 - estimand:
@@ -56,7 +56,7 @@ estimate_response_effect(
 
   Include fitted-coefficient uncertainty, or supply a covariance matrix
   or function accepted by
-  [`marginaleffects_view()`](https://climblab.org/cdrgam/dev/reference/marginaleffects_view.md).
+  [`marginaleffects_view()`](https://climblab-stanford.github.io/cdrgam/dev/reference/marginaleffects_view.md).
 
 - level:
 

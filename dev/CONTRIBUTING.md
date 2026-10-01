@@ -39,10 +39,10 @@ results. Generated validation results are not committed.
 
 Downstream packages should use exported functions rather than
 fitted-object implementation fields. Extend
-[`fit_metadata()`](https://climblab.org/cdrgam/dev/reference/fit_report.md),
-[`fit_report()`](https://climblab.org/cdrgam/dev/reference/fit_report.md),
+[`fit_metadata()`](https://climblab-stanford.github.io/cdrgam/dev/reference/fit_report.md),
+[`fit_report()`](https://climblab-stanford.github.io/cdrgam/dev/reference/fit_report.md),
 or
-[`predict_components()`](https://climblab.org/cdrgam/dev/reference/predict_components.md)
+[`predict_components()`](https://climblab-stanford.github.io/cdrgam/dev/reference/predict_components.md)
 when a downstream tool needs additional stable model information. Test
 changes to these functions against native `mgcv`, block, and sparse fits
 when the reported field differs by backend.

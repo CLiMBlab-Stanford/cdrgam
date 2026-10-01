@@ -20,8 +20,8 @@ logs, or session identifiers.
 The R package occupies the repository root:
 
 - `R/formula.R` parses
-  [`irf()`](https://climblab.org/cdrgam/dev/reference/irf.md) terms and
-  compiles stream histories.
+  [`irf()`](https://climblab-stanford.github.io/cdrgam/dev/reference/irf.md)
+  terms and compiles stream histories.
 - `R/compressed.R` integrates compact designs with native `mgcv` fits.
 - `R/block.R` implements the dense Gaussian REML reference backend.
 - `R/sparse.R` implements the scalable sparse Gaussian REML backend.

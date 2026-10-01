@@ -2,8 +2,9 @@
 
 `cdrgam_family()` is the validated family registry used by the
 command-line harness. Family objects may still be passed directly to
-[`cdrgam()`](https://climblab.org/cdrgam/dev/reference/cdrgam.md) and
-[`cdrgam.fit()`](https://climblab.org/cdrgam/dev/reference/cdrgam.md).
+[`cdrgam()`](https://climblab-stanford.github.io/cdrgam/dev/reference/cdrgam.md)
+and
+[`cdrgam.fit()`](https://climblab-stanford.github.io/cdrgam/dev/reference/cdrgam.md).
 The native `mgcv` backend supports every combination returned here.
 `gaulss` selects mgcv's two-predictor Gaussian location–scale family.
 The dense block backend supports a joint location–scale reference solver

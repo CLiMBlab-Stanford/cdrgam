@@ -1,5 +1,8 @@
 library(cdrgam)
 
+# These checks compare designs with native-unit references, so they fit
+# without predictor rescaling.
+
 simulation <- simulate_cdr(
     list(A=function(lag) exp(-lag)),
     n_impulses=140,
@@ -22,7 +25,7 @@ formula <- response ~
         bs_t='ps',
         bs_p=list('cr', 'cs')
     )
-design <- prepare_cdrgam(
+design <- prepare_cdrgam(rescale_predictors=FALSE,
     formula,
     simulation$impulses,
     simulation$responses,
@@ -109,7 +112,7 @@ stopifnot(
 )
 
 for (basis in c('cr', 'cs', 'cc', 'tp', 'ts', 'ps')) {
-    candidate <- prepare_cdrgam(
+    candidate <- prepare_cdrgam(rescale_predictors=FALSE,
         stats::as.formula(paste0(
             'response ~ irf(A, k_l=6, bs_l="', basis, '") - irf(1)'
         )),
@@ -173,7 +176,7 @@ stopifnot(
 )
 
 for (basis in c('cr', 'cs', 'cc', 'tp', 'ts')) {
-    custom_basis <- prepare_cdrgam(
+    custom_basis <- prepare_cdrgam(rescale_predictors=FALSE,
         stats::as.formula(paste0(
             'response ~ irf(A, k_l=6, knots_l=focused_knots, bs_l="',
             basis, '") - irf(1)'
@@ -205,7 +208,7 @@ stopifnot(
         silent=TRUE
     ), 'try-error'),
     inherits(try(
-        prepare_cdrgam(
+        prepare_cdrgam(rescale_predictors=FALSE,
             response ~ irf(A, k_l=6, knots_l=c(0.1, 0.2, 0.4, 0.8, 1.2, 1.8)) -
                 irf(1),
             simulation$impulses,
@@ -217,7 +220,7 @@ stopifnot(
     ), 'try-error')
 )
 
-default_knots <- prepare_cdrgam(
+default_knots <- prepare_cdrgam(rescale_predictors=FALSE,
     response ~ irf(A) - irf(1),
     simulation$impulses,
     simulation$responses,
@@ -232,7 +235,7 @@ stopifnot(
     identical(default_knots$configuration$knots_l, focused_knots)
 )
 
-override <- prepare_cdrgam(
+override <- prepare_cdrgam(rescale_predictors=FALSE,
     response ~ irf(A, window=c(0, 1), k_l=5) - irf(1),
     simulation$impulses,
     simulation$responses,
@@ -242,7 +245,7 @@ override <- prepare_cdrgam(
 )
 stopifnot(identical(override$specification[[1L]]$window, c(0, 1)))
 
-defaults <- prepare_cdrgam(
+defaults <- prepare_cdrgam(rescale_predictors=FALSE,
     response ~ irf(A, B) +
         irf(A, k_l=5, k_t=NULL, k_p=NULL, bs_l='cr', bs_p='tp') -
         irf(1),
@@ -274,7 +277,7 @@ stopifnot(
     identical(defaults$configuration$k_t, 4),
     identical(defaults$configuration$k_p, 3)
 )
-implicit_rate_defaults <- prepare_cdrgam(
+implicit_rate_defaults <- prepare_cdrgam(rescale_predictors=FALSE,
     response ~ irf(A),
     simulation$impulses,
     simulation$responses,
@@ -293,7 +296,7 @@ stopifnot(
 
 # Centering removes the stationary lag-only subspace from a nonstationary
 # tensor, so the two terms remain jointly identifiable.
-hierarchy <- prepare_cdrgam(
+hierarchy <- prepare_cdrgam(rescale_predictors=FALSE,
     response ~ irf(1, k_l=5) + irf(1, k_l=5, k_t=4),
     simulation$impulses,
     simulation$responses,

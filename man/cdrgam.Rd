@@ -21,7 +21,7 @@ cdrgam(
   response_time = "time",
   history = c("auto", "dense", "ragged"),
   chunk_size = 10000,
-  rescale_predictors = FALSE,
+  rescale_predictors = TRUE,
   center_predictors = TRUE,
   family = stats::gaussian(),
   method = NULL,
@@ -81,7 +81,7 @@ including an explicit \code{NULL}, overrides its model-level default.}
 \code{"ragged"}.}
 \item{chunk_size}{Maximum responses or impulse-response links transformed in
 one chunk.}
-\item{rescale_predictors}{If \code{TRUE}, divide continuous numeric
+\item{rescale_predictors}{If \code{TRUE}, the default, divide continuous numeric
 predictors by their training-data standard deviations before model
 construction. No centering is performed. Binary, constant, categorical,
 grouping, and series variables are unchanged. Lag and explicit time
@@ -243,8 +243,19 @@ memory and the joint coefficient dimension.
 \code{gradient} entry may be \code{"auto"} (the default), \code{"finite"},
 \code{"exact"}, \code{"stochastic"}, or \code{"hybrid"}.
 \code{gradient_probes} controls the fixed Rademacher trace probes used by the
-latter two methods; \code{"hybrid"} uses stochastic scores for a warm start
-and then refines with exact scores. \code{"auto"} compares predicted
+latter two methods; \code{"hybrid"} uses a warm start and then refines with
+exact scores. For Gaussian location-scale REML, \code{warmup} selects that
+warm start: \code{"efs"} runs up to \code{efs_maxit} (default \code{30})
+extended Fellner-Schall updates (Wood and Fasiolo, 2017), each needing one
+inner fit and penalty traces but no outer score or line search, and sets
+smoothing parameters still moving toward a limit to the search bound before
+the exact phase; \code{"stochastic"} uses stochastic scores as before;
+\code{"none"} skips the warm start; and \code{"auto"} (the default) uses
+\code{"efs"} whenever \code{"hybrid"} would be selected and no warm start
+otherwise. The exact phase solves each inner fit to
+\code{exact_inner_relative_tolerance} (default the tighter of \code{1e-11}
+and \code{inner_relative_tolerance}), so that criterion noise from the inner
+fit stays below the trust-region improvements. \code{"auto"} compares predicted
 exact-score time and memory with the cost of finite differences after the
 first objective factorization. \code{gradient_workers} optionally overrides the
 automatically selected number of central finite-difference worker processes.

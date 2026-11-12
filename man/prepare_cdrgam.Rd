@@ -20,7 +20,7 @@ prepare_cdrgam(
   response_time = "time",
   history = c("auto", "dense", "ragged"),
   chunk_size = 10000,
-  rescale_predictors = FALSE,
+  rescale_predictors = TRUE,
   center_predictors = TRUE,
   quiet = FALSE,
   drop.unused.levels = TRUE
@@ -48,7 +48,7 @@ including an explicit \code{NULL}, overrides its model-level default.}
 \item{response_time}{Name of the response-time column.}
 \item{history}{One of \code{"auto"}, \code{"dense"}, or \code{"ragged"}.}
 \item{chunk_size}{Maximum responses or links transformed in a chunk.}
-\item{rescale_predictors}{If \code{TRUE}, divide continuous numeric
+\item{rescale_predictors}{If \code{TRUE}, the default, divide continuous numeric
 predictors by their training-data standard deviations without centering.
 Binary, constant, categorical, grouping, and series variables are unchanged.
 Lag and explicit time predictors share the standard deviation of the untiled

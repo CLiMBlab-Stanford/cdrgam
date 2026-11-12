@@ -65,3 +65,18 @@ stopifnot(
     length(codes(fake_fit(hessian_positive_definite=TRUE,
         predicted_decrease=0.01))) == 0L
 )
+
+# When every nearby point is 0.002 worse than the start, as with criterion
+# noise from inexact inner solves, the trust region stops at the precision
+# floor instead of shrinking its radius until it fails.
+start <- c(1 + 1e-6, -2 + 1e-6)
+noisy <- function(x) sum((x - c(1, -2))^2) + if (identical(x, start)) 0 else 0.002
+noisy_gradient <- function(x) 2 * (x - c(1, -2))
+stopped <- cdrgam:::.safeguarded_outer_bfgs(
+    start, noisy, noisy_gradient, lower=c(-25, -25), upper=c(25, 25),
+    gradient_tolerance=1e-12
+)
+stopifnot(
+    identical(stopped$convergence, 0L),
+    grepl('converged to criterion precision', stopped$message, fixed=TRUE)
+)

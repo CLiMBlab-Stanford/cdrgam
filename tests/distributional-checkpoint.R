@@ -211,6 +211,7 @@ hybrid_interrupted <- tryCatch(
         },
         sparse_control=list(
             gradient='hybrid',
+            warmup='stochastic',
             gradient_probes=4L,
             optimizer_maxit=1L,
             optimizer_gradient_tolerance=1e6
@@ -233,6 +234,7 @@ hybrid_resumed <- cdrgam.fit(
     checkpoint=hybrid_checkpoint,
     sparse_control=list(
         gradient='hybrid',
+        warmup='stochastic',
         gradient_probes=4L,
         optimizer_maxit=1L,
         optimizer_gradient_tolerance=1e6

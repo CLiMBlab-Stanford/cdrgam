@@ -3582,6 +3582,140 @@
     )
 }
 
+# Returns the extended Fellner-Schall ratios
+#   r_j = (tr(S^- D_j) - tr(H^-1 D_j)) / (beta' D_j beta),  D_j = lambda_j S_j,
+# for a Gaussian location-scale solution. At a fixed point of
+# lambda_j <- lambda_j r_j the -2 LAML score is zero except for the change of
+# the likelihood Hessian with the coefficients, which the update omits
+# (Wood and Fasiolo, 2017).
+.cdrgam_gaulss_efs_ratios <- function(assemblies, solution, sp) {
+    dimensions <- vapply(assemblies, `[[`, integer(1), 'dimension')
+    ranges <- split(seq_len(sum(dimensions)), rep(names(dimensions), dimensions))
+    beta <- solution$coefficients
+    ratios <- numeric(length(sp))
+    offset <- 0L
+    for (parameter in names(assemblies)) {
+        count <- length(assemblies[[parameter]]$penalty_components)
+        indices <- offset + seq_len(count)
+        penalty_scores <- .sparse_penalty_logdet_score(
+            assemblies[[parameter]]$blocks, sp[indices], count
+        )
+        for (local_index in seq_len(count)) {
+            global_index <- offset + local_index
+            derivative <- .cdrgam_distributional_global_penalty(
+                assemblies, ranges, parameter, local_index, sp[[global_index]]
+            )
+            quadratic <- as.numeric(Matrix::crossprod(
+                beta, derivative %*% beta
+            ))
+            trace <- .sparse_logdet_score(
+                solution$factor, derivative, chunk_size=256L
+            )
+            numerator <- penalty_scores[[local_index]] - trace
+            ratios[[global_index]] <- if (quadratic > 0 && numerator > 0) {
+                numerator / quadratic
+            } else if (numerator <= 0) 0 else Inf
+        }
+        offset <- offset + count
+    }
+    ratios
+}
+
+# Runs extended Fellner-Schall updates rho_j <- rho_j + log(r_j) on the log
+# smoothing parameters, each step capped at `max_step` and clipped to
+# [lower, upper]. A step that raises the criterion is halved up to four
+# times. `evaluate(log_sp)` returns a list with `criterion` and `solution`;
+# `ratios(evaluation, log_sp)` returns r. Parameters whose log value is at
+# least `boundary_log_sp` in absolute value and still moving outward are
+# reported in `drifting`. Iteration stops when every other parameter moves
+# by less than `tolerance` in one step.
+.cdrgam_efs_optimize <- function(
+        evaluate,
+        ratios,
+        log_sp,
+        lower,
+        upper,
+        maxit=30L,
+        tolerance=0.01,
+        max_step=5,
+        boundary_log_sp=8,
+        reporter=NULL
+) {
+    current <- evaluate(log_sp)
+    history <- list()
+    status <- 'max_iterations'
+    drifting <- integer()
+    for (iteration in seq_len(maxit)) {
+        if (is.null(current$solution) || !is.finite(current$criterion)) {
+            status <- 'evaluation_failed'
+            break
+        }
+        r <- ratios(current, log_sp)
+        step <- ifelse(is.finite(log(r)), log(r), sign(log(r)) * max_step)
+        step <- pmax(-max_step, pmin(max_step, step))
+        target <- pmin(upper, pmax(lower, log_sp + step))
+        step <- target - log_sp
+        drifting <- which(
+            abs(log_sp) >= boundary_log_sp & sign(step) == sign(log_sp) &
+                abs(step) > tolerance
+        )
+        moving <- setdiff(seq_along(log_sp), drifting)
+        largest <- if (length(moving)) max(abs(step[moving])) else 0
+        if (largest < tolerance) {
+            history[[length(history) + 1L]] <- data.frame(
+                iteration=iteration, criterion=current$criterion,
+                max_step=largest, drifting=length(drifting), halvings=0L
+            )
+            status <- 'converged'
+            break
+        }
+        accepted <- NULL
+        scale <- 1
+        for (halving in 0:4) {
+            trial <- log_sp + scale * step
+            candidate <- evaluate(trial)
+            if (!is.null(candidate$solution) &&
+                    is.finite(candidate$criterion) &&
+                    candidate$criterion <= current$criterion + 1e-8 *
+                        max(1, abs(current$criterion))) {
+                accepted <- list(log_sp=trial, evaluation=candidate,
+                    halvings=halving)
+                break
+            }
+            scale <- scale / 2
+        }
+        history[[length(history) + 1L]] <- data.frame(
+            iteration=iteration, criterion=current$criterion,
+            max_step=largest, drifting=length(drifting),
+            halvings=if (is.null(accepted)) NA_integer_ else accepted$halvings
+        )
+        if (is.null(accepted)) {
+            status <- 'no_improvement'
+            break
+        }
+        if (!is.null(reporter)) {
+            reporter$emit(
+                1L, 'EFS update',
+                iteration=iteration,
+                criterion=format(accepted$evaluation$criterion, digits=10),
+                max_step=format(largest, digits=4),
+                drifting=length(drifting),
+                halvings=accepted$halvings
+            )
+        }
+        log_sp <- accepted$log_sp
+        current <- accepted$evaluation
+    }
+    list(
+        log_sp=log_sp,
+        criterion=current$criterion,
+        status=status,
+        drifting=drifting,
+        iterations=length(history),
+        history=if (length(history)) do.call(rbind, history) else NULL
+    )
+}
+
 .cdrgam_gaulss_sparse_score <- function(
         assemblies, solution, sp, family, workers=1L, batch_size=NULL
 ) {
@@ -3946,6 +4080,9 @@
     hybrid_transition <- NULL
     score_plan <- NULL
     stochastic_score_plan <- NULL
+    # Warm-up evaluations use the inner tolerance; the exact phase solves more
+    # tightly so criterion noise stays below the trust-region improvements.
+    active_inner_relative_tolerance <- control$inner_relative_tolerance
     checkpoint_phase <- if (is.null(checkpoint_state$phase)) {
         if (identical(control$gradient_method, 'hybrid')) {
             'stochastic'
@@ -4203,7 +4340,7 @@
                 solution <- .cdrgam_gaulss_sparse_fixed(
                     assemblies, exp(log_sp), b,
                     tolerance=control$inner_tolerance,
-                    relative_tolerance=control$inner_relative_tolerance,
+                    relative_tolerance=active_inner_relative_tolerance,
                     maxit=control$inner_maxit,
                     initial=initial,
                     cores=control$cores,
@@ -4245,7 +4382,7 @@
                     continued <- .cdrgam_gaulss_sparse_fixed(
                         assemblies, exp(log_sp), b,
                         tolerance=control$inner_tolerance,
-                        relative_tolerance=control$inner_relative_tolerance,
+                        relative_tolerance=active_inner_relative_tolerance,
                         maxit=min(control$inner_maxit, remaining),
                         initial=solution,
                         cores=control$cores,
@@ -4528,8 +4665,65 @@
     completed_optimization <- if (
         identical(checkpoint_state$stage, 'complete')
     ) checkpoint_state$optimization else NULL
+    efs_warmup <- NULL
+    run_efs <- !qncv && identical(control$warmup, 'efs') &&
+        is.null(checkpoint_state$efs_warmup) &&
+        (!resumed || !identical(checkpoint_state$phase, 'exact')) &&
+        !identical(checkpoint_state$stage, 'complete')
+    if (run_efs) {
+        if (!is.null(reporter)) reporter$phase(
+            'Fellner-Schall smoothing-parameter warm-up',
+            maximum_iterations=control$efs_maxit
+        )
+        efs_warmup <- .cdrgam_efs_optimize(
+            evaluate=function(log_sp) evaluate(log_sp),
+            ratios=function(evaluation, log_sp) {
+                .cdrgam_gaulss_efs_ratios(
+                    assemblies, evaluation$solution, exp(log_sp)
+                )
+            },
+            log_sp=parameters,
+            lower=rep.int(-25, length(parameters)),
+            upper=rep.int(25, length(parameters)),
+            maxit=control$efs_maxit,
+            reporter=reporter
+        )
+        parameters <- efs_warmup$log_sp
+        # Smoothing parameters still moving toward a limit start the exact
+        # phase on the search bound, where the projected trust region treats
+        # them as inactive instead of repeatedly shrinking along them.
+        if (length(efs_warmup$drifting)) {
+            parameters[efs_warmup$drifting] <-
+                25 * sign(parameters[efs_warmup$drifting])
+        }
+        frozen <- evaluate(parameters)
+        if (is.null(frozen$solution) || !is.finite(frozen$criterion) ||
+                frozen$criterion > efs_warmup$criterion +
+                    1e-6 * max(1, abs(efs_warmup$criterion))) {
+            parameters <- efs_warmup$log_sp
+            efs_warmup$drifting <- integer()
+        }
+        if (!is.null(best_parameters)) {
+            warm_solution <- evaluate(parameters)$solution
+        }
+        checkpoint_phase <- 'exact'
+        checkpoint_state$efs_warmup <- efs_warmup[c(
+            'status', 'iterations', 'drifting', 'criterion'
+        )]
+        write_checkpoint(parameters, evaluate(parameters), phase='exact')
+        if (!is.null(reporter)) reporter$phase(
+            'exact smoothing-parameter refinement',
+            criterion=format(evaluate(parameters)$criterion, digits=10),
+            transition=paste0(
+                'Fellner-Schall warm-up ', efs_warmup$status, ' after ',
+                efs_warmup$iterations, ' iterations; ',
+                length(efs_warmup$drifting), ' parameter(s) set to a bound'
+            )
+        )
+    }
     run_stochastic <- !qncv &&
         identical(control$gradient_method, 'hybrid') &&
+        identical(control$warmup, 'stochastic') &&
         !identical(checkpoint_phase, 'exact') &&
         !identical(checkpoint_state$stage, 'complete')
     if (run_stochastic) {
@@ -4600,6 +4794,24 @@
                 'stochastic warm-up completed'
             } else stochastic_warmup$transition$reason
         )
+    }
+    if (!identical(
+            control$exact_inner_relative_tolerance,
+            active_inner_relative_tolerance
+        )) {
+        active_inner_relative_tolerance <- control$exact_inner_relative_tolerance
+        # Discard loosely solved evaluations so that the exact phase compares
+        # only criteria solved to the same precision.
+        cached_parameters <- NULL
+        cached_evaluation <- NULL
+        best_parameters <- NULL
+        best_evaluation <- NULL
+        if (length(parameters)) {
+            refreshed <- evaluate(parameters)
+            if (!is.null(refreshed$solution)) {
+                warm_solution <- refreshed$solution
+            }
+        }
     }
     lower_bound <- rep.int(-25, length(parameters))
     upper_bound <- rep.int(25, length(parameters))
@@ -4772,9 +4984,16 @@
     }
     optimization$stochastic_warmup <- stochastic_warmup
     retained <- evaluate(optimization$par, need_score=TRUE)
+    # Replace the endpoint only when an earlier evaluation is lower by more
+    # than inner-solve noise; otherwise a point that met the gradient
+    # tolerance would be exchanged for one that differs only by noise.
+    replacement_tolerance <- if (is.null(retained$solution)) 0 else {
+        1e-9 * (1 + abs(retained$criterion))
+    }
     recovered <- is.null(retained$solution) ||
         (!is.null(best_evaluation) &&
-            best_evaluation$criterion < retained$criterion)
+            best_evaluation$criterion <
+                retained$criterion - replacement_tolerance)
     if (recovered && !is.null(best_evaluation)) {
         best_evaluation <- score_evaluation(best_parameters, best_evaluation)
         retained <- best_evaluation
@@ -4847,7 +5066,10 @@
         warm_starts=warm_starts,
         cold_fallbacks=cold_fallbacks,
         score_plan=score_plan,
-        stochastic_score_plan=stochastic_score_plan
+        stochastic_score_plan=stochastic_score_plan,
+        efs_warmup=if (is.null(efs_warmup)) NULL else efs_warmup[c(
+            'status', 'iterations', 'drifting', 'criterion', 'history'
+        )]
     )
 }
 
@@ -4924,7 +5146,8 @@
         'inner_algorithm', 'inner_schur_rank',
         'cores', 'gradient',
         'gradient_probes', 'gradient_workers', 'score_batch_size',
-        'qncv_batch_size'
+        'qncv_batch_size', 'warmup', 'efs_maxit',
+        'exact_inner_relative_tolerance'
     )
     unknown <- setdiff(names(sparse_control), allowed)
     if (length(unknown)) {
@@ -4949,6 +5172,13 @@
         inner_relative_tolerance=if (is.null(
             sparse_control$inner_relative_tolerance
         )) 1e-8 else sparse_control$inner_relative_tolerance,
+        exact_inner_relative_tolerance=if (is.null(
+            sparse_control$exact_inner_relative_tolerance
+        )) {
+            min(1e-11, if (is.null(sparse_control$inner_relative_tolerance)) {
+                1e-8
+            } else sparse_control$inner_relative_tolerance)
+        } else sparse_control$exact_inner_relative_tolerance,
         inner_maxit=if (is.null(sparse_control$inner_maxit)) {
             200L
         } else as.integer(sparse_control$inner_maxit),
@@ -5065,6 +5295,25 @@
     control$cores <- cores
     control$inner_blas_threads <- cores
     control$gradient_method <- gradient_method
+    warmup_requested <- if (is.null(sparse_control$warmup)) 'auto' else {
+        match.arg(sparse_control$warmup, c('auto', 'efs', 'stochastic', 'none'))
+    }
+    # Large REML systems previously warmed up with stochastic scores; extended
+    # Fellner-Schall updates need no line search and handle smoothing
+    # parameters that drift toward either limit.
+    control$warmup <- if (qncv) 'none' else if (identical(
+            warmup_requested, 'auto'
+        )) {
+        if (identical(gradient_method, 'hybrid')) 'efs' else 'none'
+    } else warmup_requested
+    if (identical(control$warmup, 'stochastic') &&
+            !identical(gradient_method, 'hybrid')) {
+        stop('sparse_control$warmup = "stochastic" requires gradient = "hybrid"')
+    }
+    control$efs_maxit <- if (is.null(sparse_control$efs_maxit)) 30L else {
+        .cdrgam_positive_integer(sparse_control$efs_maxit,
+            'sparse_control$efs_maxit')
+    }
     control$gradient_probes <- gradient_probes
     control$gradient_workers <- gradient_plan$workers
     control$gradient_blas_threads <- gradient_plan$blas_threads
@@ -5238,6 +5487,7 @@
             cold_fallbacks=result$cold_fallbacks,
             score_plan=result$score_plan,
             stochastic_score_plan=result$stochastic_score_plan,
+            efs_warmup=result$efs_warmup,
             qncv=if (qncv) list(
                 minimum_determinant=solution$qncv$minimum_determinant,
                 response_batch_size=solution$qncv$batch_size

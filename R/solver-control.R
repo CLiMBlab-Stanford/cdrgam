@@ -1077,6 +1077,11 @@
         }
     }
     iteration_limit <- maxit
+    # Three successive tiny rejected steps that each lose more than the model
+    # predicted mean the criterion is no more precise than that loss; three
+    # is also the minimum that observed_objective_noise() uses.
+    precision_losses <- numeric()
+    precision_predicted <- numeric()
     repeat {
         iteration_sequence <- if (continue_optimization &&
                 completed_iteration < iteration_limit) {
@@ -1254,6 +1259,48 @@
                 gradient_evaluations=gradient_count
             )
             emit_progress(record)
+            step_size <- max(abs(step))
+            # Use the same step scale that observed_objective_noise() counts.
+            if (candidate_valid && is.finite(actual) && actual < 0 &&
+                    step_size <= 1e-5 * max(1, max(abs(par)))) {
+                precision_losses <- c(utils::tail(precision_losses, 2L), -actual)
+                precision_predicted <- c(
+                    utils::tail(precision_predicted, 2L),
+                    predicted
+                )
+                if (length(precision_losses) == 3L &&
+                        all(precision_predicted < precision_losses)) {
+                    precision_message <- paste0(
+                        'converged to criterion precision: steps of at most ',
+                        format(step_size, digits=3), ' changed the criterion',
+                        ' by up to ', format(max(precision_losses), digits=3),
+                        ', more than the predicted improvement'
+                    )
+                    # A caller-supplied curvature assessment certifies the
+                    # result as it would after the radius collapsed.
+                    if (is.null(convergence_assessment)) {
+                        convergence <- 0L
+                        message <- precision_message
+                        break
+                    }
+                    outcome <- assess_stagnation(record, precision_message)
+                    if (identical(outcome$action, 'converged')) {
+                        convergence <- 0L
+                        message <- outcome$message
+                        break
+                    }
+                    if (identical(outcome$action, 'recovered')) {
+                        precision_losses <- numeric()
+                        precision_predicted <- numeric()
+                        next
+                    }
+                    message <- outcome$message
+                    break
+                }
+            } else {
+                precision_losses <- numeric()
+                precision_predicted <- numeric()
+            }
             if (radius < minimum_radius) {
                 outcome <- assess_stagnation(
                     record,
@@ -1311,6 +1358,8 @@
         }
         accepted_steps <- accepted_steps + 1L
         consecutive_rejections <- 0L
+        precision_losses <- numeric()
+        precision_predicted <- numeric()
         small_step <- max(abs(step)) <= 1e-3 &&
             abs(actual) <= 1e-8 * (1 + abs(value))
         consecutive_small <- if (small_step) consecutive_small + 1L else 0L

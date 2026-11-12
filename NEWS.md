@@ -1,5 +1,42 @@
 # cdrgam (development version)
 
+- A sparse location-scale fit keeps its optimizer endpoint unless an earlier
+  evaluation is lower by more than `1e-9` times the criterion. Previously any
+  lower evaluation, including one that differed only by inner-solve noise,
+  replaced an endpoint that had met the gradient tolerance and marked the fit
+  as nonconverged.
+
+- `rescale_predictors` now defaults to `TRUE` in `prepare_cdrgam()` and
+  `cdrgam()`, so continuous predictors and lag coordinates are divided by
+  their training standard deviations unless `rescale_predictors = FALSE`.
+  Effect estimates and plots are still reported in native units.
+  `center_predictors` already defaulted to `TRUE`.
+
+- The exact phase of sparse location-scale fits now solves inner fits to
+  `sparse_control$exact_inner_relative_tolerance` (default the tighter of
+  `1e-11` and `inner_relative_tolerance`). At the previous `1e-8` relative
+  tolerance, inner-fit error of about 0.002 on a criterion near 10^6 exceeded
+  the remaining trust-region improvements, so fits stalled and were reported
+  as nonconverged.
+
+- The safeguarded trust-region optimizer used by the sparse backends starts
+  assessing convergence as soon as three successive rejected steps, each no
+  longer than `1e-5` times the largest absolute parameter (at least
+  `1e-5`), lose more criterion than the model predicted. When the caller
+  supplies a curvature assessment, it certifies the result as it did after
+  the radius collapsed; otherwise the optimizer reports "converged to
+  criterion precision". It previously kept shrinking the radius until it
+  reported "trust radius became too small".
+
+- Sparse Gaussian location-scale REML fits warm up with extended
+  Fellner-Schall smoothing-parameter updates (Wood and Fasiolo, 2017) instead
+  of stochastic scores whenever the hybrid gradient is selected. Each update
+  needs one inner fit and penalty traces but no outer score or line search,
+  and smoothing parameters still moving toward a limit start the exact phase
+  on the search bound, where the projected trust region treats them as
+  inactive. `sparse_control$warmup` chooses `"efs"`, `"stochastic"`, or
+  `"none"`, and `efs_maxit` limits the updates.
+
 - Generalized sparse REML fits now compute an outer Hessian by central
   differences of their exact score after optimization (`sparse_control$hessian
   = "gradient"`, the default; `"none"` skips it). It enables the boundary

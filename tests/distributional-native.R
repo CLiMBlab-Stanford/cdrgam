@@ -1,5 +1,8 @@
 library(cdrgam)
 
+# These checks compare designs with native-unit references, so they fit
+# without predictor rescaling.
+
 # These comparisons check solver agreement on models fitted before linear
 # predictor centering became the default; they keep uncentered predictors.
 
@@ -19,7 +22,7 @@ formulas <- list(
         irf(location_signal, window=c(0, 1.5), k_l=6) - irf(1),
     scale=~ irf(scale_signal, window=c(0, 1.5), k_l=6) - irf(1)
 )
-design <- prepare_cdrgam(
+design <- prepare_cdrgam(rescale_predictors=FALSE,
     center_predictors=FALSE,
     formulas,
     impulses,
@@ -40,7 +43,7 @@ fit <- cdrgam.fit(
     backend='mgcv',
     method='REML'
 )
-one_step <- cdrgam(
+one_step <- cdrgam(rescale_predictors=FALSE,
     center_predictors=FALSE,
     formulas,
     impulses,
@@ -91,6 +94,7 @@ hybrid_sparse <- cdrgam.fit(
     },
     sparse_control=list(
         gradient='hybrid',
+        warmup='stochastic',
         gradient_probes=8L,
         optimizer_maxit=1L,
         optimizer_gradient_tolerance=1e6
@@ -306,7 +310,7 @@ smooth_formulas <- list(
 )
 responses$location_offset <- seq(-0.1, 0.1, length.out=n_responses)
 responses$scale_offset <- seq(0.05, -0.05, length.out=n_responses)
-smooth_design <- prepare_cdrgam(
+smooth_design <- prepare_cdrgam(rescale_predictors=FALSE,
     center_predictors=FALSE,
     smooth_formulas,
     impulses,
@@ -392,7 +396,7 @@ expect_error <- function(expression, pattern) {
     stopifnot(!is.na(message), grepl(pattern, message, fixed=TRUE))
 }
 expect_error(
-    prepare_cdrgam(
+    prepare_cdrgam(rescale_predictors=FALSE,
         center_predictors=FALSE,
         list(mean=formulas$location, scale=formulas$scale),
         impulses,

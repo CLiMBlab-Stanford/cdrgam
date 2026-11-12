@@ -141,9 +141,13 @@ stopifnot(
     identical(automatic$sparse$outer_optimizer, 'bfgs_trust'),
     identical(automatic$sparse$hessian_requested, 'none'),
     identical(automatic$sparse$hessian, 'none'),
+    # Workers are capped by the requested count, the number of directions,
+    # and the cores available to the process.
     automatic$sparse$control$gradient_workers == if (
         .Platform$OS.type == 'windows'
-    ) 1L else min(4L, 2L * length(automatic$sp)),
+    ) 1L else min(
+        4L, 2L * length(automatic$sp), automatic$sparse$control$cores
+    ),
     automatic$sparse$control$gradient_workers *
         automatic$sparse$control$gradient_blas_threads <=
         automatic$sparse$control$cores,
@@ -382,10 +386,12 @@ if (.Platform$OS.type != 'windows') {
         backend='sparse',
         sparse_control=list(gradient='finite', gradient_workers=2L)
     )
+    # Two workers are requested, but a single-core process runs serially.
     stopifnot(
         abs(finite_serial$reml - finite_parallel$reml) < 1e-8,
         max(abs(coef(finite_serial) - coef(finite_parallel))) < 1e-8,
-        finite_parallel$sparse$parallel_gradient_factorizations > 0L
+        finite_parallel$sparse$control$gradient_workers < 2L ||
+            finite_parallel$sparse$parallel_gradient_factorizations > 0L
     )
 }
 

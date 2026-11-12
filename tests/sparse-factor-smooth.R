@@ -1,5 +1,8 @@
 library(cdrgam)
 
+# These checks compare designs with native-unit references, so they fit
+# without predictor rescaling.
+
 set.seed(42)
 subject <- factor(rep(letters[1:4], each=20))
 responses <- data.frame(
@@ -11,7 +14,7 @@ responses$y <- 0.4 * responses$x + rnorm(80, sd=0.2)
 impulses <- responses[c('subject', 'time')]
 
 formula <- y ~ s(x, subject, bs='fs', k=5) + irf(1)
-design <- prepare_cdrgam(
+design <- prepare_cdrgam(rescale_predictors=FALSE,
     formula,
     impulses=impulses,
     responses=responses,
@@ -71,7 +74,7 @@ predicted_new <- suppressWarnings(cdrgam:::.cdr_predict_random_effect(
 stopifnot(any(predicted_new[1L, ] != 0))
 stopifnot(all(predicted_new[2L, ] == 0))
 
-fit <- cdrgam(
+fit <- cdrgam(rescale_predictors=FALSE,
     formula,
     impulses=impulses,
     responses=responses,

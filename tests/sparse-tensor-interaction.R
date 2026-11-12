@@ -1,5 +1,8 @@
 library(cdrgam)
 
+# These checks compare designs with native-unit references, so they fit
+# without predictor rescaling.
+
 set.seed(7)
 subject <- factor(rep(letters[1:5], each=40))
 responses <- data.frame(
@@ -16,7 +19,7 @@ responses$y <- subject_shift[subject] +
 impulses <- responses[c('subject', 'time')]
 
 prepare <- function(formula) {
-    prepare_cdrgam(
+    prepare_cdrgam(rescale_predictors=FALSE,
         formula,
         impulses=impulses,
         responses=responses,
@@ -103,7 +106,7 @@ stopifnot(ncol(dense$setup$X) > 1L, !length(dense$random_prediction))
 # The sparse fit agrees with the native mgcv backend on the same model.
 formula <- y ~ s(x, k=5) + s(subject, bs='re') +
     ti(x, subject, bs=c('cr', 're'), k=c(5, 5)) + irf(1)
-fit_sparse <- cdrgam(
+fit_sparse <- cdrgam(rescale_predictors=FALSE,
     formula,
     impulses=impulses,
     responses=responses,
@@ -114,7 +117,7 @@ fit_sparse <- cdrgam(
     backend='sparse',
     sparse_control=list(optimizer_maxit=1000L)
 )
-fit_native <- cdrgam(
+fit_native <- cdrgam(rescale_predictors=FALSE,
     formula,
     impulses=impulses,
     responses=responses,

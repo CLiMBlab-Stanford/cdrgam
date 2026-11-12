@@ -31,8 +31,19 @@ native <- prepare_cdrgam(
     responses,
     series='series',
     history='ragged',
+    rescale_predictors=FALSE,
     quiet=TRUE
 )
+# Rescaling is the default.
+default_scaling <- prepare_cdrgam(
+    model_formula,
+    impulses,
+    responses,
+    series='series',
+    history='ragged',
+    quiet=TRUE
+)
+stopifnot(isTRUE(default_scaling$scaling$enabled))
 scaled <- prepare_cdrgam(
     model_formula,
     impulses,

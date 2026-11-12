@@ -1384,9 +1384,9 @@ irf <- function(
 #' @param chunk_size Maximum history links transformed at once in ragged mode,
 #'   or responses transformed at once in dense mode.
 #' @param rescale_predictors Divide continuous numeric predictors and internal
-#'   lag coordinates by training-data standard deviations. Scaling is disabled
-#'   by default. Binary, constant, categorical, grouping, and series variables
-#'   are not changed.
+#'   lag coordinates by training-data standard deviations. Scaling is enabled
+#'   by default; set `FALSE` to fit in native units. Binary, constant,
+#'   categorical, grouping, and series variables are not changed.
 #' @param center_predictors Center linear IRF predictors, including binary
 #'   ones, at their means over the training history links. Every term is then
 #'   defined relative to an average event: removing `irf(1)` removes the
@@ -1426,7 +1426,7 @@ prepare_cdrgam <- function(
         response_time='time',
         history=c('auto', 'dense', 'ragged'),
         chunk_size=10000,
-        rescale_predictors=FALSE,
+        rescale_predictors=TRUE,
         center_predictors=TRUE,
         quiet=FALSE,
         drop.unused.levels=TRUE
@@ -2205,7 +2205,18 @@ prepare_cdrgam <- function(
 #'   `gradient` entry may be `"auto"` (the default), `"finite"`, `"exact"`,
 #'   `"stochastic"`, or `"hybrid"`; `gradient_probes` controls the fixed
 #'   Rademacher trace probes used by the latter two methods; `"hybrid"` uses
-#'   stochastic scores for a warm start and then refines with exact scores;
+#'   a warm start and then refines with exact scores. For Gaussian
+#'   location-scale REML, `warmup` selects that warm start: `"efs"` runs up
+#'   to `efs_maxit` (default `30`) extended Fellner-Schall updates
+#'   (Wood and Fasiolo, 2017), each needing one inner fit and penalty traces
+#'   but no outer score or line search, and sets smoothing parameters still
+#'   moving toward a limit to the search bound before the exact phase;
+#'   `"stochastic"` uses stochastic scores as before; `"none"` skips the warm
+#'   start; and `"auto"` (the default) uses `"efs"` whenever `"hybrid"`
+#'   would be selected and no warm start otherwise. The exact phase solves
+#'   each inner fit to `exact_inner_relative_tolerance` (default the tighter
+#'   of `1e-11` and `inner_relative_tolerance`), so that criterion noise from
+#'   the inner fit stays below the trust-region improvements;
 #'   `"auto"` compares predicted exact-score time and memory with the cost of
 #'   finite differences after the first objective factorization;
 #'   `gradient_workers` optionally overrides the automatically selected number
@@ -2364,7 +2375,7 @@ cdrgam <- function(
         response_time='time',
         history=c('auto', 'dense', 'ragged'),
         chunk_size=10000,
-        rescale_predictors=FALSE,
+        rescale_predictors=TRUE,
         center_predictors=TRUE,
         family=stats::gaussian(),
         method=NULL,

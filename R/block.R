@@ -132,24 +132,49 @@
     list(setup=setup, info=info)
 }
 
+# Factor a sparse system, returning NULL when it is not numerically positive
+# definite. CHOLMOD reports that condition with a warning and, for some
+# factorization modes, still returns a factor, so a warning is a failure.
+.cdr_sparse_cholesky <- function(expression) {
+    tryCatch(
+        expression,
+        warning=function(condition) NULL,
+        error=function(condition) NULL
+    )
+}
+
+# Whether a successful sparse factor shows an identifiable system. Each pivot
+# divided by the matching system diagonal entry is the fraction of that
+# coefficient direction not explained by the directions factored before it.
+# Exactly collinear directions give values near machine precision whether or
+# not rounding left the pivot positive; the ratio does not depend on column
+# scaling.
+.cdr_sparse_factor_identifiable <- function(factor, system, tolerance) {
+    pivots <- as.numeric(Matrix::diag(factor))
+    permutation <- methods::slot(factor, 'perm')
+    scale <- as.numeric(Matrix::diag(system))
+    if (length(permutation) == length(scale)) scale <- scale[permutation + 1L]
+    ratio <- pivots / scale
+    length(ratio) > 0L && all(is.finite(ratio)) && min(ratio) > tolerance
+}
+
 .rank_regularization <- function(
         system, action, tolerance, penalty, supernodal=FALSE) {
     dense <- is.matrix(system)
-    factorable <- function(candidate) {
+    factorable <- function(candidate, check_rank=FALSE) {
         if (dense) {
             return(!is.null(tryCatch(
                 chol(candidate), error=function(e) NULL
             )))
         }
-        !is.null(tryCatch(
-            suppressWarnings(Matrix::Cholesky(
-                Matrix::Matrix(candidate, sparse=TRUE),
-                LDL=FALSE, perm=TRUE, super=supernodal
-            )),
-            error=function(e) NULL
+        candidate <- Matrix::Matrix(candidate, sparse=TRUE)
+        factor <- .cdr_sparse_cholesky(Matrix::Cholesky(
+            candidate, LDL=FALSE, perm=TRUE, super=supernodal
         ))
+        !is.null(factor) && (!check_rank ||
+            .cdr_sparse_factor_identifiable(factor, candidate, tolerance))
     }
-    probe <- factorable(system)
+    probe <- factorable(system, check_rank=TRUE)
     condition <- if (dense && isTRUE(probe)) {
         tryCatch(rcond(system), error=function(e) 0)
     } else {
@@ -653,9 +678,11 @@
             axis=term$axis,
             linear_predictors=term$linear_predictors,
             linear_predictor_summaries=term$linear_predictor_summaries,
+            linear_predictor_centers=term$linear_predictor_centers,
             basis=term$basis,
             transform=term$transform,
             group=term$group,
+            group_penalty=term$group_penalty,
             group_levels=term$group_levels,
             base_dimension=term$base_dimension,
             rank=term$rank,
@@ -873,9 +900,11 @@
             axis=term$axis,
             linear_predictors=term$linear_predictors,
             linear_predictor_summaries=term$linear_predictor_summaries,
+            linear_predictor_centers=term$linear_predictor_centers,
             basis=term$basis,
             transform=term$transform,
             group=term$group,
+            group_penalty=term$group_penalty,
             group_levels=term$group_levels,
             base_dimension=term$base_dimension,
             rank=term$rank,

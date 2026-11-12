@@ -81,6 +81,23 @@ deviation. Formulas remain unchanged; new data are transformed with the stored
 training statistics, and CDR plots and effect estimates use native source
 units.
 
+Linear IRF predictors, including binary ones, are centered by default at their
+means over the training history links. Every term is then defined relative to
+an average event, so removing `irf(1)` removes the response to an average
+event, and omitting a lower-order term of an interaction removes that effect at
+the other predictors' means. Without centering, `- irf(1)` would instead
+require a zero response to an event whose predictors are all zero, and the
+average-event response would remain inside the predictor terms. The prepared
+design's `centering` table records each predictor's center. `irf(1)` is then the response to an
+event with average linear predictors, and each linear term is the deviation
+from that response. Smooth predictor axes are already centered by their own
+constraint, so both kinds of term share the same reference. Lower-order terms
+of a linear interaction are effects with the other predictors at their means.
+Set `center_predictors = FALSE` for uncentered predictors, where `irf(1)` is
+the response at zero, or override individual terms with `irf(center = )`,
+which also accepts one logical value per predictor or predictor names. Centers
+are stored with the fit and applied to new data; effects take source values.
+
 ## Plotting
 
 `plot()` provides CDR-specific views of the fitted terms:

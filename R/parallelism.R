@@ -104,7 +104,8 @@
 }
 
 .cdrgam_sparse_score_batch_plan <- function(
-        task_count, workers, derivative_bytes, batch_size=NULL
+        task_count, workers, derivative_bytes, batch_size=NULL,
+        memory_fraction=0.55
 ) {
     task_count <- .cdrgam_positive_integer(task_count, 'score task count')
     workers <- min(
@@ -113,10 +114,15 @@
     )
     maximum_batch <- task_count
     derivative_bytes <- max(1, as.double(derivative_bytes))
+    if (length(memory_fraction) != 1L || !is.numeric(memory_fraction) ||
+            !is.finite(memory_fraction) || memory_fraction <= 0 ||
+            memory_fraction > 1) {
+        stop('score batch memory_fraction must lie in (0, 1]')
+    }
     memory <- .cdrgam_memory_availability()
     memory_batch <- if (is.finite(memory$available_bytes)) {
         max(1L, floor(
-            0.55 * memory$available_bytes / derivative_bytes
+            memory_fraction * memory$available_bytes / derivative_bytes
         ))
     } else 1L
     resolved_batch_size <- if (is.null(batch_size)) {
@@ -135,6 +141,7 @@
         groups=groups,
         batch_size=resolved_batch_size,
         derivative_bytes=derivative_bytes,
+        memory_fraction=memory_fraction,
         memory=memory
     )
 }

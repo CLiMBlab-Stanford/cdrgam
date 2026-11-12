@@ -97,6 +97,17 @@ grDevices::dev.off()
 stopifnot(file.info(plot_path)$size > 0)
 unlink(plot_path)
 
+booklet <- plot(sparse, select=3, se=FALSE, draw=FALSE, n=5, n_predictor=4)
+stopifnot(
+    length(booklet$panels) == 2L,
+    identical(vapply(booklet$panels, `[[`, character(1), 'predictor_label'),
+        c('time', 'B')),
+    all(vapply(booklet$panels, function(panel) {
+        length(unique(panel$data$lag)) == 5L &&
+            length(unique(panel$data$predictor)) == 4L
+    }, logical(1)))
+)
+
 for (basis in c('cr', 'cs', 'cc', 'tp', 'ts', 'ps')) {
     candidate <- prepare_cdrgam(
         stats::as.formula(paste0(

@@ -57,12 +57,12 @@ if (item_count > 0L) {
 
 model_formula <- if (item_count > 0L) {
     response ~ s(subject, bs='re') + s(item, bs='re') +
-        irf(x, window=c(0, 2), k=10) +
-        irf(x, window=c(0, 2), k=10, group=subject)
+        irf(x, window=c(0, 2), k_l=10) +
+        irf(x, window=c(0, 2), k_l=10, group=subject)
 } else {
     response ~ s(subject, bs='re') +
-        irf(x, window=c(0, 2), k=10) +
-        irf(x, window=c(0, 2), k=10, group=subject)
+        irf(x, window=c(0, 2), k_l=10) +
+        irf(x, window=c(0, 2), k_l=10, group=subject)
 }
 
 design <- prepare_cdrgam(
@@ -108,6 +108,10 @@ elapsed <- system.time({
     )
 })
 
+scalar_or_na <- function(value, missing=NA_real_) {
+    if (length(value)) value[[1L]] else missing
+}
+
 dense_grouped_bytes <- nrow(responses) * group_count * 10 * 8
 results <- data.frame(
     groups=group_count,
@@ -115,6 +119,12 @@ results <- data.frame(
     responses=nrow(responses),
     coefficients=length(coef(fit)),
     smoothing_parameters=length(fit$sp),
+    converged=isTRUE(fit$converged),
+    optimizer_code=scalar_or_na(
+        fit$sparse$convergence$code, NA_integer_
+    ),
+    outer_gradient=scalar_or_na(fit$sparse$convergence$gradient_norm),
+    condition_indicator=scalar_or_na(fit$sparse$condition_indicator),
     exact_trace_rhs=sum(vapply(
         cdrgam:::.sparse_penalty_supports(fit$sparse$penalty_components),
         length,
@@ -143,6 +153,11 @@ results <- data.frame(
     elapsed_seconds=unname(elapsed[['elapsed']])
 )
 print(results, row.names=FALSE)
+output <- Sys.getenv('CDRGAM_SCALE_OUTPUT')
+if (nzchar(output)) {
+    dir.create(dirname(output), recursive=TRUE, showWarnings=FALSE)
+    utils::write.csv(results, output, row.names=FALSE)
+}
 
 lag <- seq(0, 2, length.out=101)
 selected <- groups[unique(round(seq(1, group_count, length.out=8)))]

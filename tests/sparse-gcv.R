@@ -65,6 +65,34 @@ finite_gradient <- vapply(seq_along(gradient_point), function(index) {
 }, numeric(1))
 stopifnot(max(abs(exact_gradient - finite_gradient)) < 1e-7)
 
+gradient_function <- function(log_sp) {
+    retained <- gcv_evaluate(log_sp, retain=TRUE)
+    cdrgam:::.sparse_exact_gcv_gradient(
+        retained$factor,
+        retained$sp,
+        components,
+        supports,
+        retained$coefficients,
+        retained$residual_rss,
+        retained$effective_df,
+        length(y)
+    )
+}
+gradient_hessian <- cdrgam:::.central_difference_jacobian(
+    gradient_function,
+    gradient_point,
+    step=1e-4
+)$hessian
+objective_hessian <- cdrgam:::.central_difference_hessian(
+    gcv_evaluate,
+    gradient_point,
+    step=1e-4
+)$hessian
+stopifnot(
+    max(abs(gradient_hessian - objective_hessian)) /
+        max(1, max(abs(objective_hessian))) < 1e-5
+)
+
 # The sparse Gaussian GCV objective must reproduce native mgcv on the same
 # prepared design, including its exact effective degrees of freedom and scale.
 simulation <- simulate_cdr(
@@ -127,6 +155,41 @@ stopifnot(
     isTRUE(sparse$scale.estimated)
 )
 
+sparse_newton <- cdrgam.fit(
+    design,
+    backend='sparse',
+    method='GCV.Cp',
+    sparse_control=list(
+        gradient='exact',
+        outer_optimizer='newton',
+        hessian='gradient',
+        optimizer_maxit=100,
+        restarts=0
+    )
+)
+gcv_unconditional_error <- tryCatch(
+    vcov(sparse_newton, unconditional=TRUE),
+    error=conditionMessage
+)
+stopifnot(
+    isTRUE(sparse_newton$converged),
+    identical(sparse_newton$sparse$outer_optimizer, 'newton'),
+    identical(sparse_newton$sparse$hessian, 'gradient'),
+    identical(dim(sparse_newton$outer.info$hess), c(2L, 2L)),
+    isTRUE(sparse_newton$sparse$convergence$hessian_positive_definite),
+    isTRUE(all.equal(
+        sparse_newton$outer.info$hess,
+        t(sparse_newton$outer.info$hess),
+        tolerance=1e-10
+    )),
+    sparse_newton$sparse$newton_hessian_gradient_evaluations > 0L,
+    grepl('does not define smoothing-parameter covariance',
+        gcv_unconditional_error, fixed=TRUE),
+    abs(unname(sparse_newton$gcv.ubre - native$gcv.ubre)) /
+        unname(native$gcv.ubre) < 1e-5,
+    sqrt(mean((fitted(sparse_newton) - fitted(native))^2)) < 1e-3
+)
+
 # Gamma must enter the GCV denominator exactly as it does in mgcv.
 native_gamma <- cdrgam.fit(
     design,
@@ -156,22 +219,16 @@ options(cdrgam.memory_limit_bytes=previous_memory_limit)
 stopifnot(
     isTRUE(sparse_gamma$converged),
     identical(sparse_gamma$sparse$control$gradient, 'exact'),
+    identical(sparse_gamma$sparse$outer_optimizer, 'newton'),
     abs(unname(sparse_gamma$gcv.ubre - native_gamma$gcv.ubre)) /
         unname(native_gamma$gcv.ubre) < 1e-5,
     abs(sum(native_gamma$edf) -
         cdrgam:::.sparse_effective_df(sparse_gamma)) < 1e-3
 )
 
-gcv_reduction_error <- tryCatch(
-    cdrgam.fit(
-        design,
-        backend='sparse',
-        method='GCV.Cp',
-        sparse_control=list(boundary_action='reduce')
-    ),
-    error=conditionMessage
-)
 stopifnot(
-    is.character(gcv_reduction_error),
-    grepl('does not yet support boundary_action', gcv_reduction_error)
+    identical(sparse_gamma$sparse$control$boundary_action, 'reduce'),
+    identical(sparse_gamma$sparse$boundary_action, 'reduce'),
+    is.numeric(sparse_gamma$optimizer$gradient),
+    length(sparse_gamma$optimizer$gradient) == length(sparse_gamma$sp)
 )

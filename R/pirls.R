@@ -708,7 +708,9 @@
         score_evaluations=score_evaluations,
         warm_starts=warm_starts,
         cold_fallbacks=cold_fallbacks,
-        score_plan=score_plan
+        score_plan=score_plan,
+        objective=objective,
+        gradient=gradient
     )
 }
 
@@ -811,13 +813,22 @@
 ) {
     supports <- .sparse_penalty_supports(assembly$penalty_components)
     union_count <- length(unique(unlist(supports, use.names=FALSE)))
-    retained_elements <- as.double(union_count)^2
     inverse_chunk_size <- .cdrgam_sparse_trace_chunk_size(
         assembly$dimension, 1L, memory
     )
-    retained_bytes <- 8 * retained_elements
-    transient_bytes <- 16 * as.double(assembly$dimension) *
-        inverse_chunk_size +
+    # The traces stream one batch of inverse columns at a time, as in the
+    # Gaussian analytic Hessian; the leverage pass adds its own solves and an
+    # observation-length accumulator.
+    traces <- .sparse_analytic_hessian_memory(
+        supports,
+        assembly$dimension,
+        inverse_chunk_size,
+        components=assembly$penalty_components
+    )
+    retained_elements <- traces$retained_elements
+    retained_bytes <- traces$retained_bytes
+    transient_bytes <- traces$transient_bytes +
+        16 * as.double(assembly$dimension) * inverse_chunk_size +
         24 * as.double(assembly$observation_count)
     estimated_peak_bytes <- retained_bytes + transient_bytes
     available <- memory$available_bytes
@@ -928,32 +939,33 @@
     if (!count) return(numeric())
     supports <- .sparse_penalty_supports(components)
     union_support <- sort(unique(unlist(supports, use.names=FALSE)))
-    support_positions <- lapply(supports, match, table=union_support)
-    retained_elements <- as.double(length(union_support))^2
-    if (!is.numeric(element_limit) || length(element_limit) != 1L ||
-            !is.finite(element_limit) || element_limit < 1) {
-        stop('The exact generalized GCV-gradient element limit must be positive')
-    }
-    if (retained_elements > element_limit) {
-        stop(
-            'The exact generalized GCV gradient would retain ',
-            format(retained_elements, scientific=FALSE, big.mark=','),
-            ' selected-inverse elements; the current limit is ',
-            format(element_limit, scientific=FALSE, big.mark=','),
-            '. Use gradient="finite" or raise option ',
-            'cdrgam.max_analytic_hessian_elements explicitly.'
-        )
-    }
     inverse_chunk_size <- .cdrgam_positive_integer(
         inverse_chunk_size, 'exact generalized GCV inverse chunk size'
     )
+    # tr(A^-1 D_j) and tr(A^-1 D_i A^-1 D_j) come from batches of inverse
+    # columns that are discarded once their traces are accumulated.
+    traces <- .sparse_selected_inverse_traces(
+        solution$factor,
+        sp,
+        components,
+        supports,
+        solution$coefficients,
+        inverse_chunk_size,
+        element_limit,
+        limit_message=list(
+            invalid=paste(
+                'The exact generalized GCV-gradient element limit must',
+                'be positive'
+            ),
+            prefix='The exact generalized GCV gradient would hold ',
+            fallback='Use gradient="finite"'
+        )
+    )
+    retained_elements <- traces$working_elements
     derivatives <- lapply(seq_len(count), function(index) {
         sp[[index]] * components[[index]]
     })
     penalty <- Reduce(`+`, derivatives)
-    selected_inverse <- matrix(
-        0, nrow=length(union_support), ncol=length(union_support)
-    )
     weight_changes <- !identical(family$family, 'Gamma')
     penalty_leverage <- if (weight_changes) {
         numeric(assembly$observation_count)
@@ -963,8 +975,13 @@
         1L, assembly$observation_count,
         by=min(chunk_size, assembly$observation_count)
     )
-    for (start in seq.int(
-            1L, length(union_support), by=inverse_chunk_size)) {
+    # The leverage x_r' A^-1 S A^-1 x_r of each observation, needed when the
+    # working weights change with the linear predictor, also streams over
+    # column chunks without retaining them.
+    leverage_starts <- if (weight_changes) {
+        seq.int(1L, length(union_support), by=inverse_chunk_size)
+    } else integer()
+    for (start in leverage_starts) {
         selected <- start:min(
             length(union_support), start + inverse_chunk_size - 1L
         )
@@ -973,70 +990,28 @@
             i=columns, j=seq_along(columns), x=1,
             dims=c(assembly$dimension, length(columns))
         )
-        right_hand_sides <- if (weight_changes) {
-            cbind(selector, penalty[, columns, drop=FALSE])
-        } else selector
         solved <- as.matrix(.cdr_factor_solve(
-            solution$factor, right_hand_sides
+            solution$factor,
+            cbind(selector, penalty[, columns, drop=FALSE])
         ))
         inverse_rhs <- inverse_rhs + ncol(solved)
         inverse_columns <- solved[, seq_along(columns), drop=FALSE]
-        selected_inverse[, selected] <- inverse_columns[
-            union_support, , drop=FALSE
+        penalty_columns <- solved[
+            , length(columns) + seq_along(columns), drop=FALSE
         ]
-        if (weight_changes) {
-            penalty_columns <- solved[
-                , length(columns) + seq_along(columns), drop=FALSE
-            ]
-            for (row_start in starts) {
-                rows <- row_start:min(
-                    assembly$observation_count,
-                    row_start + chunk_size - 1L
-                )
-                X <- .cdrgam_sparse_design_chunk(assembly, rows)
-                left <- as.matrix(X %*% inverse_columns)
-                right <- as.matrix(X %*% penalty_columns)
-                penalty_leverage[rows] <- penalty_leverage[rows] +
-                    rowSums(left * right)
-            }
+        for (row_start in starts) {
+            rows <- row_start:min(
+                assembly$observation_count,
+                row_start + chunk_size - 1L
+            )
+            X <- .cdrgam_sparse_design_chunk(assembly, rows)
+            left <- as.matrix(X %*% inverse_columns)
+            right <- as.matrix(X %*% penalty_columns)
+            penalty_leverage[rows] <- penalty_leverage[rows] +
+                rowSums(left * right)
         }
     }
-    inverse_derivatives <- vector('list', count)
-    system_scores <- numeric(count)
-    for (index in seq_len(count)) {
-        support <- supports[[index]]
-        positions <- support_positions[[index]]
-        local_penalty <- as.matrix(derivatives[[index]][
-            support, support, drop=FALSE
-        ])
-        value <- selected_inverse[, positions, drop=FALSE] %*%
-            local_penalty
-        inverse_derivatives[[index]] <- value
-        system_scores[[index]] <- sum(value[cbind(
-            positions, seq_along(support)
-        )])
-    }
-    trace_cross_sums <- numeric(count)
-    for (i in seq_len(count)) {
-        positions_i <- support_positions[[i]]
-        for (j in seq_len(i)) {
-            support_j <- supports[[j]]
-            positions_j <- support_positions[[j]]
-            left <- inverse_derivatives[[j]][
-                positions_i, , drop=FALSE
-            ]
-            right <- inverse_derivatives[[i]][
-                positions_j, , drop=FALSE
-            ]
-            trace_cross <- sum(left * t(right))
-            trace_cross_sums[[i]] <- trace_cross_sums[[i]] + trace_cross
-            if (i != j) {
-                trace_cross_sums[[j]] <-
-                    trace_cross_sums[[j]] + trace_cross
-            }
-        }
-    }
-    edf_gradient <- -(system_scores - trace_cross_sums)
+    edf_gradient <- -(traces$system_scores - rowSums(traces$trace_cross))
     observed_factor <- .cdrgam_generalized_observed_factor(
         assembly, family, solution, fixed_ridge, chunk_size
     )

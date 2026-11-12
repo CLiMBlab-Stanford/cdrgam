@@ -211,6 +211,44 @@ stopifnot(
     reduced$simplifications$action == 'boundary_nullspace_reduction'
 )
 
+# A certified full-rank penalty is a zero-variance estimate. Remove the term
+# without requiring a formula edit, and remap later terms' warm starts after
+# their generated smoothing-parameter names shift.
+full_design <- design
+full_design$terms <- stats::setNames(list(term, term), c('x|subject', 'z|subject'))
+full_fit <- fit
+full_fit$sp <- stats::setNames(
+    c(0.2, 0.3, exp(14), 0.4, 0.5, 0.6),
+    c(
+        's(cdr_term_1)1', 's(cdr_term_1)2', 's(cdr_term_1)3',
+        's(cdr_term_2)1', 's(cdr_term_2)2', 's(cdr_term_2)3'
+    )
+)
+full_fit$optimizer$gradient <- c(0.1, 0.1, 1e-7, 0.1, 0.1, 0.1)
+full_fit$sparse$penalty_trace <- c(0, 0, 7.9995, 0, 0, 0)
+full_fit$sparse$convergence$boundary <- stats::setNames(
+    'upper', 's(cdr_term_1)3'
+)
+full_plan <- cdrgam:::.cdr_boundary_reduction_plan(full_fit, full_design)
+full_reduced <- cdrgam:::.cdr_apply_boundary_reduction(
+    full_design, full_plan
+)
+full_initial <- cdrgam:::.cdr_boundary_warm_start(full_fit, full_reduced)
+stopifnot(
+    length(full_plan$entries) == 1L,
+    full_plan$table$status == 'certified_zero_variance_term',
+    full_plan$table$effective_dimension == 0L,
+    identical(names(full_reduced$terms), 'z|subject'),
+    full_reduced$simplifications$action ==
+        'boundary_zero_variance_removal',
+    isTRUE(all.equal(
+        unname(full_initial[c(
+            's(cdr_term_1)1', 's(cdr_term_1)2', 's(cdr_term_1)3'
+        )]),
+        log(c(0.4, 0.5, 0.6))
+    ))
+)
+
 # A reduced term can retain an unpenalized null space but no smoothing
 # parameters. Keep its coefficient block in the model without inventing a
 # smoothing-parameter name or index.
@@ -253,7 +291,7 @@ stopifnot(
 # Exercise automatic reduction and reoptimization through the public sparse
 # interface. A deliberately permissive gradient tolerance stops the pilot at
 # its initial point; the low boundary threshold then makes both marginal
-# penalties eligible while the full-rank group penalty remains explicit.
+# penalties eligible while their joint null space remains estimable.
 set.seed(20260917)
 impulses <- data.frame(
     series=rep(c('a', 'b'), each=30),
@@ -268,7 +306,7 @@ responses <- data.frame(
     response=rnorm(50)
 )
 prepared <- prepare_cdrgam(
-    response ~ irf(
+    response ~ s(time, k=5) + irf(
         x,
         window=c(0, 4),
         k=c(4, 4),
@@ -281,6 +319,16 @@ prepared <- prepare_cdrgam(
     history='ragged',
     quiet=TRUE
 )
+# This fixture isolates marginal curvature reduction. Whole-term group
+# shrinkage is exercised separately above.
+prepared$terms[[1L]]$S <- prepared$terms[[1L]]$S[1:2]
+prepared$terms[[1L]]$S.scale <- prepared$terms[[1L]]$S.scale[1:2]
+prepared$terms[[1L]]$rank <- prepared$terms[[1L]]$rank[1:2]
+prepared$terms[[1L]]$null.space.dim <-
+    length(prepared$terms[[1L]]$group_levels) * (
+        ncol(prepared$terms[[1L]]$X) -
+        qr(Reduce(`+`, prepared$terms[[1L]]$S))$rank
+    )
 
 # Exercise sparse setup when one reduced term has no remaining penalties and
 # another term still supplies a smoothing parameter.
@@ -319,6 +367,53 @@ zero_fit_plan <- list(
         stringsAsFactors=FALSE
     )
 )
+term_removal_design <- zero_fit_design
+term_removal_basis <- matrix(
+    numeric(),
+    nrow=ncol(term_removal_design$terms[[1L]]$X),
+    ncol=0L
+)
+term_removal_plan <- list(
+    entries=list(list(
+        term_index=1L,
+        penalty_indices=seq_along(term_removal_design$terms[[1L]]$S),
+        basis=term_removal_basis,
+        original_dimension=nrow(term_removal_basis),
+        effective_dimension=0L,
+        smoothing_parameters='s(cdr_term_1)',
+        log_sp=14,
+        score=1e-7
+    )),
+    table=data.frame(
+        term=names(term_removal_design$terms)[[1L]],
+        term_index=1L,
+        penalties='s(cdr_term_1)',
+        components='lag curvature',
+        original_dimension=nrow(term_removal_basis),
+        effective_dimension=0L,
+        maximum_log_sp=14,
+        maximum_score=1e-7,
+        status='certified_zero_variance_term',
+        stringsAsFactors=FALSE
+    )
+)
+term_removal_design <- cdrgam:::.cdr_apply_boundary_reduction(
+    term_removal_design,
+    term_removal_plan
+)
+term_removal_fit <- cdrgam.fit(
+    term_removal_design,
+    backend='sparse',
+    sparse_control=list(
+        gradient='exact',
+        outer_optimizer='bfgs_trust',
+        optimizer_maxit=2L,
+        optimizer_gradient_tolerance=1e6,
+        boundary_action='report',
+        hessian='none'
+    ),
+    rank_action='minimum_norm'
+)
 zero_fit_design <- cdrgam:::.cdr_apply_boundary_reduction(
     zero_fit_design,
     zero_fit_plan
@@ -337,6 +432,11 @@ zero_penalty_fit <- cdrgam.fit(
     rank_action='minimum_norm'
 )
 stopifnot(
+    identical(names(term_removal_design$terms), 'z'),
+    any(term_removal_design$simplifications$action ==
+        'boundary_zero_variance_removal'),
+    length(term_removal_fit$sp) == 1L,
+    all(is.finite(term_removal_fit$coefficients)),
     length(zero_fit_design$terms[[1L]]$S) == 0L,
     length(zero_penalty_fit$sp) == 1L,
     all(is.finite(zero_penalty_fit$coefficients))
@@ -364,14 +464,32 @@ stopifnot(
     isTRUE(automatic$cdrgam$conditional_on_boundary_reduction),
     sum(automatic$cdrgam$boundary_reductions$status ==
         'applied_and_reoptimized') == 1L,
-    sum(automatic$cdrgam$boundary_reductions$status ==
-        'full_term_boundary_requires_confirmation') >= 1L,
     !any(automatic$cdrgam$boundary_reductions$status ==
         'certified_boundary_candidate'),
     all(c('pilot', 'reoptimized') %in%
         automatic$cdrgam$boundary_reductions$fit_stage),
     any(automatic$cdrgam$preparation$simplifications$action ==
         'boundary_nullspace_reduction'),
+    all(is.finite(
+        automatic$cdrgam$boundary_reductions$pilot_criterion[
+            automatic$cdrgam$boundary_reductions$status ==
+                'applied_and_reoptimized'
+        ]
+    )),
+    all(
+        automatic$cdrgam$boundary_reductions$reduced_criterion[
+            automatic$cdrgam$boundary_reductions$status ==
+                'applied_and_reoptimized'
+        ] <=
+        automatic$cdrgam$boundary_reductions$pilot_criterion[
+            automatic$cdrgam$boundary_reductions$status ==
+                'applied_and_reoptimized'
+        ] +
+        automatic$cdrgam$boundary_reductions$equivalence_tolerance[
+            automatic$cdrgam$boundary_reductions$status ==
+                'applied_and_reoptimized'
+        ]
+    ),
     automatic$cdrgam$terms[[1L]]$base_dimension <
         prepared$terms[[1L]]$base_dimension,
     all(c(

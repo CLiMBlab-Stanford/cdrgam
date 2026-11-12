@@ -5,7 +5,7 @@
 \usage{
 \method{formula}{cdrgam_design}(
   x,
-  type = c("raw", "normalized", "effective"),
+  type = c("raw", "normalized", "effective", "mgcv"),
   ...
 )
 
@@ -17,14 +17,15 @@
 }
 \arguments{
 \item{x}{A fitted \code{cdrgam} object or prepared \code{cdrgam_design}.}
-\item{type}{Formula representation to return. The \code{"mgcv"} translation
-is available for fitted models.}
+\item{type}{Formula representation to return. The \code{"mgcv"} export
+formula uses named matrix terms whose penalties are supplied by the remaining
+components returned by \code{as_mgcv_spec()}.}
 \item{...}{Unused.}
 }
 \value{The selected formula, or a parameter-named formula list for a
 distributional model.}
 \description{
 Returns the raw user formula, the normalized CDR formula with structural defaults,
-the effective formula after automatic simplification, or the translated
-\pkg{mgcv} formula.
+the effective formula after automatic simplification, or the native
+\pkg{mgcv} export formula.
 }

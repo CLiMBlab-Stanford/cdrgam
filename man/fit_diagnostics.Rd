@@ -10,9 +10,23 @@ fit_diagnostics(object)
 \item{object}{A fitted \code{cdrgam} model.}
 }
 \value{
-A named list containing at least \code{converged}, \code{code}, and
-\code{message}. Custom backends also report available objective counts,
-gradient norms, boundary information, and Hessian diagnostics.
+A named list containing at least \code{outcome}, \code{reasons},
+\code{converged}, \code{code}, and \code{message}. \code{outcome} is
+\code{"success"}, \code{"warning"}, or \code{"nonconverged"}. A warning
+means that optimization converged but a recorded numerical or inferential
+diagnostic requires review. Custom backends also report available objective
+counts, gradient norms, boundary information, conditioning, and Hessian
+diagnostics. \code{notes} lists findings that do not change \code{outcome}.
+A sparse Gaussian REML fit adds a \code{boundary_variance_components} note
+when smoothing parameters are classified as on the boundary of their range;
+their profile bounds are in \code{hessian_boundary}. The
+\code{optimizer_stopped_short} reason means the reported optimum is not one:
+either a negative-curvature direction of the interior Hessian lies along a
+single smoothing parameter (listed in \code{hessian_negative_directions}),
+or, when the analytic Hessian was computed, a Newton step would still lower
+the -2 REML criterion by more than 0.1 (\code{predicted_decrease}). Negative
+curvature that mixes several smoothing parameters is reported as
+\code{indefinite_outer_hessian}.
 }
 \description{
 Report standardized fit convergence diagnostics

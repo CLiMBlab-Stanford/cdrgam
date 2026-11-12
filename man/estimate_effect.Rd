@@ -8,13 +8,15 @@ estimate_effect(
   axes = list(),
   impulses = NULL,
   responses = NULL,
-  composition = c("term", "deviation", "total"),
+  composition = c("term", "total"),
   grouping = c("population", "deviation", "conditional"),
   groups = NULL,
+  reference = list(),
   se = TRUE,
   unconditional = FALSE,
   level = 0.95,
-  n = 200L
+  n = 200L,
+  boundary = c("estimate", "bound")
 )
 }
 \arguments{
@@ -30,19 +32,70 @@ marginal hierarchy.}
 \item{grouping}{Whether grouped terms represent population effects,
 deviations, or their conditional sum.}
 \item{groups}{Optional grouping levels to evaluate.}
+\item{reference}{Optional named list of reference values for evaluation axes,
+using the same request forms as \code{axes}. Each request must resolve to one
+value. A predictor may instead be \code{NA} or \code{"default"} to leave it at
+the model default. The functional at the reference is subtracted from the
+functional on the grid.}
 \item{se}{Whether to calculate pointwise standard errors.}
 \item{unconditional}{Whether to include smoothing-parameter uncertainty when
-the fitted backend supports it.}
+the fitted backend supports it. Smoothing parameters classified as on the
+boundary of their range contribute no uncertainty, because the criterion has
+no local curvature along them. Sparse fits stop with an error when the outer
+Hessian is not positive definite after those parameters are excluded.}
 \item{level}{Confidence level for \code{lower} and \code{upper}.}
 \item{n}{Default number of points for fitted-domain grids.}
+
+\item{boundary}{\code{"estimate"} (the default) uses the fitted smoothing
+parameters. \code{"bound"} repeats the calculation with each boundary
+smoothing parameter set to its profile bound, the largest variance component
+the data still support, while the other smoothing parameters stay at their
+estimates. Compare the two to check whether conclusions depend on treating
+those variance components as zero. \code{"bound"} requires a sparse Gaussian
+REML fit with \code{sparse_control$boundary_sensitivity = TRUE} and
+\code{unconditional = FALSE}.}
 }
 \value{
 A \code{cdrgam_effect_grid} data frame containing evaluation axes, estimates,
 standard errors, and pointwise confidence limits on the linear-predictor scale.
+Each reference axis adds a \code{<axis>_reference} column, which is
+\code{NA} for a model default.
 }
 \description{
 Evaluates selected impulse-response terms as joint linear functionals of the
 fitted coefficients. Axes may vary over numeric values, quantiles, or the
 fitted domain, or be fixed at a training-data summary with an optional standard
 deviation offset.
+}
+\details{
+With \code{composition = "total"}, the selected term is summed with every
+ungrouped term in its hierarchy: terms on the same \code{by} covariate whose
+predictors are a subset of the selected term's predictors, with the same linear
+or smooth treatment of each shared predictor. For
+\code{irf(x, z, k_p = list(NULL, 3))} this adds \code{irf(x)},
+\code{irf(z, k_p = 3)}, and \code{irf(1)} when they are present. A
+time-invariant term is included below a time-varying term with the same
+predictors. Under \code{grouping = "conditional"}, the grouped deviations of
+the hierarchy terms at the same level are also added.
+
+\code{reference} subtracts the same functional evaluated at reference values
+of some axes. Axes not named in \code{reference} keep their evaluated values.
+The standard errors include the covariance of the two evaluations. A predictor
+whose reference is \code{NA} or \code{"default"} is left at the model default:
+every term that involves it contributes zero to the reference. For a centered
+linear predictor this equals its center. For a smooth predictor it is the
+training-average contribution implied by the term's identifiability
+constraint. With every predictor at its default, the reference under
+\code{composition = "total"} reduces to \code{irf(1)}, the response to an
+average event.
+
+For example, with \code{composition = "total"}, \code{x} at its mean plus one
+standard deviation, and
+\code{reference = list(x = list(at = list(summary = "mean")))}, the result is
+the effect of a one-SD increase in \code{x} at each requested value of
+\code{z}. A reference value of \code{z} gives differences between the
+interaction curves.
+}
+\seealso{
+\code{\link{test_effect}} for joint Wald tests of the same functionals.
 }

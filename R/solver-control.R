@@ -206,17 +206,45 @@
         state$legacy <- TRUE
         return(state)
     }
-    if (!identical(state$checkpoint_version, 1L) ||
-            !identical(state$model_signature, signature)) {
+    differences <- if (identical(state$checkpoint_version, 1L)) {
+        .checkpoint_signature_differences(state$model_signature, signature)
+    } else 'checkpoint_version'
+    if (length(differences)) {
         stop(
             'Checkpoint ', sQuote(path), ' does not match this model and ',
-            'cannot be resumed. Supply a different path or remove the stale ',
-            'checkpoint.',
+            'cannot be resumed (differing fields: ',
+            paste(differences, collapse=', '), '). Supply a different path ',
+            'or remove the stale checkpoint.',
             call.=FALSE
         )
     }
     state$legacy <- FALSE
     state
+}
+
+# Fields of a model signature that summarize floating-point sums. Their last
+# bits depend on BLAS threading and CPU instruction sets, so a resumed fit on
+# another node can reproduce them only to rounding error.
+.checkpoint_numeric_fields <- c('Xty', 'system_values')
+
+# Returns the names of signature fields that differ. Numeric summaries are
+# compared with a relative tolerance; every other field must be identical.
+.checkpoint_signature_differences <- function(stored, current,
+        tolerance=1e-10) {
+    if (!is.list(stored) || !is.list(current)) return('model_signature')
+    fields <- union(names(stored), names(current))
+    fields[!vapply(fields, function(field) {
+        left <- stored[[field]]
+        right <- current[[field]]
+        if (field %in% .checkpoint_numeric_fields &&
+                is.numeric(left) && is.numeric(right)) {
+            return(identical(names(left), names(right)) &&
+                length(left) == length(right) &&
+                all(abs(left - right) <=
+                    tolerance * pmax(1, abs(left), abs(right))))
+        }
+        identical(left, right)
+    }, logical(1))]
 }
 
 .new_checkpoint_state <- function(signature, backend, restart_count) {
@@ -700,6 +728,7 @@
         state=NULL,
         convergence_assessment=NULL,
         stagnation_diagnostic=NULL,
+        hessian_fn=NULL,
         maximum_recovery_resets=2L,
         minimum_radius=1e-8,
         objective_validity=NULL
@@ -811,6 +840,12 @@
         consecutive_small <- 0L
         recovery_resets <- 0L
         completed_iteration <- 0L
+    }
+    if (!resumed && !valid_objective(par, value)) {
+        stop(
+            'Initial trust-optimizer objective is invalid',
+            call.=FALSE
+        )
     }
     optimizer_state <- function(iteration) list(
         version=1L,
@@ -1058,22 +1093,46 @@
             break
         }
         iterations <- iteration
-        step_type <- 'bfgs'
+        step_type <- if (is.null(hessian_fn)) 'bfgs' else 'newton'
+        if (!is.null(hessian_fn)) {
+            current_hessian <- hessian_fn(par)
+            if (!is.matrix(current_hessian) ||
+                    !identical(dim(current_hessian), c(dimension, dimension)) ||
+                    any(!is.finite(current_hessian))) {
+                stop('The outer Hessian callback returned an invalid matrix')
+            }
+            hessian <- (current_hessian + t(current_hessian)) / 2
+        }
         direction <- tryCatch(
             -solve(hessian, projected),
             error=function(error) rep.int(NA_real_, dimension)
         )
+        positive_curvature <- if (is.null(hessian_fn)) TRUE else {
+            tryCatch(
+                min(eigen(
+                    hessian,
+                    symmetric=TRUE,
+                    only.values=TRUE
+                )$values) > sqrt(.Machine$double.eps) *
+                    max(1, max(abs(hessian))),
+                error=function(error) FALSE
+            )
+        }
         directional_derivative <- sum(projected * direction)
         descent_tolerance <- .Machine$double.eps *
             max(1, sqrt(sum(projected^2)) * sqrt(sum(direction^2)))
-        if (any(!is.finite(direction)) ||
+        if (!positive_curvature || any(!is.finite(direction)) ||
                 !is.finite(directional_derivative) ||
                 directional_derivative >= -descent_tolerance) {
             scale <- max(1, max(abs(projected)))
             hessian <- diag(scale, dimension)
             direction <- -projected / scale
             curvature_resets <- curvature_resets + 1L
-            step_type <- 'steepest_reset'
+            step_type <- if (is.null(hessian_fn)) {
+                'steepest_reset'
+            } else {
+                'steepest_indefinite'
+            }
         }
         direction_norm <- sqrt(sum(direction^2))
         if (direction_norm > radius) {
@@ -1220,7 +1279,8 @@
         difference <- candidate_gradient - gradient
         hessian_step <- drop(crossprod(step, hessian %*% step))
         curvature <- sum(step * difference)
-        if (is.finite(hessian_step) && hessian_step > 1e-14) {
+        if (is.null(hessian_fn) && is.finite(hessian_step) &&
+                hessian_step > 1e-14) {
             if (!is.finite(curvature) || curvature < 0.2 * hessian_step) {
                 denominator <- hessian_step - curvature
                 theta <- if (is.finite(denominator) && denominator > 0) {

@@ -268,8 +268,8 @@ stopifnot(
     identical(ample_selection$method, 'analytic'),
     identical(limited_selection$method, 'gradient'),
     identical(explicit_selection$method, 'gradient'),
-    ample_selection$retained_elements == 15000,
-    ample_selection$retained_bytes == 120000,
+    ample_selection$retained_elements == 10000,
+    ample_selection$retained_bytes == 231600,
     ample_selection$estimated_peak_bytes > ample_selection$retained_bytes,
     automatic_element_limit == ample_selection$retained_elements,
     explicit_element_limit == 1
@@ -318,6 +318,38 @@ mismatch <- tryCatch(
     error=function(error) conditionMessage(error)
 )
 stopifnot(grepl('does not match this model', mismatch, fixed=TRUE))
+stopifnot(grepl('Xty', mismatch, fixed=TRUE))
+
+# Floating-point summaries may differ by rounding error between nodes, so a
+# resumed fit accepts them; structural or larger numeric changes are rejected.
+stored_state <- readRDS(checkpoint)
+signature <- stored_state$model_signature
+rounded <- signature
+rounded$Xty <- rounded$Xty * (1 + 4 * .Machine$double.eps)
+rounded$system_values <- rounded$system_values * (1 - 4 * .Machine$double.eps)
+stopifnot(identical(
+    cdrgam:::.checkpoint_signature_differences(signature, rounded),
+    character()
+))
+stopifnot(identical(
+    cdrgam:::.checkpoint_validate(stored_state, rounded, checkpoint)$legacy,
+    FALSE
+))
+shifted <- signature
+shifted$Xty[['sum']] <- shifted$Xty[['sum']] * (1 + 1e-6)
+stopifnot(identical(
+    cdrgam:::.checkpoint_signature_differences(signature, shifted), 'Xty'
+))
+resized <- signature
+resized$dimension <- resized$dimension + 1L
+stopifnot(identical(
+    cdrgam:::.checkpoint_signature_differences(signature, resized), 'dimension'
+))
+resized_error <- tryCatch(
+    cdrgam:::.checkpoint_validate(stored_state, resized, checkpoint),
+    error=function(error) conditionMessage(error)
+)
+stopifnot(grepl('differing fields: dimension', resized_error, fixed=TRUE))
 
 # The dense reference backend obeys the same checkpoint contract.
 block_checkpoint <- tempfile('cdrgam-block-checkpoint-', fileext='.rds')
@@ -392,6 +424,20 @@ invalid_directional_check <- cdrgam:::.outer_directional_derivative_check(
     2,
     objective_validity=function(parameters, value) value < 1e40
 )
+invalid_initial_objective <- tryCatch(
+    {
+        cdrgam:::.safeguarded_outer_bfgs(
+            par=0,
+            fn=function(x) 1e50,
+            gr=function(x) 0,
+            lower=-1,
+            upper=1,
+            objective_validity=function(parameters, value) value < 1e40
+        )
+        NA_character_
+    },
+    error=function(error) conditionMessage(error)
+)
 stopifnot(
     directional_check$valid,
     directional_check$consistent,
@@ -404,7 +450,11 @@ stopifnot(
     invalid_directional_check$forward_valid,
     !invalid_directional_check$backward_valid,
     invalid_directional_check$recover,
-    abs(invalid_directional_check$finite_difference + 0.9995) < 1e-8
+    abs(invalid_directional_check$finite_difference + 0.9995) < 1e-8,
+    identical(
+        invalid_initial_objective,
+        'Initial trust-optimizer objective is invalid'
+    )
 )
 stopifnot(
     max(abs(quadratic_gradient_hessian$hessian - quadratic_hessian)) < 1e-10,

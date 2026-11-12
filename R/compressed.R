@@ -459,9 +459,11 @@ compress_cdr_smooth <- function(
                 axis=term$axis,
                 linear_predictors=term$linear_predictors,
                 linear_predictor_summaries=term$linear_predictor_summaries,
+                linear_predictor_centers=term$linear_predictor_centers,
                 basis=term$basis,
                 transform=term$transform,
                 group=term$group,
+                group_penalty=term$group_penalty,
                 group_levels=term$group_levels,
                 base_dimension=term$base_dimension,
                 rank=term$rank,
@@ -641,6 +643,15 @@ smooth.construct.cdr.smooth.spec <- function(object, data, knots) {
         object$X <- object$xt$X
         object$cdr.X <- object$xt$X
         object$xt$X <- NULL
+        # bam() constructs smooths on a subsample of row indices, so return
+        # the matching rows of the precomputed basis.
+        rows <- data[[object$term]]
+        if (is.null(dim(rows)) && length(rows) != nrow(object$X) &&
+                length(rows) && all(is.finite(rows)) &&
+                all(rows == round(rows)) &&
+                all(rows >= 1 & rows <= nrow(object$X))) {
+            object$X <- object$X[as.integer(rows), , drop=FALSE]
+        }
     } else {
         x <- data[[object$term]]
         if (length(x) %% p != 0) {

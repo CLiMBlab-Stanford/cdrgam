@@ -22,6 +22,7 @@ cdrgam(
   history = c("auto", "dense", "ragged"),
   chunk_size = 10000,
   rescale_predictors = FALSE,
+  center_predictors = TRUE,
   family = stats::gaussian(),
   method = NULL,
   engine = c("bam", "gam"),
@@ -88,6 +89,20 @@ predictors share the standard deviation of the untiled impulse-time column;
 history windows are still constructed in native time units. Stored scaling
 metadata are reused for prediction, while CDR effect estimates and plots are
 reported in native source units.}
+\item{center_predictors}{If \code{TRUE}, the default, center linear IRF
+predictors, including binary ones, at their means over the training history
+links. Every term is then defined relative to an average event: removing
+\code{irf(1)} removes the response to an average event, and omitting a
+lower-order term of an interaction removes that effect at the other
+predictors' means. The prepared design's \code{centering} table records each
+predictor's center. \code{irf(1)} is then the response to an event whose linear predictors
+are at those means, each linear term is the deviation from that response, and
+lower-order terms of a linear interaction are effects with the other
+predictors at their means. Effects and predictions still take source
+predictor values. \code{FALSE} leaves linear predictors uncentered, so
+\code{irf(1)} is the response at zero. Terms can override the setting with
+\code{irf(center = )}. Response-aligned \code{by} covariates are never
+centered.}
 \item{drop.unused.levels}{Drop factor levels without training observations.
 The default matches \code{mgcv::gam()}. Retained levels remain part of the
 fitted factor vocabulary. For \code{cdrgam.fit()}, use \code{NULL} to inherit
@@ -151,8 +166,16 @@ single-predictor generalized sparse solver accepts
 \code{crossprod_chunk_size}, \code{supernodal}, \code{optimizer_maxit},
 \code{optimizer_gradient_tolerance}, \code{optimizer_trust_radius},
 \code{cores}, \code{gradient}, \code{score_workers},
-\code{score_batch_size}, and \code{finite_difference_step}. Generalized REML
-uses an exact gradient and safeguarded trust-region optimization. Generalized
+\code{score_batch_size}, \code{finite_difference_step}, \code{hessian},
+\code{hessian_step}, and the boundary classification options
+\code{boundary_curvature_tolerance}, \code{boundary_hessian_log_sp},
+\code{boundary_profile}, and \code{boundary_profile_level}. Generalized REML
+uses an exact gradient and safeguarded trust-region optimization. After
+optimization, \code{hessian = "gradient"} (the default) central-differences
+the exact score with step \code{hessian_step} (default \code{1e-2}), two
+score evaluations per outer parameter, to obtain the outer Hessian used for
+boundary classification, profile bounds, optimizer diagnostics, and
+unconditional inference; \code{hessian = "none"} skips it. Generalized
 \code{"GCV.Cp"} uses L-BFGS-B and accepts \code{gradient="auto"} (the
 default), \code{"exact"}, or \code{"finite"}. Automatic selection compares
 the memory and structural cost of a selected-inverse analytic gradient with
@@ -162,7 +185,9 @@ through the converged PIRLS equations. The
 remaining controls below apply to Gaussian sparse fits. The distributional
 sparse solver accepts \code{crossprod_chunk_size}, \code{supernodal},
 \code{optimizer_maxit}, \code{optimizer_gradient_tolerance},
-\code{inner_tolerance}, \code{inner_maxit}, \code{cores}, \code{gradient},
+\code{inner_tolerance}, \code{inner_relative_tolerance},
+\code{inner_maxit}, \code{inner_algorithm}, \code{inner_schur_rank},
+\code{cores}, \code{gradient},
 \code{gradient_probes}, \code{gradient_workers}, \code{score_batch_size}, and
 \code{qncv_batch_size}. Its \code{gradient} may be \code{"auto"} (the
 default), \code{"exact"}, or \code{"hybrid"}. Automatic selection uses exact
@@ -170,6 +195,18 @@ scores for small joint systems and a deterministic matrix-free stochastic
 warm-up followed by exact-score refinement for large systems.
 QNCV resolves \code{"auto"} to \code{"exact"} and rejects \code{"hybrid"}
 because its analytic score is evaluated in streamed response batches.
+\code{inner_relative_tolerance} defaults to \code{1e-8} and accepts a
+conditional solve when both the actual and locally predicted objective
+reductions, divided by one plus the objective magnitude, fall below that
+threshold. This complements the absolute penalized-score
+\code{inner_tolerance} for large coefficient systems.
+\code{inner_algorithm="schur"} enables the experimental matrix-free Schur
+solver. It eliminates the larger location or scale coefficient block,
+preconditions the reduced system with the remaining sparse block factor, and
+certifies the reconstructed step against the full joint system.
+It augments that factor with a deterministic low-rank approximation to the
+Schur correction. \code{inner_schur_rank} controls the approximation rank and
+defaults to \code{6}.
 Hybrid warm-up stops early when rejected conditional fits exhaust a budget
 based on recent fit times, then refines from the best valid point.
 \code{gradient_probes} defaults to 64. Both generalized solvers warm-start each inner fit from
@@ -215,12 +252,16 @@ The resolved value is capped by \code{cores} and the number of directions and
 falls back to one on Windows.
 \code{finite_difference_step} defaults to \code{1e-3}.
 Sparse \code{"GCV.Cp"} uses the same cost-aware choice between exact and finite
-gradients but always uses L-BFGS-B.
+gradients. For Gaussian GCV, \code{"auto"} uses safeguarded Newton when the
+exact gradient fits the memory budget and there are at most six smoothing
+parameters, and L-BFGS-B otherwise. The
+\code{cdrgam.gcv_newton_max_parameters} option changes that threshold.
 \code{outer_optimizer} may be \code{"auto"} (the default), \code{"lbfgsb"},
-or the experimental safeguarded \code{"bfgs_trust"}. Automatic selection uses
-trust-region BFGS for exact gradients and L-BFGS-B otherwise. Explicitly
-requesting \code{"bfgs_trust"} with \code{gradient="auto"} forces an exact
-gradient. \code{optimizer_maxit} defaults to an initial budget of \code{200}.
+the safeguarded \code{"bfgs_trust"}, or \code{"newton"}.
+\code{"bfgs_trust"} applies to REML and \code{"newton"} applies to Gaussian
+GCV. Explicitly requesting either curvature optimizer with
+\code{gradient="auto"} forces an exact gradient.
+\code{optimizer_maxit} defaults to an initial budget of \code{200}.
 When that default is exhausted, analytic curvature recovery may add up to two
 more 200-iteration blocks. An explicitly supplied value is a hard limit.
 \code{optimizer_gradient_tolerance} and \code{optimizer_trust_radius}
@@ -239,9 +280,11 @@ the gradient-based Hessian on the first unconditional-inference request, and
 check honors the effective Linux cgroup or SLURM allocation when available.
 On other systems, automatic selection uses the gradient Hessian when available
 memory cannot be determined; the \code{cdrgam.memory_limit_bytes} option can
-provide an explicit process limit. Sparse \code{"GCV.Cp"} resolves
-\code{hessian="auto"} to \code{"none"} because smoothing-parameter
-uncertainty is not yet implemented. \code{hessian_step} controls the
+provide an explicit process limit. Sparse Gaussian \code{"GCV.Cp"} uses a
+post-fit Hessian as a local stability diagnostic. It differentiates the exact
+sparse gradient when that gradient fits memory, otherwise it differences the
+scalar criterion. GCV curvature is not reported as smoothing-parameter
+covariance. \code{hessian_step} controls the
 finite-difference step and defaults
 to \code{1e-2}.
 \code{supernodal} optionally overrides the automatically selected CHOLMOD
@@ -250,18 +293,56 @@ factorization form. \code{trace_method} may be \code{"auto"} (the default),
 with block-local inverse entries and requires \code{schur="always"}.
 \code{trace_chunk_size} bounds exact-score solves. \code{boundary_action}
 controls empirically inactive
-penalty subspaces: \code{"report"} (the default) records them,
-\code{"reduce"} projects certified IRF curvature boundaries to their joint
-null space and reoptimizes until no newly certified boundary remains, and
+penalty subspaces: \code{"reduce"} (the default) removes certified
+zero-variance IRF terms, projects other certified IRF boundaries to their
+joint null space, and reoptimizes until no newly certified boundary remains;
+\code{"report"} records the same diagnostics without changing the fitted
+design; and
 \code{"error"} turns optimizer nonconvergence
 into an error. \code{boundary_log_sp} is the minimum log smoothing parameter
 considered for reduction and defaults to \code{12}.
 \code{boundary_edf_tolerance} is the maximum effective degrees of freedom that
 the penalized subspace may retain before reduction and defaults to \code{0.01}.
 This scale-invariant check prevents a numerically large smoothing parameter
-from removing active curvature. Reduced-model inference is conditional on the
-recorded data-selected boundary reduction. Full-rank boundaries that would
-remove an entire term are reported but require user confirmation.
+from removing active curvature.
+After the outer Hessian is computed, a Gaussian REML fit classifies a
+smoothing parameter as on the boundary when its absolute log value is at
+least \code{boundary_hessian_log_sp} (default \code{8}) and every entry of its
+outer-Hessian row, which is on the negative log restricted-likelihood scale,
+is at most \code{boundary_curvature_tolerance} (default \code{0.05}) in
+absolute value. The criterion is then flat along that parameter alone. A flat
+direction that mixes several smoothing parameters is not classified this way
+and still makes the Hessian indefinite. Boundary parameters are listed in
+\code{fit$sparse$convergence$hessian_boundary}, are excluded from the
+positive-definiteness check and from unconditional covariance, and do not by
+themselves trigger a warning. For a parameter at its upper boundary, a
+variance component estimated as zero, \code{boundary_profile = TRUE} (the
+default) records a profile bound: the smallest log smoothing parameter whose
+-2 REML criterion stays within \code{qchisq(2 * boundary_profile_level - 1, 1)}
+of the optimum, with \code{boundary_profile_level} defaulting to \code{0.95}.
+This one-sided level follows the 50:50 chi-squared mixture for a variance
+component on its boundary. The other smoothing parameters stay at their
+estimates during the search, so the bound can understate the largest
+supported variance when parameters trade off. \code{boundary_sensitivity =
+TRUE} also stores the fit at the bounds, which roughly doubles the stored
+factorization, so that \code{\link{estimate_effect}} and
+\code{\link{test_effect}} accept \code{boundary = "bound"}.
+For Gaussian REML, \code{final_newton = TRUE} (the default) refines the
+optimum after the outer optimizer stops. Each step uses the exact gradient and analytic outer
+Hessian, holds boundary smoothing parameters fixed, replaces negative
+eigenvalues by their absolute values so the step still descends, follows the
+most negative eigenvector when the gradient is negligible but curvature is
+negative, and is accepted only if the criterion decreases. It stops when the
+predicted decrease falls below \code{newton_tolerance} (default \code{1e-3}
+on the -2 REML scale) with a positive-definite Hessian, or after
+\code{newton_max_steps} steps (default \code{5}). Each step costs about one
+analytic Hessian, so the phase is skipped with a warning when that Hessian
+exceeds the automatic memory budget unless \code{hessian = "analytic"}; the
+warning appears only when \code{final_newton} is set explicitly. The
+outcome is recorded in \code{fit$sparse$convergence$newton_refinement}. Reduced-model inference is conditional on the
+recorded data-selected boundary reduction. Every applied reduction records
+its source penalty, effective dimension, fit stage, and reduced-model
+objective check.
 \code{schur = "always"} enables the experimental
 response-group Schur solver instead of the default \code{"never"}. It batches
 block elimination, exact traces, and solves through BLAS; a threaded BLAS

@@ -60,6 +60,12 @@ one_chunk <- cdrgam.fit(
         restarts=2
     )
 )
+# The stored formulas must not capture the design through their environments;
+# a captured design is serialized with every saved fit.
+stopifnot(
+    length(serialize(small_chunks$cdrgam$formula, NULL)) <
+        0.1 * length(serialize(design, NULL))
+)
 native <- cdrgam.fit(design, backend='mgcv', engine='gam', method='REML')
 block <- cdrgam.fit(design, backend='block', method='REML')
 stopifnot(isTRUE(small_chunks$converged), isTRUE(one_chunk$converged))
@@ -250,6 +256,48 @@ penalized <- suppressWarnings(cdrgam.fit(
     rank_penalty=1e-5
 ))
 stopifnot(grepl('rank_action="minimum_norm"', rank_error, fixed=TRUE))
+
+# Exact duplicates are rank deficient whatever their coding. Rounding can leave
+# a positive pivot or make CHOLMOD warn instead of fail, so the check must not
+# depend on either.
+for (shift in c(0, 0.005397926, 1.37)) {
+    shifted_impulses <- confounded_impulses
+    shifted_impulses$x1 <- shifted_impulses$x1 - shift
+    shifted_impulses$x_duplicate <- shifted_impulses$x1
+    for (centered in c(TRUE, FALSE)) {
+        shifted_design <- prepare_cdrgam(
+            response ~ irf(x1, window=c(0, 2), k=7) +
+                irf(x_duplicate, window=c(0, 2), k=7) - irf(1),
+            shifted_impulses,
+            simulation$responses,
+            history='ragged',
+            quiet=TRUE,
+            center_predictors=centered
+        )
+        shifted_error <- tryCatch(
+            cdrgam.fit(shifted_design, backend='sparse', method='REML'),
+            error=function(e) conditionMessage(e)
+        )
+        stopifnot(is.character(shifted_error), grepl(
+            'The penalized model matrix is rank deficient', shifted_error, fixed=TRUE
+        ))
+    }
+}
+
+# Badly scaled but identifiable predictors are not reported as rank deficient.
+scaled_impulses <- confounded_impulses
+set.seed(4417)
+scaled_impulses$x_large <- 1e6 * rnorm(nrow(scaled_impulses))
+scaled_design <- prepare_cdrgam(
+    response ~ irf(x1, window=c(0, 2), k=7) +
+        irf(x_large, window=c(0, 2), k=7),
+    scaled_impulses,
+    simulation$responses,
+    history='ragged',
+    quiet=TRUE
+)
+scaled_fit <- cdrgam.fit(scaled_design, backend='sparse', method='REML')
+stopifnot(identical(scaled_fit$cdrgam$rank$resolution, 'none'))
 stopifnot(grepl('spans smooth or IRF terms', drop_error, fixed=TRUE))
 stopifnot(identical(
     minimum_norm$cdrgam$rank$resolution,

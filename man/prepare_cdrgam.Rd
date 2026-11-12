@@ -21,6 +21,7 @@ prepare_cdrgam(
   history = c("auto", "dense", "ragged"),
   chunk_size = 10000,
   rescale_predictors = FALSE,
+  center_predictors = TRUE,
   quiet = FALSE,
   drop.unused.levels = TRUE
 )
@@ -53,6 +54,20 @@ Binary, constant, categorical, grouping, and series variables are unchanged.
 Lag and explicit time predictors share the standard deviation of the untiled
 impulse-time column, after history links have been constructed in native time
 units.}
+\item{center_predictors}{If \code{TRUE}, the default, center linear IRF
+predictors, including binary ones, at their means over the training history
+links. Every term is then defined relative to an average event: removing
+\code{irf(1)} removes the response to an average event, and omitting a
+lower-order term of an interaction removes that effect at the other
+predictors' means. The prepared design's \code{centering} table records each
+predictor's center. \code{irf(1)} is then the response to an event whose linear predictors
+are at those means, each linear term is the deviation from that response, and
+lower-order terms of a linear interaction are effects with the other
+predictors at their means. Effects and predictions still take source
+predictor values. \code{FALSE} leaves linear predictors uncentered, so
+\code{irf(1)} is the response at zero. Terms can override the setting with
+\code{irf(center = )}. Response-aligned \code{by} covariates are never
+centered.}
 \item{drop.unused.levels}{Drop factor levels without training observations.
 The default matches \code{mgcv::gam()}. Retained levels remain part of the
 fitted factor vocabulary.}

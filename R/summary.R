@@ -5,7 +5,9 @@
     output <- list(
         raw=fallback
     )
-    if (!is.null(formulas$mgcv)) output$mgcv <- formulas$mgcv
+    if (!is.null(formulas$mgcv)) {
+        output$mgcv <- .cdrgam_mgcv_formula_from_fit(object)
+    }
     output
 }
 
@@ -471,8 +473,9 @@
 #'
 #' The default output follows [mgcv::summary.gam()]: it reports parametric
 #' coefficients and one row per smooth term instead of expanded smooth and
-#' random-effect coefficients. It prints the raw user formula, the translated
-#' `mgcv` formula, and a direct account of any automatic simplifications. Use
+#' random-effect coefficients. It prints the raw user formula, the native
+#' `mgcv` export formula, and a direct account of any automatic
+#' simplifications. Use
 #' [formula.cdrgam()] to inspect normalized and effective formulas. Set
 #' `all.coefficients=TRUE` to request the expanded table.
 #'

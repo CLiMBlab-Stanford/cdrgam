@@ -38,6 +38,21 @@
 #'   the complete IRF contribution.
 #' @param group Optional unquoted response-stream factor defining grouped IRF
 #'   deviations.
+#' @param center Centering of linear predictors. `NULL` inherits the
+#'   model-level `center_predictors` setting. `TRUE` or `FALSE` centers all or
+#'   none of this term's linear predictors. For interactions, a logical vector
+#'   with one entry per predictor, such as `c(FALSE, TRUE)`, or a character
+#'   vector of predictor names selects the predictors to center. A centered
+#'   predictor enters as its value minus its mean over the training history
+#'   links, so the term is zero for an event at that mean. Predictors with a
+#'   single linked value are not centered. Smooth predictor axes are always
+#'   centered by their own constraint and are unaffected. `irf(1)` has no
+#'   predictors to center.
+#' @param group_penalty Penalty construction for a grouped IRF. `"re"` keeps
+#'   the parsimonious tensor marginal penalties plus one full-rank group
+#'   shrinkage penalty. `"t2"` uses the grouped-null-space construction from
+#'   `mgcv::t2(full=FALSE)`. `"fs"` separates every null-space component as in
+#'   `mgcv::t2(full=TRUE)` and a univariate `bs="fs"` factor smooth.
 #' @return An internal `cdrgam_irf_spec` when evaluated by the formula compiler.
 #'   Before constraints, a tensor term's coefficient count is the product of
 #'   its axis dimensions.
@@ -55,6 +70,8 @@ irf <- function(
         bs_p='cr',
         by=NULL,
         group=NULL,
+        group_penalty=c('re', 't2', 'fs'),
+        center=NULL,
         k=NULL,
         bs=NULL,
         nonlinear=NULL,
@@ -64,6 +81,7 @@ irf <- function(
     varying_expr <- substitute(varying)
     by_expr <- substitute(by)
     group_expr <- substitute(group)
+    group_penalty <- match.arg(group_penalty)
     symbol_name <- function(expr, argument, allow_null=TRUE) {
         if (allow_null && identical(expr, quote(NULL))) {
             return(NULL)
@@ -116,6 +134,9 @@ irf <- function(
     window <- validate_window(window)
     by_name <- symbol_name(by_expr, 'by')
     group_name <- symbol_name(group_expr, 'group')
+    if (is.null(group_name) && !identical(group_penalty, 're')) {
+        stop('group_penalty requires group')
+    }
     if (!length(predictor_exprs)) stop('irf requires at least one predictor')
     constants <- vapply(predictor_exprs, function(expr) {
         is.numeric(expr) && length(expr) == 1L &&
@@ -130,6 +151,32 @@ irf <- function(
     predictors <- if (constant) character() else
         vapply(predictor_exprs, as.character, character(1))
     if (anyDuplicated(predictors)) stop('IRF predictors must be unique')
+    if (!is.null(center)) {
+        if (constant) stop('irf(1) has no predictors to center')
+        if (is.logical(center)) {
+            if (anyNA(center) || !(length(center) %in% c(1L, length(predictors)))) {
+                stop(
+                    'center must be NULL, TRUE, FALSE, one logical value per ',
+                    'predictor, or predictor names'
+                )
+            }
+            if (length(center) > 1L) center <- predictors[center]
+        } else if (is.character(center)) {
+            unknown <- setdiff(center, predictors)
+            if (anyNA(center) || length(unknown)) {
+                stop(
+                    'center names predictors that are not in this IRF: ',
+                    paste(unknown, collapse=', ')
+                )
+            }
+            center <- unique(center)
+        } else {
+            stop(
+                'center must be NULL, TRUE, FALSE, one logical value per ',
+                'predictor, or predictor names'
+            )
+        }
+    }
 
     legacy <- !is.null(k) || !is.null(bs) || !is.null(nonlinear) ||
         !missing(varying)
@@ -237,6 +284,8 @@ irf <- function(
         varying=time_name,
         by=by_name,
         group=group_name,
+        group_penalty=group_penalty,
+        center=center,
         api=if (legacy) 'legacy' else 'axis'
     )
     class(out) <- 'cdrgam_irf_spec'
@@ -271,8 +320,17 @@ irf <- function(
             spec$bs_p, encodeString, character(1), quote='"'
         ), collapse=', '), ')'))
     )
+    if (!is.null(spec$center)) arguments <- c(arguments, paste0(
+        'center=',
+        if (is.logical(spec$center)) as.character(spec$center) else
+            paste0('c(', paste(encodeString(spec$center, quote='"'), collapse=', '), ')')
+    ))
     if (!is.null(spec$by)) arguments <- c(arguments, paste0('by=', spec$by))
-    if (!is.null(spec$group)) arguments <- c(arguments, paste0('group=', spec$group))
+    if (!is.null(spec$group)) arguments <- c(
+        arguments,
+        paste0('group=', spec$group),
+        paste0('group_penalty=', encodeString(spec$group_penalty, quote='"'))
+    )
     paste0('irf(', paste(arguments, collapse=', '), ')')
 }
 
@@ -1052,7 +1110,99 @@ irf <- function(
     out
 }
 
-.group_cdr_term <- function(term, group, group_name) {
+.cdr_group_axis_specification <- function(term, specification) {
+    if (!is.null(term$axis)) {
+        return(lapply(term$axis, function(axis) list(
+            name=axis$internal,
+            values=axis$grid,
+            k=axis$k,
+            bs=axis$bs,
+            knots=axis$knots
+        )))
+    }
+    list(list(
+        name=term$basis$term[[1L]],
+        values=term$knots,
+        k=specification$k_l,
+        bs=specification$bs_l,
+        knots=if (identical(specification$bs_l, 'ps')) NULL else term$knots
+    ))
+}
+
+.cdr_group_t2_penalties <- function(term, specification, full) {
+    axes <- .cdr_group_axis_specification(term, specification)
+    group_name <- 'cdr_group_factor'
+    construction <- do.call(expand.grid, c(
+        stats::setNames(lapply(axes, `[[`, 'values'),
+            vapply(axes, `[[`, character(1), 'name')),
+        stats::setNames(list(factor(c('a', 'b', 'c'))), group_name),
+        list(KEEP.OUT.ATTRS=FALSE, stringsAsFactors=FALSE)
+    ))
+    axis_names <- vapply(axes, `[[`, character(1), 'name')
+    basis_call <- as.call(c(
+        list(quote(mgcv::t2)),
+        lapply(c(axis_names, group_name), as.name),
+        list(
+            k=c(vapply(axes, `[[`, integer(1), 'k'), 3L),
+            bs=c(vapply(axes, `[[`, character(1), 'bs'), 're'),
+            full=full
+        )
+    ))
+    knots <- stats::setNames(lapply(axes, `[[`, 'knots'), axis_names)
+    knots <- knots[!vapply(knots, is.null, logical(1))]
+    native <- mgcv::smoothCon(
+        eval(basis_call),
+        data=construction,
+        knots=if (length(knots)) knots else NULL,
+        absorb.cons=FALSE,
+        scale.penalty=FALSE,
+        n=nrow(construction)
+    )[[1L]]
+    base <- mgcv::PredictMat(
+        term$basis,
+        construction[axis_names],
+        n=nrow(construction)
+    )
+    if (!is.null(term$transform)) base <- base %*% term$transform
+    dimension <- ncol(base)
+    groups <- nlevels(construction[[group_name]])
+    grouped <- matrix(0, nrow=nrow(construction), ncol=groups * dimension)
+    for (index in seq_len(groups)) {
+        rows <- which(as.integer(construction[[group_name]]) == index)
+        columns <- (index - 1L) * dimension + seq_len(dimension)
+        grouped[rows, columns] <- base[rows, , drop=FALSE]
+    }
+    mapping <- qr.solve(native$X, grouped, tol=1e-10)
+    error <- max(abs(native$X %*% mapping - grouped))
+    tolerance <- max(1, max(abs(grouped))) * sqrt(.Machine$double.eps)
+    if (!is.finite(error) || error > tolerance) {
+        stop('Could not map the grouped IRF onto the requested mgcv t2 basis')
+    }
+    transformed <- lapply(native$S, function(penalty) {
+        value <- crossprod(mapping, penalty %*% mapping)
+        value <- (value + t(value)) / 2
+        value[abs(value) <= tolerance] <- 0
+        value
+    })
+    local <- lapply(transformed, function(penalty) {
+        penalty[seq_len(dimension), seq_len(dimension), drop=FALSE]
+    })
+    for (penalty_index in seq_along(transformed)) {
+        expected <- kronecker(diag(groups), local[[penalty_index]])
+        if (max(abs(transformed[[penalty_index]] - expected)) > tolerance) {
+            stop('The requested mgcv t2 penalty is not group separable')
+        }
+    }
+    local
+}
+
+.group_cdr_term <- function(
+        term,
+        group,
+        group_name,
+        group_penalty='re',
+        specification=NULL
+) {
     if (anyNA(group)) {
         stop('Grouped-IRF factors must not contain missing values')
     }
@@ -1067,8 +1217,17 @@ irf <- function(
     # a dense matrix (native mgcv/reference block solver) or directly to a
     # sparse grouped matrix. Since each response belongs to exactly one group,
     # the infinity norm of the expanded design equals that of the base design.
-    penalties <- term$S
-    penalties[[length(penalties) + 1L]] <- diag(base_dimension)
+    penalties <- switch(
+        group_penalty,
+        re={
+            value <- term$S
+            value[[length(value) + 1L]] <- diag(base_dimension)
+            value
+        },
+        t2=.cdr_group_t2_penalties(term, specification, full=FALSE),
+        fs=.cdr_group_t2_penalties(term, specification, full=TRUE),
+        stop('Unknown grouped-IRF penalty: ', group_penalty)
+    )
     design_scale <- norm(term$X, type='I')^2
     penalty_scales <- numeric(length(penalties))
     for (i in seq_along(penalties)) {
@@ -1085,6 +1244,7 @@ irf <- function(
     term$null.space.dim <- 0L
     term$S.scale <- penalty_scales
     term$group <- group_name
+    term$group_penalty <- group_penalty
     term$group_levels <- levels
     term$group_index <- as.integer(group)
     term$base_dimension <- base_dimension
@@ -1227,6 +1387,19 @@ irf <- function(
 #'   lag coordinates by training-data standard deviations. Scaling is disabled
 #'   by default. Binary, constant, categorical, grouping, and series variables
 #'   are not changed.
+#' @param center_predictors Center linear IRF predictors, including binary
+#'   ones, at their means over the training history links. Every term is then
+#'   defined relative to an average event: removing `irf(1)` removes the
+#'   response to an average event, and omitting a lower-order term of an
+#'   interaction removes that effect at the other predictors' means. The
+#'   prepared design's `centering` table records each predictor's center. With centering,
+#'   `irf(1)` is the response to an event whose linear predictors are at those
+#'   means, and each linear term is the deviation from that response. Lower-
+#'   order terms of a linear interaction are effects with the other predictors
+#'   at their means. Effects and predictions still use source predictor
+#'   values. `FALSE` restores uncentered predictors, where `irf(1)` is the
+#'   response at zero. Individual terms can override this with
+#'   `irf(center=)`. Response-aligned `by` covariates are never centered.
 #' @param drop.unused.levels Drop factor levels without training observations.
 #'   The default matches [mgcv::gam()]. Retained levels remain part of the
 #'   fitted factor vocabulary. For `cdrgam.fit()`, use `NULL` to inherit the
@@ -1254,6 +1427,7 @@ prepare_cdrgam <- function(
         history=c('auto', 'dense', 'ragged'),
         chunk_size=10000,
         rescale_predictors=FALSE,
+        center_predictors=TRUE,
         quiet=FALSE,
         drop.unused.levels=TRUE
 ) {
@@ -1268,6 +1442,7 @@ prepare_cdrgam <- function(
             history=history,
             chunk_size=chunk_size,
             rescale_predictors=rescale_predictors,
+            center_predictors=center_predictors,
             quiet=quiet,
             drop.unused.levels=drop.unused.levels
         )
@@ -1284,6 +1459,10 @@ prepare_cdrgam <- function(
         stop('impulses and responses must be data frames')
     }
     history <- match.arg(history)
+    if (length(center_predictors) != 1L || !is.logical(center_predictors) ||
+            is.na(center_predictors)) {
+        stop('center_predictors must be TRUE or FALSE')
+    }
     if (length(drop.unused.levels) != 1L ||
             !is.logical(drop.unused.levels) || is.na(drop.unused.levels)) {
         stop('drop.unused.levels must be TRUE or FALSE')
@@ -1336,6 +1515,7 @@ prepare_cdrgam <- function(
     terms <- vector('list', length(parsed$irfs))
     plans <- vector('list', length(parsed$irfs))
     simplifications <- list()
+    centering <- list()
     record_simplification <- function(
             term,
             axis,
@@ -1482,11 +1662,47 @@ prepare_cdrgam <- function(
         }
         smooth_predictors <- which(!vapply(spec$k_p, is.null, logical(1)))
         linear_predictors <- setdiff(seq_along(predictors), smooth_predictors)
+        center_setting <- if (is.null(spec$center)) center_predictors else
+            spec$center
+        requested <- if (isTRUE(center_setting)) {
+            predictors[linear_predictors]
+        } else if (is.character(center_setting)) {
+            intersect(center_setting, predictors[linear_predictors])
+        } else character()
+        explicit <- !is.null(spec$center)
+        centered <- character()
+        for (predictor in predictors[linear_predictors]) {
+            linked <- predictor_values[[predictor]][model_links$impulse_index]
+            reason <- if (!(predictor %in% requested)) {
+                if (explicit) 'not requested by irf(center=)' else
+                    'center_predictors = FALSE'
+            } else if (length(unique(linked)) <= 1L) {
+                'single linked value'
+            } else {
+                centered <- c(centered, predictor)
+                'centered'
+            }
+            centering[[length(centering) + 1L]] <- data.frame(
+                term=term_name, predictor=predictor,
+                centered=predictor %in% centered,
+                center=if (predictor %in% centered) mean(linked) *
+                    .cdr_scaling_divisor(scaling, 'impulses', predictor) else NA_real_,
+                reason=reason, stringsAsFactors=FALSE
+            )
+        }
+        # Centers are means over the training history links, matching the
+        # reference used by the smooth-axis deviation constraint. They are
+        # computed in model units and stored in source units.
+        model_centers <- stats::setNames(vapply(centered, function(predictor) {
+            mean(predictor_values[[predictor]][model_links$impulse_index])
+        }, numeric(1)), centered)
         link_weights <- rep.int(1, length(model_links$delay))
         for (predictor_index in linear_predictors) {
-            link_weights <- link_weights * predictor_values[[predictor_index]][
+            predictor <- predictors[[predictor_index]]
+            center <- if (predictor %in% centered) model_centers[[predictor]] else 0
+            link_weights <- link_weights * (predictor_values[[predictor_index]][
                 model_links$impulse_index
-            ]
+            ] - center)
         }
         model_knots_l <- if (is.null(spec$knots_l)) NULL else
             spec$knots_l / scaling$time_divisor
@@ -1603,6 +1819,12 @@ prepare_cdrgam <- function(
             )
         }
         terms[[i]]$linear_predictors <- predictors[linear_predictors]
+        terms[[i]]$linear_predictor_centers <- stats::setNames(vapply(
+            centered,
+            function(predictor) model_centers[[predictor]] *
+                .cdr_scaling_divisor(scaling, 'impulses', predictor),
+            numeric(1)
+        ), centered)
         if (!is.null(spec$by)) {
             terms[[i]]$X <- terms[[i]]$X * by_values
             terms[[i]]$by <- spec$by
@@ -1615,7 +1837,9 @@ prepare_cdrgam <- function(
             terms[[i]] <- .group_cdr_term(
                 terms[[i]],
                 responses[[spec$group]],
-                spec$group
+                spec$group,
+                group_penalty=spec$group_penalty,
+                specification=spec
             )
         }
         term_scales <- .cdr_irf_scales(spec, scaling)
@@ -1760,6 +1984,10 @@ prepare_cdrgam <- function(
             stringsAsFactors=FALSE
         )
     }
+    centering <- if (length(centering)) do.call(rbind, centering) else data.frame(
+        term=character(), predictor=character(), centered=logical(),
+        center=numeric(), reason=character(), stringsAsFactors=FALSE
+    )
     out <- list(
         formula=formula,
         normalized_formula=parsed$normalized_formula,
@@ -1770,6 +1998,7 @@ prepare_cdrgam <- function(
         terms=terms,
         specification=parsed$irfs,
         simplifications=simplifications,
+        centering=centering,
         scaling=scaling,
         identifiability=identifiability,
         plan=plans,
@@ -1781,6 +2010,7 @@ prepare_cdrgam <- function(
             history=history,
             chunk_size=chunk_size,
             rescale_predictors=rescale_predictors,
+            center_predictors=center_predictors,
             drop.unused.levels=drop.unused.levels
         ),
         stream=list(
@@ -1891,10 +2121,17 @@ prepare_cdrgam <- function(
 #'   single-predictor generalized sparse solver accepts
 #'   `crossprod_chunk_size`, `supernodal`, `optimizer_maxit`,
 #'   `optimizer_gradient_tolerance`, `optimizer_trust_radius`, `cores`,
-#'   `gradient`, `score_workers`, `score_batch_size`, and
-#'   `finite_difference_step`.
+#'   `gradient`, `score_workers`, `score_batch_size`,
+#'   `finite_difference_step`, `hessian`, `hessian_step`, and the boundary
+#'   classification options `boundary_curvature_tolerance`,
+#'   `boundary_hessian_log_sp`, `boundary_profile`, and
+#'   `boundary_profile_level`.
 #'   Generalized REML uses an exact gradient and safeguarded trust-region
-#'   optimization. Generalized `"GCV.Cp"` uses L-BFGS-B and accepts
+#'   optimization. After optimization, `hessian = "gradient"` (the default)
+#'   central-differences the exact score with step `hessian_step` (default
+#'   `1e-2`), two score evaluations per outer parameter, to obtain the outer
+#'   Hessian used for boundary classification, profile bounds, optimizer
+#'   diagnostics, and unconditional inference; `hessian = "none"` skips it. Generalized `"GCV.Cp"` uses L-BFGS-B and accepts
 #'   `gradient="auto"` (the default), `"exact"`, or `"finite"`. Automatic
 #'   selection compares the memory and structural cost of a selected-inverse
 #'   analytic gradient with two conditional PIRLS fits per smoothing
@@ -1904,7 +2141,9 @@ prepare_cdrgam <- function(
 #'   remaining controls below apply to Gaussian sparse fits. The distributional
 #'   sparse solver accepts `crossprod_chunk_size`, `supernodal`,
 #'   `optimizer_maxit`, `optimizer_gradient_tolerance`,
-#'   `optimizer_trust_radius`, `inner_tolerance`, `inner_maxit`, `cores`,
+#'   `optimizer_trust_radius`, `inner_tolerance`,
+#'   `inner_relative_tolerance`, `inner_maxit`, `inner_algorithm`,
+#'   `inner_schur_rank`, `cores`,
 #'   `gradient`, `gradient_probes`,
 #'   `gradient_workers`, `score_batch_size`, and `qncv_batch_size`. Its
 #'   `gradient` may be
@@ -1913,6 +2152,18 @@ prepare_cdrgam <- function(
 #'   stochastic warm-up followed by exact-score refinement for large systems.
 #'   QNCV resolves `"auto"` to `"exact"` and rejects `"hybrid"` because its
 #'   analytic score is evaluated in streamed response batches.
+#'   `inner_relative_tolerance` defaults to `1e-8` and accepts a conditional
+#'   solve when both the actual and locally predicted objective reductions,
+#'   divided by one plus the objective magnitude, fall below that threshold.
+#'   This complements the absolute penalized-score `inner_tolerance` for large
+#'   coefficient systems.
+#'   `inner_algorithm="schur"` enables the experimental matrix-free Schur
+#'   solver. It eliminates the larger location or scale coefficient block,
+#'   preconditions the reduced system with the remaining sparse block factor,
+#'   and certifies the reconstructed step against the full joint system.
+#'   It augments that factor with a deterministic low-rank approximation to
+#'   the Schur correction. `inner_schur_rank` controls the approximation rank
+#'   and defaults to `6`.
 #'   Hybrid warm-up stops early when rejected conditional fits exhaust a budget
 #'   based on recent fit times, then refines from the best valid point.
 #'   Exact refinement requests a score only after accepting an objective
@@ -1963,11 +2214,14 @@ prepare_cdrgam <- function(
 #'   Windows;
 #'   `finite_difference_step` defaults to `1e-3`;
 #'   sparse `"GCV.Cp"` uses the same cost-aware choice between exact and finite
-#'   gradients but always uses L-BFGS-B;
-#'   `outer_optimizer` may be `"auto"` (the default), `"lbfgsb"`, or
-#'   `"bfgs_trust"`; automatic selection uses safeguarded trust-region BFGS
-#'   for exact gradients and L-BFGS-B otherwise; explicitly requesting
-#'   `"bfgs_trust"` with `gradient="auto"` forces an exact gradient;
+#'   gradients. For Gaussian GCV, `"auto"` uses safeguarded Newton when the
+#'   exact gradient fits the memory budget and there are at most six smoothing
+#'   parameters, and L-BFGS-B otherwise. The
+#'   `cdrgam.gcv_newton_max_parameters` option changes that threshold;
+#'   `outer_optimizer` may be `"auto"` (the default), `"lbfgsb"`,
+#'   `"bfgs_trust"`, or `"newton"`; `"bfgs_trust"` applies to REML and
+#'   `"newton"` applies to Gaussian GCV. Explicitly requesting either
+#'   curvature optimizer with `gradient="auto"` forces an exact gradient;
 #'   `optimizer_maxit` defaults to an initial budget of `200`; when that
 #'   default is exhausted, analytic curvature recovery may add up to two more
 #'   200-iteration blocks, while an explicitly supplied value is a hard limit;
@@ -1986,8 +2240,10 @@ prepare_cdrgam <- function(
 #'   systems, automatic selection uses the gradient Hessian when available
 #'   memory cannot be determined; `cdrgam.memory_limit_bytes` can provide an
 #'   explicit process limit;
-#'   sparse `"GCV.Cp"` resolves `hessian="auto"` to `"none"` because
-#'   smoothing-parameter uncertainty is not yet implemented;
+#'   sparse Gaussian `"GCV.Cp"` uses a post-fit Hessian as a local stability
+#'   diagnostic. It differentiates the exact sparse gradient when that
+#'   gradient fits memory, otherwise it differences the scalar criterion.
+#'   GCV curvature is not reported as smoothing-parameter covariance;
 #'   `hessian_step` controls the
 #'   finite-difference step and defaults to `1e-2`;
 #'   `supernodal` optionally overrides the automatically selected CHOLMOD
@@ -1996,18 +2252,55 @@ prepare_cdrgam <- function(
 #'   block-local inverse entries and requires `schur="always"`;
 #'   `trace_chunk_size` bounds exact-score solves; and
 #'   `boundary_action` controls empirically inactive penalty subspaces:
-#'   `"report"` (the default) records them, `"reduce"` projects certified IRF
-#'   curvature boundaries to their joint null space and reoptimizes until no
-#'   newly certified boundary remains, and
+#'   `"reduce"` (the default) removes certified zero-variance IRF terms,
+#'   projects other certified IRF boundaries to their joint null space, and
+#'   reoptimizes until no newly certified boundary remains; `"report"` records
+#'   the same diagnostics without changing the fitted design; and
 #'   `"error"` turns optimizer nonconvergence into an error.
 #'   `boundary_log_sp` is the minimum log smoothing parameter considered for
 #'   reduction and defaults to `12`. `boundary_edf_tolerance` is the maximum
 #'   effective degrees of freedom that the penalized subspace may retain before
 #'   reduction and defaults to `0.01`. This scale-invariant check prevents a
 #'   numerically large smoothing parameter from removing active curvature.
+#'   After the outer Hessian is computed, a Gaussian REML fit classifies a
+#'   smoothing parameter as on the boundary when its absolute log value is at
+#'   least `boundary_hessian_log_sp` (default `8`) and every entry of its
+#'   outer-Hessian row, which is on the negative log restricted-likelihood
+#'   scale, is at most `boundary_curvature_tolerance` (default `0.05`) in
+#'   absolute value. The criterion is then flat along that parameter alone. A
+#'   flat direction that mixes several smoothing parameters is not
+#'   classified this way and still makes the Hessian indefinite. Boundary
+#'   parameters are listed in `fit$sparse$convergence$hessian_boundary`, are
+#'   excluded from the positive-definiteness check and from unconditional
+#'   covariance, and do not by themselves trigger a warning. For a parameter
+#'   at its upper boundary, a variance component estimated as zero,
+#'   `boundary_profile = TRUE` (the default) records a profile bound: the
+#'   smallest log smoothing parameter whose -2 REML criterion stays within
+#'   `qchisq(2 * boundary_profile_level - 1, 1)` of the optimum, with
+#'   `boundary_profile_level` defaulting to `0.95`. This one-sided level
+#'   follows the 50:50 chi-squared mixture for a variance component on its
+#'   boundary. The other smoothing parameters stay at their estimates during
+#'   the search, so the bound can understate the largest supported variance
+#'   when parameters trade off. `boundary_sensitivity = TRUE` also stores the
+#'   fit at the bounds, which roughly doubles the stored factorization, so
+#'   that [estimate_effect()] and [test_effect()] accept `boundary = "bound"`.
+#'   For Gaussian REML, `final_newton = TRUE` (the default) refines the
+#'   optimum after the outer optimizer stops. Each step uses the exact gradient and analytic
+#'   outer Hessian, holds boundary smoothing parameters fixed, replaces
+#'   negative eigenvalues by their absolute values so the step still descends,
+#'   follows the most negative eigenvector when the gradient is negligible
+#'   but curvature is negative, and is accepted only if the criterion
+#'   decreases. It stops when the predicted decrease falls below
+#'   `newton_tolerance` (default `1e-3` on the -2 REML scale) with a
+#'   positive-definite Hessian, or after `newton_max_steps` steps (default
+#'   `5`). Each step costs about one analytic Hessian, so the phase is
+#'   skipped with a warning when that Hessian exceeds the automatic memory
+#'   budget unless `hessian = "analytic"`; the warning appears only when
+#'   `final_newton` is set explicitly. The outcome is recorded in
+#'   `fit$sparse$convergence$newton_refinement`.
 #'   Reduced-model inference is conditional on the recorded data-selected
-#'   boundary reduction. Full-rank boundaries that would remove an entire term
-#'   are reported but require user confirmation.
+#'   boundary reduction. Every applied reduction records its source penalty,
+#'   effective dimension, fit stage, and reduced-model objective check.
 #'   `schur = "always"` enables the experimental response-group Schur solver
 #'   instead of the default `"never"`. It batches block elimination, exact
 #'   traces, and solves through BLAS; a threaded BLAS implementation improves
@@ -2015,9 +2308,18 @@ prepare_cdrgam <- function(
 #'   number of response rows used while accumulating sparse normal equations;
 #'   `restarts` requests additional deterministic smoothing-parameter starts.
 #'   Generalized sparse fits currently accept `crossprod_chunk_size`,
-#'   `supernodal`, `optimizer_maxit`, `optimizer_gradient_tolerance`, and
-#'   `optimizer_trust_radius`; their exact score and safeguarded trust optimizer
-#'   are mandatory.
+#'   `supernodal`, `optimizer_maxit`, `optimizer_gradient_tolerance`,
+#'   `optimizer_trust_radius`, `hessian`, `hessian_step`, and the
+#'   `boundary_curvature_tolerance`, `boundary_hessian_log_sp`,
+#'   `boundary_profile`, and `boundary_profile_level` options described
+#'   above; their exact score and safeguarded trust optimizer are mandatory.
+#'   For generalized REML, `hessian = "gradient"` (the default) central-
+#'   differences the exact score with step `hessian_step` (default `1e-2`)
+#'   after optimization, which costs two score evaluations per smoothing
+#'   parameter. The result supports boundary classification and profile
+#'   bounds, the optimizer diagnostics in [fit_diagnostics()], and
+#'   unconditional inference; `hessian = "none"` skips it. Generalized fits do
+#'   not support `boundary = "bound"`.
 #' @param rank_action Policy for scientifically meaningful nonidentifiability
 #'   in a custom backend: `"error"` (the default), `"minimum_norm"`, `"drop"`,
 #'   or `"penalize"`. Exact aliases among ordinary unpenalized parametric
@@ -2063,6 +2365,7 @@ cdrgam <- function(
         history=c('auto', 'dense', 'ragged'),
         chunk_size=10000,
         rescale_predictors=FALSE,
+        center_predictors=TRUE,
         family=stats::gaussian(),
         method=NULL,
         engine=c('bam', 'gam'),
@@ -2097,6 +2400,7 @@ cdrgam <- function(
         history=history,
         chunk_size=chunk_size,
         rescale_predictors=rescale_predictors,
+        center_predictors=center_predictors,
         drop.unused.levels=drop.unused.levels
     )
     if (!missing(k_l)) preparation['k_l'] <- list(k_l)
@@ -2131,8 +2435,9 @@ cdrgam <- function(
 #' @param x A fitted `cdrgam` object or prepared `cdrgam_design`.
 #' @param type Formula representation: the raw formula supplied by the user, the
 #'   normalized CDR formula including structural defaults, or the effective
-#'   CDR formula after automatic simplification. Fitted models also support
-#'   `"mgcv"`, the translated formula used by the fitting backend.
+#'   CDR formula after automatic simplification, or `"mgcv"`, the native
+#'   formula exported by [as_mgcv_spec()]. Its named matrix terms receive their
+#'   penalties through the rest of that specification.
 #' @param ... Unused.
 #' @return A formula, or a parameter-named formula list for a distributional
 #'   model.
@@ -2140,7 +2445,7 @@ cdrgam <- function(
 #' @export
 formula.cdrgam_design <- function(
         x,
-        type=c('raw', 'normalized', 'effective'),
+        type=c('raw', 'normalized', 'effective', 'mgcv'),
         ...
 ) {
     type <- match.arg(type)
@@ -2148,7 +2453,8 @@ formula.cdrgam_design <- function(
         type,
         raw=x$formula,
         normalized=x$normalized_formula,
-        effective=x$effective_formula
+        effective=x$effective_formula,
+        mgcv=.cdrgam_mgcv_formula(x)
     )
 }
 
@@ -2160,7 +2466,9 @@ formula.cdrgam <- function(
         ...
 ) {
     type <- match.arg(type)
-    value <- if (identical(type, 'raw')) {
+    value <- if (identical(type, 'mgcv')) {
+        .cdrgam_mgcv_formula_from_fit(x)
+    } else if (identical(type, 'raw')) {
         x$cdrgam$formula$user
     } else {
         x$cdrgam$formula[[type]]

@@ -1,5 +1,8 @@
 library(cdrgam)
 
+# These comparisons check solver agreement on models fitted before linear
+# predictor centering became the default; they keep uncentered predictors.
+
 set.seed(9341)
 n_impulses <- 180L
 n_responses <- 260L
@@ -17,6 +20,7 @@ formulas <- list(
     scale=~ irf(scale_signal, window=c(0, 1.5), k_l=6) - irf(1)
 )
 design <- prepare_cdrgam(
+    center_predictors=FALSE,
     formulas,
     impulses,
     responses,
@@ -37,6 +41,7 @@ fit <- cdrgam.fit(
     method='REML'
 )
 one_step <- cdrgam(
+    center_predictors=FALSE,
     formulas,
     impulses,
     responses,
@@ -208,15 +213,23 @@ stopifnot(
     max(abs(sparse_with_se$se.fit - block_with_se$se.fit)) < 1e-3
 )
 
-reference <- mgcv::gam(
-    unname(fit$cdrgam$formula$mgcv),
+exported_specification <- as_mgcv_spec(
+    design,
     family=mgcv::gaulss(),
-    data=as.list(fit$model),
     method='REML'
 )
+reference <- do.call(mgcv::gam, exported_specification)
 stopifnot(
     max(abs(stats::coef(fit) - stats::coef(reference))) < 1e-9,
-    max(abs(stats::vcov(fit) - stats::vcov(reference))) < 1e-9
+    max(abs(stats::vcov(fit) - stats::vcov(reference))) < 1e-9,
+    all(vapply(
+        formula(fit, type='mgcv'),
+        function(value) !grepl(
+            'cdr_term_|bs = "cdr"',
+            paste(deparse(value), collapse='')
+        ),
+        logical(1)
+    ))
 )
 
 location_irf <- estimate_irf(
@@ -294,6 +307,7 @@ smooth_formulas <- list(
 responses$location_offset <- seq(-0.1, 0.1, length.out=n_responses)
 responses$scale_offset <- seq(0.05, -0.05, length.out=n_responses)
 smooth_design <- prepare_cdrgam(
+    center_predictors=FALSE,
     smooth_formulas,
     impulses,
     responses,
@@ -379,6 +393,7 @@ expect_error <- function(expression, pattern) {
 }
 expect_error(
     prepare_cdrgam(
+        center_predictors=FALSE,
         list(mean=formulas$location, scale=formulas$scale),
         impulses,
         responses,
@@ -391,6 +406,7 @@ expect_error(
     'requires family="gaulss"'
 )
 scaled_design <- prepare_cdrgam(
+    center_predictors=FALSE,
     formulas,
     impulses,
     responses,

@@ -31,6 +31,7 @@ cdrgam.fit <- function(
     if (!inherits(design, 'cdrgam_design')) {
         stop('design must be a cdrgam_design returned by prepare_cdrgam()')
     }
+    exported_mgcv_formula <- .cdrgam_mgcv_formula(design)
     family <- .as_family(family)
     if (inherits(design, 'cdrgam_distributional_design')) {
         if (missing(engine)) engine <- 'gam'
@@ -82,6 +83,7 @@ cdrgam.fit <- function(
                 design, family=family, method=method, engine=engine, ...
             )
         }
+        fit <- .cdrgam_record_mgcv_formula(fit, exported_mgcv_formula)
         fit$call <- call
         fit$cdrgam$call <- call
         return(fit)
@@ -122,6 +124,7 @@ cdrgam.fit <- function(
             rank_penalty=rank_penalty,
             drop.unused.levels=design$configuration$drop.unused.levels, ...
         )
+        fit <- .cdrgam_record_mgcv_formula(fit, exported_mgcv_formula)
         fit$call <- call
         fit$cdrgam$call <- call
         return(fit)
@@ -138,6 +141,7 @@ cdrgam.fit <- function(
                 drop.unused.levels=design$configuration$drop.unused.levels,
                 ...
             )
+            fit <- .cdrgam_record_mgcv_formula(fit, exported_mgcv_formula)
             fit$call <- call
             fit$cdrgam$call <- call
             return(fit)
@@ -157,8 +161,14 @@ cdrgam.fit <- function(
         )
         boundary_action_value <- sparse_control[['boundary_action', exact=TRUE]]
         boundary_action <- if (is.null(boundary_action_value)) {
-            'report'
+            'reduce'
         } else boundary_action_value
+        fit_criterion <- function(value) {
+            criterion <- if (!is.null(value$reml)) {
+                value$reml
+            } else value$gcv.ubre
+            as.numeric(criterion)[[1L]]
+        }
         boundary_reduced <- FALSE
         if (identical(boundary_action, 'reduce')) {
             reduction_design <- design
@@ -181,9 +191,13 @@ cdrgam.fit <- function(
                         sparse_control[[
                             'optimizer_gradient_tolerance', exact=TRUE
                         ]]
-                    )) 1e-4 else sparse_control[[
-                        'optimizer_gradient_tolerance', exact=TRUE
-                    ]],
+                    )) {
+                        fit$sparse$control$optimizer_gradient_tolerance
+                    } else {
+                        sparse_control[[
+                            'optimizer_gradient_tolerance', exact=TRUE
+                        ]]
+                    },
                     edf_tolerance=if (is.null(
                         sparse_control[[
                             'boundary_edf_tolerance', exact=TRUE
@@ -201,7 +215,7 @@ cdrgam.fit <- function(
                     'boundary reduction',
                     pass=reduction_pass,
                     reason='penalty curvature was empirically unsupported',
-                    pilot_criterion=format(fit$reml, digits=10),
+                    pilot_criterion=format(fit_criterion(fit), digits=10),
                     reductions=length(planned$entries),
                     pilot_coefficients=length(fit$coefficients),
                     pilot_smoothing_parameters=length(fit$sp)
@@ -209,8 +223,10 @@ cdrgam.fit <- function(
                 for (entry in planned$entries) {
                     row <- planned$table[
                         planned$table$term_index == entry$term_index &
-                            planned$table$status ==
+                            planned$table$status %in% c(
                                 'certified_boundary_candidate',
+                                'certified_zero_variance_term'
+                            ),
                         ,
                         drop=FALSE
                     ]
@@ -251,7 +267,9 @@ cdrgam.fit <- function(
                     initialization='mapped current smoothing parameters',
                     checkpoint='disabled because the model structure changed'
                 )
-                fit <- .fit_sparse_gaussian(
+                pilot_fit <- fit
+                pilot_criterion <- fit_criterion(pilot_fit)
+                candidate_fit <- .fit_sparse_gaussian(
                     design=reduced_design,
                     family=family,
                     method=method,
@@ -271,13 +289,50 @@ cdrgam.fit <- function(
                     1L,
                     'reduced model refit complete',
                     pass=reduction_pass,
-                    criterion=format(fit$reml, digits=10),
-                    converged=isTRUE(fit$converged),
-                    coefficients=length(fit$coefficients),
-                    smoothing_parameters=length(fit$sp)
+                    criterion=format(fit_criterion(candidate_fit), digits=10),
+                    converged=isTRUE(candidate_fit$converged),
+                    coefficients=length(candidate_fit$coefficients),
+                    smoothing_parameters=length(candidate_fit$sp)
                 )
                 applied <- planned$table
-                selected <- applied$status == 'certified_boundary_candidate'
+                selected <- applied$status %in% c(
+                    'certified_boundary_candidate',
+                    'certified_zero_variance_term'
+                )
+                reduced_criterion <- fit_criterion(candidate_fit)
+                equivalence_tolerance <- 1e-6 * (1 + abs(pilot_criterion))
+                applied$pilot_criterion[selected] <- pilot_criterion
+                applied$reduced_criterion[selected] <- reduced_criterion
+                applied$equivalence_tolerance[selected] <-
+                    equivalence_tolerance
+                if (!is.finite(reduced_criterion) ||
+                        reduced_criterion > pilot_criterion +
+                            equivalence_tolerance) {
+                    applied$status[selected] <-
+                        'rejected_objective_mismatch'
+                    applied <- applied[selected, , drop=FALSE]
+                    applied$fit_stage <- if (reduction_pass == 1L) {
+                        'pilot'
+                    } else {
+                        'reoptimized'
+                    }
+                    reduction_tables[[length(reduction_tables) + 1L]] <-
+                        applied
+                    fit <- pilot_fit
+                    boundary_reporter$emit(
+                        1L,
+                        'boundary reduction rejected',
+                        pass=reduction_pass,
+                        pilot_criterion=format(pilot_criterion, digits=10),
+                        reduced_criterion=format(
+                            reduced_criterion,
+                            digits=10
+                        ),
+                        tolerance=format(equivalence_tolerance, digits=5)
+                    )
+                    break
+                }
+                fit <- candidate_fit
                 applied$status[selected] <- 'applied_and_reoptimized'
                 applied <- applied[selected, , drop=FALSE]
                 applied$fit_stage <- if (reduction_pass == 1L) {
@@ -304,26 +359,29 @@ cdrgam.fit <- function(
                 fit$sparse$convergence$conditional_on_boundary_reduction <- TRUE
             }
         }
-        if (identical(boundary_action, 'reduce') && !boundary_reduced &&
+        if (identical(boundary_action, 'reduce') &&
                 !isTRUE(fit$converged)) {
             warning(
-                'Sparse REML optimizer did not converge (code ',
+                'Sparse ', fit$method, ' optimizer did not converge (code ',
                 fit$sparse$convergence$code, '): ',
                 fit$sparse$convergence$message,
                 call.=FALSE
             )
         }
-        if (identical(boundary_action, 'reduce') && !boundary_reduced &&
-                identical(
+        if (identical(boundary_action, 'reduce') && identical(
                     fit$sparse$convergence$hessian_positive_definite,
                     FALSE
                 )) {
             warning(
-                'Sparse REML outer Hessian is not positive definite; ',
-                'variance-component intervals may be unreliable',
+                .sparse_indefinite_message(
+                    fit$sparse$convergence$hessian_negative_directions,
+                    fit$method,
+                    gcv=identical(fit$method, 'GCV.Cp')
+                ),
                 call.=FALSE
             )
         }
+        fit <- .cdrgam_record_mgcv_formula(fit, exported_mgcv_formula)
         fit$call <- call
         fit$cdrgam$call <- call
         return(fit)
@@ -362,8 +420,8 @@ cdrgam.fit <- function(
         drop.unused.levels=design$configuration$drop.unused.levels,
         ...
     )
+    fit <- .cdrgam_record_mgcv_formula(fit, exported_mgcv_formula)
     fit$call <- call
     fit$cdrgam$call <- call
     fit
 }
-

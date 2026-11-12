@@ -24,6 +24,58 @@ design <- prepare_cdrgam(
     quiet=TRUE
 )
 
+assemblies <- lapply(design$parameters, function(parameter_design) {
+    getFromNamespace('.cdrgam_distributional_sparse_setup', 'cdrgam')(
+        parameter_design,
+        list(crossprod_chunk_size=31L)
+    )
+})
+fit_fixed <- getFromNamespace('.cdrgam_gaulss_sparse_fixed', 'cdrgam')
+initial_sp <- unlist(lapply(
+    assemblies,
+    getFromNamespace('.cdrgam_sparse_initial_sp', 'cdrgam')
+), use.names=FALSE)
+b <- getFromNamespace('.cdrgam_gaulss_b', 'cdrgam')(
+    cdrgam_family('gaulss')
+)
+inner_partial <- NULL
+inner_interrupted <- tryCatch(
+    fit_fixed(
+        assemblies, initial_sp, b, maxit=20L, algorithm='mixed',
+        checkpoint=function(state) {
+            inner_partial <<- state
+            if (state$mixed_iterations >= 1L) {
+                stop('simulated conditional-solve interruption')
+            }
+        }
+    ),
+    error=function(error) conditionMessage(error)
+)
+resumed_inner_iteration <- NA_integer_
+inner_resumed <- tryCatch(
+    fit_fixed(
+        assemblies, initial_sp, b, maxit=20L, algorithm='mixed',
+        initial=inner_partial,
+        progress=function(event, ...) {
+            fields <- list(...)
+            if (identical(event, 'iteration started')) {
+                resumed_inner_iteration <<- fields$iteration
+                stop('verified conditional-solve resumption')
+            }
+        }
+    ),
+    error=function(error) conditionMessage(error)
+)
+stopifnot(
+    identical(
+        inner_interrupted,
+        'simulated conditional-solve interruption'
+    ),
+    inner_partial$mixed_iterations >= 1L,
+    identical(inner_resumed, 'verified conditional-solve resumption'),
+    resumed_inner_iteration >= 2L
+)
+
 checkpoint <- tempfile('cdrgam-distributional-', fileext='.rds')
 interrupted <- tryCatch(
     cdrgam.fit(
@@ -56,6 +108,32 @@ stopifnot(
         partial$optimizer_state$optimizer,
         'safeguarded_outer_bfgs'
     )
+)
+
+invalid_checkpoint <- tempfile(
+    'cdrgam-distributional-invalid-', fileext='.rds'
+)
+invalid_state <- partial
+invalid_state$best_log_sp <- NULL
+invalid_state$best_criterion <- Inf
+invalid_state$current_criterion <- 1e50
+invalid_state$optimizer_state$criterion <- 1e50
+invalid_state$optimizer_state$gradient[] <- 0
+invalid_state$model_signature$optimizer$qncv_batch_size <- 999L
+saveRDS(invalid_state, invalid_checkpoint)
+invalid_recovered <- cdrgam.fit(
+    design,
+    family='gaulss',
+    backend='sparse',
+    checkpoint=invalid_checkpoint,
+    sparse_control=list(
+        gradient='exact', optimizer_maxit=2L,
+        optimizer_gradient_tolerance=1e6
+    )
+)
+stopifnot(
+    inherits(invalid_recovered, 'cdrgam_distributional_sparse'),
+    is.finite(invalid_recovered$reml)
 )
 
 resume_events <- list()
@@ -188,4 +266,7 @@ stopifnot(
     is.finite(unfinished_state$best_criterion)
 )
 
-unlink(c(checkpoint, hybrid_checkpoint, unfinished_checkpoint))
+unlink(c(
+    checkpoint, invalid_checkpoint, hybrid_checkpoint,
+    unfinished_checkpoint
+))

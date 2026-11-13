@@ -897,7 +897,7 @@
         assembly, family, solution, fixed_ridge, chunk_size
 ) {
     if (!identical(family$family, 'Gamma')) return(solution$factor)
-    observed_information <- NULL
+    observed_information_sum <- .sparse_pairwise_sum()
     y <- assembly$setup$y
     weights <- solution$prior_weights * y / solution$fitted_values
     for (start in seq.int(
@@ -908,11 +908,9 @@
         )
         X <- .cdrgam_sparse_design_chunk(assembly, rows)
         weighted <- Matrix::Diagonal(x=sqrt(weights[rows])) %*% X
-        contribution <- Matrix::crossprod(weighted)
-        observed_information <- if (is.null(observed_information)) {
-            contribution
-        } else observed_information + contribution
+        observed_information_sum$add(Matrix::crossprod(weighted))
     }
+    observed_information <- observed_information_sum$result()
     system <- Matrix::forceSymmetric(
         observed_information + solution$penalty +
             Matrix::Diagonal(assembly$dimension, x=fixed_ridge),
@@ -1675,7 +1673,7 @@
         }
         working_weights <- prior_weights * derivative^2 / variance
         working_response <- eta - offset + (y - mu) / derivative
-        information <- NULL
+        information_sum <- .sparse_pairwise_sum()
         rhs <- numeric(assembly$dimension)
         for (start in starts) {
             rows <- start:min(
@@ -1685,15 +1683,13 @@
             X <- .cdrgam_sparse_design_chunk(assembly, rows)
             root_weights <- sqrt(working_weights[rows])
             weighted_X <- Matrix::Diagonal(x=root_weights) %*% X
-            contribution <- Matrix::crossprod(weighted_X)
-            information <- if (is.null(information)) {
-                contribution
-            } else information + contribution
+            information_sum$add(Matrix::crossprod(weighted_X))
             rhs <- rhs + as.numeric(Matrix::crossprod(
                 weighted_X,
                 working_response[rows] * root_weights
             ))
         }
+        information <- information_sum$result()
         system <- Matrix::forceSymmetric(
             information + penalty +
                 Matrix::Diagonal(assembly$dimension, x=fixed_ridge),
@@ -1769,7 +1765,7 @@
     derivative <- family$mu.eta(eta)
     variance <- family$variance(mu)
     working_weights <- prior_weights * derivative^2 / variance
-    information <- NULL
+    information_sum <- .sparse_pairwise_sum()
     for (start in starts) {
         rows <- start:min(
             assembly$observation_count,
@@ -1779,11 +1775,9 @@
         weighted_X <- Matrix::Diagonal(
             x=sqrt(working_weights[rows])
         ) %*% X
-        contribution <- Matrix::crossprod(weighted_X)
-        information <- if (is.null(information)) {
-            contribution
-        } else information + contribution
+        information_sum$add(Matrix::crossprod(weighted_X))
     }
+    information <- information_sum$result()
     system <- Matrix::forceSymmetric(
         information + penalty +
             Matrix::Diagonal(assembly$dimension, x=fixed_ridge),

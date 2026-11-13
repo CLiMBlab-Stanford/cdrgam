@@ -267,9 +267,9 @@
     evaluate <- function(local_batches) {
         location_gradient <- if (use_location) numeric(location$dimension)
         scale_gradient <- if (use_scale) numeric(scale$dimension)
-        location_information <- NULL
-        scale_information <- NULL
-        cross_information <- NULL
+        location_sum <- .sparse_pairwise_sum()
+        scale_sum <- .sparse_pairwise_sum()
+        cross_sum <- .sparse_pairwise_sum()
         for (rows in local_batches) {
         X_location <- if (use_location) {
             .cdrgam_sparse_design_chunk(location, rows)
@@ -291,9 +291,7 @@
                     x=sqrt(weight_rows / sigma_rows^2)
                 ) %*% X_location
                 location_part <- Matrix::crossprod(weighted_location)
-                location_information <- if (is.null(location_information)) {
-                    location_part
-                } else location_information + location_part
+                location_sum$add(location_part)
             }
         }
         if (use_scale) {
@@ -324,9 +322,7 @@
                     ) %*% X_scale
                     Matrix::crossprod(weighted_scale)
                 }
-                scale_information <- if (is.null(scale_information)) {
-                    scale_part
-                } else scale_information + scale_part
+                scale_sum$add(scale_part)
             }
         }
         if (isTRUE(include_observed)) {
@@ -336,9 +332,7 @@
                 X_location, Matrix::Diagonal(x=cross_weight) %*% X_scale
             ) else NULL
             if (isTRUE(include_cross)) {
-                cross_information <- if (is.null(cross_information)) {
-                    cross_part
-                } else cross_information + cross_part
+                cross_sum$add(cross_part)
             }
         }
         }
@@ -348,9 +342,9 @@
                 scale=scale_gradient
             ),
             information=list(
-                location=location_information,
-                scale=scale_information,
-                cross=cross_information
+                location=location_sum$result(),
+                scale=scale_sum$result(),
+                cross=cross_sum$result()
             )
         )
     }
@@ -3187,9 +3181,9 @@
     sigma <- b + q
     residual <- solution$residuals
     weights <- solution$prior_weights
-    location <- NULL
-    cross <- NULL
-    scale <- NULL
+    location_sum <- .sparse_pairwise_sum()
+    cross_sum <- .sparse_pairwise_sum()
+    scale_sum <- .sparse_pairwise_sum()
     chunk_size <- min(
         assemblies$location$crossprod_chunk_size,
         assemblies$scale$crossprod_chunk_size
@@ -3240,12 +3234,13 @@
             X_scale,
             Matrix::Diagonal(x=d_scale_weight) %*% X_scale
         )
-        location <- if (is.null(location)) {
-            location_part
-        } else location + location_part
-        cross <- if (is.null(cross)) cross_part else cross + cross_part
-        scale <- if (is.null(scale)) scale_part else scale + scale_part
+        location_sum$add(location_part)
+        cross_sum$add(cross_part)
+        scale_sum$add(scale_part)
     }
+    location <- location_sum$result()
+    cross <- cross_sum$result()
+    scale <- scale_sum$result()
     Matrix::forceSymmetric(rbind(
         cbind(location, cross),
         cbind(Matrix::t(cross), scale)

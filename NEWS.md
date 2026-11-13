@@ -1,5 +1,13 @@
 # cdrgam (development version)
 
+- Sparse backends now add chunked cross products pairwise when forming the
+  penalized system and the PIRLS and location-scale information matrices.
+  Adding each chunk to a running total rewrote the whole accumulated matrix
+  once per chunk; for a 155,698-coefficient model with 205 million system
+  nonzeros and 355 chunks, cross-product accumulation took about 2.7 hours.
+  On a smaller model with the same structure, pairwise accumulation was 7.4
+  times faster.
+
 - A sparse location-scale fit keeps its optimizer endpoint unless an earlier
   evaluation is lower by more than `1e-9` times the criterion. Previously any
   lower evaluation, including one that differed only by inner-solve noise,

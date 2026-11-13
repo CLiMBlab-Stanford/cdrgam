@@ -1,3 +1,30 @@
+# Accumulates a sum of sparse matrices pairwise, like a binary counter: slot k
+# holds a sum of 2^(k - 1) terms, and adding a term merges equal-sized partial
+# sums. Each entry is then copied about log2(n) times instead of once per
+# added term, which matters when the running total is much larger than each
+# term, as for chunked cross products. `add()` takes one term and `result()`
+# returns the sum, or NULL when nothing was added.
+.sparse_pairwise_sum <- function() {
+    slots <- list()
+    add <- function(value) {
+        level <- 1L
+        repeat {
+            if (length(slots) < level || is.null(slots[[level]])) {
+                slots[level] <<- list(value)
+                return(invisible(NULL))
+            }
+            value <- slots[[level]] + value
+            slots[level] <<- list(NULL)
+            level <- level + 1L
+        }
+    }
+    result <- function() {
+        present <- slots[!vapply(slots, is.null, logical(1))]
+        if (!length(present)) NULL else Reduce(`+`, present)
+    }
+    list(add=add, result=result)
+}
+
 .sparse_global_penalty <- function(local, indices, dimension) {
     # Symmetric Matrix classes store only one triangle. Coerce to a general
     # sparse matrix before extracting triplets so the embedded global penalty
@@ -3218,7 +3245,7 @@
         coefficients=dimension,
         chunks=length(crossprod_starts)
     )
-    XtX <- NULL
+    XtX_sum <- .sparse_pairwise_sum()
     Xty <- numeric(dimension)
     for (chunk_index in seq_along(crossprod_starts)) {
         start <- crossprod_starts[[chunk_index]]
@@ -3236,12 +3263,7 @@
         }
         weighted_chunk <- Matrix::Diagonal(x=root_weights[rows]) %*%
             design_chunk
-        chunk_crossprod <- Matrix::crossprod(weighted_chunk)
-        XtX <- if (is.null(XtX)) {
-            chunk_crossprod
-        } else {
-            XtX + chunk_crossprod
-        }
+        XtX_sum$add(Matrix::crossprod(weighted_chunk))
         Xty <- Xty + as.numeric(Matrix::crossprod(
             weighted_chunk,
             weighted_y[rows]
@@ -3256,7 +3278,7 @@
             )
         }
     }
-    XtX <- Matrix::forceSymmetric(XtX, uplo='U')
+    XtX <- Matrix::forceSymmetric(XtX_sum$result(), uplo='U')
     penalty_count <- length(penalty_components)
     reporter$phase(
         'symbolic factorization',

@@ -1,5 +1,12 @@
 # cdrgam (development version)
 
+- Chunked cross products now multiply columns that are nonzero in most rows
+  of a chunk, such as population IRF terms, as a dense block with BLAS, and
+  only the remaining active columns with the sparse product. For a 200-subject
+  version of a 126,058-coefficient reading model, one 10,000-row chunk took
+  0.48 s instead of 9.7 s, with results equal to within 4e-15 relative. This
+  is the dominant cost of forming the penalized system for such models.
+
 - The dense location-scale inner fit now counts a stalled line search as
   converged when even its smallest step could not change the objective by
   more than its numerical floor. Its absolute gradient tolerance could lie

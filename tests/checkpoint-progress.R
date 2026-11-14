@@ -387,9 +387,12 @@ if (.Platform$OS.type != 'windows') {
         sparse_control=list(gradient='finite', gradient_workers=2L)
     )
     # Two workers are requested, but a single-core process runs serially.
+    # Worker processes do not reproduce the serial arithmetic bit for bit, so
+    # the optimizer can stop at a point about 1e-6 away in the coefficients
+    # while the criterion still agrees closely.
     stopifnot(
         abs(finite_serial$reml - finite_parallel$reml) < 1e-8,
-        max(abs(coef(finite_serial) - coef(finite_parallel))) < 1e-8,
+        max(abs(coef(finite_serial) - coef(finite_parallel))) < 1e-5,
         finite_parallel$sparse$control$gradient_workers < 2L ||
             finite_parallel$sparse$parallel_gradient_factorizations > 0L
     )

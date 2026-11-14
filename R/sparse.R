@@ -1,3 +1,46 @@
+# Returns crossprod(X) for one chunk of design rows as a symmetric sparse
+# matrix. Columns that are nonzero in at least `dense_fraction` of the rows,
+# such as population IRF terms that every response's history touches, are
+# multiplied as a dense block with BLAS; a general sparse product spends many
+# times longer on such columns. The remaining active columns contribute their
+# sparse-by-dense and sparse-by-sparse blocks. Chunks with fewer than
+# `minimum_dense` dense columns use the sparse product directly.
+.sparse_chunk_crossprod <- function(X, dense_fraction=0.3, minimum_dense=32L) {
+    X <- methods::as(methods::as(X, 'CsparseMatrix'), 'generalMatrix')
+    counts <- diff(X@p)
+    dense <- which(counts >= dense_fraction * nrow(X))
+    if (length(dense) < minimum_dense) {
+        return(Matrix::forceSymmetric(Matrix::crossprod(X), uplo='U'))
+    }
+    sparse <- setdiff(which(counts > 0L), dense)
+    dense_block <- as.matrix(X[, dense, drop=FALSE])
+    dense_product <- crossprod(dense_block)
+    rows <- rep(dense, times=length(dense))
+    columns <- rep(dense, each=length(dense))
+    values <- as.vector(dense_product)
+    if (length(sparse)) {
+        sparse_block <- X[, sparse, drop=FALSE]
+        cross <- as.matrix(Matrix::crossprod(sparse_block, dense_block))
+        rows <- c(rows, rep(sparse, times=length(dense)),
+            rep(dense, each=length(sparse)))
+        columns <- c(columns, rep(dense, each=length(sparse)),
+            rep(sparse, times=length(dense)))
+        values <- c(values, as.vector(cross), as.vector(cross))
+        sparse_product <- methods::as(
+            Matrix::crossprod(sparse_block), 'TsparseMatrix'
+        )
+        sparse_product <- methods::as(sparse_product, 'generalMatrix')
+        rows <- c(rows, sparse[sparse_product@i + 1L])
+        columns <- c(columns, sparse[sparse_product@j + 1L])
+        values <- c(values, sparse_product@x)
+    }
+    upper <- rows <= columns
+    Matrix::sparseMatrix(
+        i=rows[upper], j=columns[upper], x=values[upper],
+        dims=c(ncol(X), ncol(X)), symmetric=TRUE
+    )
+}
+
 # Accumulates a sum of sparse matrices pairwise, like a binary counter: slot k
 # holds a sum of 2^(k - 1) terms, and adding a term merges equal-sized partial
 # sums. Each entry is then copied about log2(n) times instead of once per
@@ -3263,7 +3306,7 @@
         }
         weighted_chunk <- Matrix::Diagonal(x=root_weights[rows]) %*%
             design_chunk
-        XtX_sum$add(Matrix::crossprod(weighted_chunk))
+        XtX_sum$add(.sparse_chunk_crossprod(weighted_chunk))
         Xty <- Xty + as.numeric(Matrix::crossprod(
             weighted_chunk,
             weighted_y[rows]

@@ -908,7 +908,7 @@
         )
         X <- .cdrgam_sparse_design_chunk(assembly, rows)
         weighted <- Matrix::Diagonal(x=sqrt(weights[rows])) %*% X
-        observed_information_sum$add(Matrix::crossprod(weighted))
+        observed_information_sum$add(.sparse_chunk_crossprod(weighted))
     }
     observed_information <- observed_information_sum$result()
     system <- Matrix::forceSymmetric(
@@ -1683,7 +1683,7 @@
             X <- .cdrgam_sparse_design_chunk(assembly, rows)
             root_weights <- sqrt(working_weights[rows])
             weighted_X <- Matrix::Diagonal(x=root_weights) %*% X
-            information_sum$add(Matrix::crossprod(weighted_X))
+            information_sum$add(.sparse_chunk_crossprod(weighted_X))
             rhs <- rhs + as.numeric(Matrix::crossprod(
                 weighted_X,
                 working_response[rows] * root_weights
@@ -1775,7 +1775,7 @@
         weighted_X <- Matrix::Diagonal(
             x=sqrt(working_weights[rows])
         ) %*% X
-        information_sum$add(Matrix::crossprod(weighted_X))
+        information_sum$add(.sparse_chunk_crossprod(weighted_X))
     }
     information <- information_sum$result()
     system <- Matrix::forceSymmetric(

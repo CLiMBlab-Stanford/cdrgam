@@ -149,7 +149,19 @@
             converged <- TRUE
             break
         }
-        if (!accepted) break
+        if (!accepted) {
+            # The gradient tolerance is absolute, so it can lie below the
+            # objective's numerical floor, for example after predictor
+            # rescaling changes the coefficient units. Accept a failed line
+            # search when even the smallest step could not change the
+            # objective by more than that floor.
+            directional_derivative <- sum(location_gradient * location_step) +
+                sum(scale_gradient * scale_step)
+            converged <- .cdrgam_gaulss_numerically_converged(
+                directional_derivative, 0, value
+            )
+            break
+        }
     }
     location_predictor <- drop(
         X_location %*% location_coefficients + location$offset

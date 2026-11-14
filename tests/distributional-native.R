@@ -464,3 +464,43 @@ expect_error(
 )
 
 cat('Native distributional regression checks passed.\n')
+
+# A small rescaled location-scale fit whose inner gradient settles just above
+# the absolute tolerance must still count as converged once its line search
+# can no longer change the objective; otherwise the dense optimizer ends at an
+# "invalid" fit that it had accepted moments earlier.
+stalled <- simulate_cdr(
+    list(x=function(lag) exp(-2 * lag)), n_impulses=80, n_responses=100,
+    duration=12, window=1.5, noise_sd=0.5, seed=731
+)
+stalled_responses <- stalled$responses
+stalled_responses$row_id <- seq_len(nrow(stalled_responses))
+stalled_impulses <- stalled$impulses
+for (column in c('document', 'sentence', 'position')) {
+    values <- switch(column,
+        document=function(n) rep(c('a', 'b'), length.out=n),
+        sentence=function(n) rep(c(1L, 2L), each=2L, length.out=n),
+        position=function(n) rep(1:3, length.out=n)
+    )
+    stalled_impulses[[column]] <- values(nrow(stalled_impulses))
+    stalled_responses[[column]] <- values(nrow(stalled_responses))
+}
+stalled_responses <- stalled_responses[
+    stalled_responses$row_id > 60 & stalled_responses$row_id <= 90,
+]
+stalled_responses$item_id <- interaction(
+    stalled_responses$document, stalled_responses$sentence,
+    stalled_responses$position, drop=TRUE
+)
+stalled_design <- prepare_cdrgam(
+    list(
+        location=response ~ s(item_id, bs='re') + irf(x) - irf(1),
+        scale=~ irf(x) - irf(1)
+    ),
+    stalled_impulses, stalled_responses, window=c(0, 1.5),
+    knots_l=c(0, 0.1, 0.3, 0.8, 1.5), k_l=5L, bs_l='cr',
+    rescale_predictors=TRUE, quiet=TRUE
+)
+stalled_fit <- cdrgam.fit(stalled_design, family='gaulss', backend='block',
+    method='REML')
+stopifnot(isTRUE(stalled_fit$converged), is.finite(stalled_fit$reml))

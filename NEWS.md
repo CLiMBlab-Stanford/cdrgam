@@ -1,5 +1,11 @@
 # cdrgam (development version)
 
+- The dense location-scale inner fit now counts a stalled line search as
+  converged when even its smallest step could not change the objective by
+  more than its numerical floor. Its absolute gradient tolerance could lie
+  below that floor after predictor rescaling, so small rescaled fits ended
+  with "Dense gaulss LAML optimization ended at an invalid fit".
+
 - Sparse backends now add chunked cross products pairwise when forming the
   penalized system and the PIRLS and location-scale information matrices.
   Adding each chunk to a running total rewrote the whole accumulated matrix

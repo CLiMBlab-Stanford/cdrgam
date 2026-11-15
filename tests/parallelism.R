@@ -28,7 +28,23 @@ memory_limited <- memory_parallel_plan(
     per_worker_bytes=2 * 1024^3,
     memory_fraction=1,
     reserve_bytes=0,
-    memory=list(source='synthetic', available_bytes=5 * 1024^3)
+    memory=list(source='synthetic', available_bytes=5 * 1024^3),
+    parent_bytes=0
+)
+# A large parent process is charged to each forked worker: half of a 6 GiB
+# parent adds 3 GiB per worker, so only one worker fits in 5 GiB.
+large_parent <- memory_parallel_plan(
+    8L, 8L,
+    per_worker_bytes=2 * 1024^3,
+    memory_fraction=1,
+    reserve_bytes=0,
+    memory=list(source='synthetic', available_bytes=5 * 1024^3),
+    parent_bytes=6 * 1024^3
+)
+stopifnot(
+    large_parent$workers == 1L,
+    large_parent$charged_worker_bytes == 5 * 1024^3,
+    large_parent$inherited_worker_bytes == 3 * 1024^3
 )
 stopifnot(
     batched$workers == 4L,

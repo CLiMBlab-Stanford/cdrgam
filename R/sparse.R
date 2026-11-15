@@ -4275,6 +4275,11 @@
         outer_optimizer=outer_optimizer,
         trace_method=trace_method,
         reason=optimizer_selection$reason,
+        gradient_workers=gradient_workers,
+        charged_worker_mib=format(
+            gradient_plan$charged_worker_bytes / 1024^2,
+            digits=6
+        ),
         objective_seconds=format(
             optimizer_selection$objective_seconds,
             digits=5

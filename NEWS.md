@@ -1,5 +1,13 @@
 # cdrgam (development version)
 
+- Memory-limited parallel plans now charge each forked worker half of the
+  parent process's resident memory in addition to its own estimated
+  allocations, because a child's garbage collector causes inherited pages to
+  be copied. For a 126,058-coefficient model the previous estimate allowed
+  two finite-difference workers that together added about 100 GB and
+  exceeded a 160 GB allocation. The sparse fit log reports the selected
+  gradient workers and the memory charged to each.
+
 - Chunked cross products now multiply columns that are nonzero in most rows
   of a chunk, such as population IRF terms, as a dense block with BLAS, and
   only the remaining active columns with the sparse product. For a 200-subject

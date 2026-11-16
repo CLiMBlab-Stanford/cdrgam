@@ -1,5 +1,20 @@
 # cdrgam (development version)
 
+- Sparse Gaussian fits handle smoothing parameters at which the penalized
+  system is not numerically positive definite, as happens when penalties on
+  terms with nearly overlapping column spaces approach zero. Such a system no
+  longer triggers a fresh full Cholesky factorization, which failed in the
+  same way and allocated a second factor. The factorization is instead
+  retried with a relative diagonal ridge of 1e-12, 1e-10, or 1e-8; the log
+  reports each stabilized evaluation, and a fit whose final solution needed
+  a ridge warns that terms are likely confounded there. L-BFGS-B now always
+  receives cdrgam's finite-difference gradient, including with one worker,
+  and that gradient is not evaluated at a point whose objective has just
+  failed. On a 111,238-coefficient model, the first L-BFGS-B step reached
+  the smoothing-parameter bounds; one evaluation there failed, and about 100
+  more failed while the gradient was computed around it before the job
+  exceeded its memory.
+
 - When a sparse Gaussian factorization fails, the fit log now reports the
   solver's message and the log smoothing parameters of the failing
   evaluation, so the point can be reproduced outside the fit.

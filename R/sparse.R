@@ -257,7 +257,58 @@
     min(ratios)
 }
 
-.factor_schur_system <- function(system, layout, supernodal) {
+# Retries a factorization that failed because the penalized system is not
+# numerically positive definite, adding `ridge` times its diagonal for each
+# relative ridge in turn. `factor_values` maps stored system values to a list
+# with `system` and `factor`, whose factor is NULL on failure. Returns the
+# first successful attempt with its ridge in `stabilization`, or NULL.
+.sparse_ridged_factor <- function(system_values, diagonal_positions,
+        factor_values, ridges) {
+    diagonal <- system_values[diagonal_positions]
+    for (ridge in ridges) {
+        ridged <- system_values
+        ridged[diagonal_positions] <- diagonal * (1 + ridge)
+        attempt <- factor_values(ridged)
+        if (!is.null(attempt$factor)) {
+            attempt$stabilization <- ridge
+            return(attempt)
+        }
+    }
+    NULL
+}
+
+# Wraps a gradient function for L-BFGS-B. A repeated request at the same
+# point is served from memory. A request at a point whose objective failed,
+# as reported by `failed(key)`, returns the last valid gradient without
+# further evaluations: the line search has already rejected that point
+# through its objective value, so the gradient there only needs to be
+# finite, and a finite-difference gradient would repeat the failure once per
+# coordinate.
+.sparse_guarded_gradient <- function(gradient, key, failed,
+        on_skip=function() NULL) {
+    force(gradient)
+    memory_key <- NULL
+    memory_value <- NULL
+    last_valid <- NULL
+    function(log_sp) {
+        point <- key(log_sp)
+        if (identical(point, memory_key)) return(memory_value)
+        if (failed(point)) {
+            on_skip()
+            return(if (is.null(last_valid)) {
+                numeric(length(log_sp))
+            } else last_valid)
+        }
+        value <- gradient(log_sp)
+        memory_key <<- point
+        memory_value <<- value
+        if (all(is.finite(value))) last_valid <<- value
+        value
+    }
+}
+
+.factor_schur_system <- function(system, layout, supernodal,
+        on_error=NULL) {
     core <- layout$core
     blocks <- layout$blocks
     factor <- tryCatch(
@@ -268,7 +319,10 @@
             lapply(blocks, as.integer),
             PACKAGE='cdrgam'
         ),
-        error=function(e) NULL
+        error=function(e) {
+            if (is.function(on_error)) on_error(e)
+            NULL
+        }
     )
     if (is.null(factor)) return(NULL)
     core_cholesky <- factor[[1L]]
@@ -3594,13 +3648,100 @@
     invalid_criterion <- 1e100
 
     cache_key <- function(log_sp) {
+        # A model without smoothing parameters still needs a valid name.
+        if (!length(log_sp)) return('\034')
         paste(formatC(log_sp, digits=17, format='fg'), collapse='\034')
     }
 
+    # The key of the most recent point whose objective could not be
+    # evaluated. L-BFGS-B requests the gradient at every trial point, and a
+    # finite-difference gradient around a point that failed would spend one
+    # factorization per coordinate on the same failure.
+    last_invalid_key <- NULL
+    invalid_result <- function(key, retain) {
+        last_invalid_key <<- key
+        if (retain) NULL else invalid_criterion
+    }
+
+    # Each failed factorization records its solver message. A matrix that is
+    # not positive definite fails identically under any factorization, so it
+    # does not trigger a fresh full Cholesky factorization, which would
+    # repeat the symbolic analysis and allocate a second factor.
     factor_failure <- NULL
     record_factor_failure <- function(condition) {
         factor_failure <<- conditionMessage(condition)
         NULL
+    }
+    not_positive_definite <- function(message) {
+        !is.null(message) && grepl(
+            'positive definite|dpotrf failed with code [1-9]',
+            message
+        )
+    }
+    stabilized_factorization_count <- 0L
+    # Positions of the diagonal entries in the stored upper triangle, for the
+    # stabilizing ridge below.
+    diagonal_positions <- local({
+        column_pointers <- methods::slot(system_template, 'p')
+        row_indices <- methods::slot(system_template, 'i')
+        columns <- rep.int(
+            seq_len(ncol(system_template)) - 1L,
+            diff(column_pointers)
+        )
+        which(row_indices == columns)
+    })
+    # Relative ridges tried, in order, when the penalized system is not
+    # numerically positive definite. Penalties that approach zero on terms
+    # whose column spaces nearly overlap leave X'X + S(lambda) singular to
+    # rounding even though every coefficient combination of interest is
+    # still identified through the fitted values. A ridge of rho times the
+    # diagonal restores a factorization; the evaluation is then reported as
+    # stabilized, and a final solution that needed it raises a warning.
+    stabilizing_ridges <- c(1e-12, 1e-10, 1e-8)
+    factor_values <- function(system_values) {
+        system <- system_template
+        methods::slot(system, 'x') <- system_values
+        if (!is.null(schur_layout)) {
+            factor <- .factor_schur_system(
+                system, schur_layout, supernodal,
+                on_error=record_factor_failure
+            )
+            if (is.null(factor) && !not_positive_definite(factor_failure)) {
+                full_factorization_count <<- full_factorization_count + 1L
+                factor <- tryCatch(Matrix::Cholesky(
+                    system,
+                    LDL=FALSE,
+                    perm=TRUE,
+                    super=supernodal
+                ), warning=record_factor_failure, error=record_factor_failure)
+            } else if (!is.null(factor)) {
+                numeric_update_count <<- numeric_update_count + 1L
+            }
+            return(list(system=system, factor=factor))
+        }
+        record_update_failure <- function(condition) {
+            if (is.null(numeric_update_error)) {
+                numeric_update_error <<- conditionMessage(condition)
+            }
+            record_factor_failure(condition)
+        }
+        factor <- tryCatch(
+            Matrix::update(factor_template, system),
+            warning=record_update_failure,
+            error=record_update_failure
+        )
+        if (is.null(factor) && !not_positive_definite(factor_failure)) {
+            full_factorization_count <<- full_factorization_count + 1L
+            factor <- tryCatch(Matrix::Cholesky(
+                system,
+                LDL=FALSE,
+                perm=TRUE,
+                super=supernodal
+            ), warning=record_factor_failure, error=record_factor_failure)
+        } else if (!is.null(factor)) {
+            numeric_update_count <<- numeric_update_count + 1L
+        }
+        list(system=system, factor=factor)
     }
     factor_system <- function(sp) {
         factor_failure <<- NULL
@@ -3610,46 +3751,21 @@
             system_values[mapping$positions] <-
                 system_values[mapping$positions] + sp[[i]] * mapping$values
         }
-        system <- system_template
-        methods::slot(system, 'x') <- system_values
-        if (!is.null(schur_layout)) {
-            factor <- .factor_schur_system(system, schur_layout, supernodal)
-            if (is.null(factor)) {
-                full_factorization_count <<- full_factorization_count + 1L
-                factor <- tryCatch(Matrix::Cholesky(
-                    system,
-                    LDL=FALSE,
-                    perm=TRUE,
-                    super=supernodal
-                ), warning=record_factor_failure, error=record_factor_failure)
-            } else {
-                numeric_update_count <<- numeric_update_count + 1L
-            }
-            return(list(system=system, factor=factor))
+        factored <- factor_values(system_values)
+        factored$stabilization <- 0
+        if (!is.null(factored$factor) ||
+                !not_positive_definite(factor_failure)) {
+            return(factored)
         }
-        record_update_failure <- function(condition) {
-            if (is.null(numeric_update_error)) {
-                numeric_update_error <<- conditionMessage(condition)
-            }
-            NULL
-        }
-        factor <- tryCatch(
-            Matrix::update(factor_template, system),
-            warning=record_update_failure,
-            error=record_update_failure
+        attempt <- .sparse_ridged_factor(
+            system_values,
+            diagonal_positions,
+            factor_values,
+            stabilizing_ridges
         )
-        if (is.null(factor)) {
-            full_factorization_count <<- full_factorization_count + 1L
-            factor <- .cdr_sparse_cholesky(Matrix::Cholesky(
-                system,
-                LDL=FALSE,
-                perm=TRUE,
-                super=supernodal
-            ))
-        } else {
-            numeric_update_count <<- numeric_update_count + 1L
-        }
-        list(system=system, factor=factor)
+        if (is.null(attempt)) return(factored)
+        stabilized_factorization_count <<- stabilized_factorization_count + 1L
+        attempt
     }
 
     evaluate <- function(log_sp, retain=FALSE, record=TRUE) {
@@ -3687,7 +3803,16 @@
                     )
                 )
             }
-            return(if (retain) NULL else invalid_criterion)
+            return(invalid_result(key, retain))
+        }
+        if (factored$stabilization > 0 && !retain && record) {
+            reporter$emit(
+                1L,
+                'stabilized factorization',
+                evaluation=evaluation_count,
+                ridge=format(factored$stabilization, digits=3),
+                reason=factor_failure
+            )
         }
         penalty_det <- if (gcv) NULL else
             .sparse_penalty_logdet(blocks, sp)
@@ -3703,7 +3828,7 @@
         penalized_rss <- as.numeric(Matrix::crossprod(weighted_y) -
             Matrix::crossprod(coefficients, Xty))
         if (!is.finite(penalized_rss) || penalized_rss <= 0) {
-            return(if (retain) NULL else invalid_criterion)
+            return(invalid_result(key, retain))
         }
         if (gcv) {
             penalty_quadratic <- sum(vapply(
@@ -3727,7 +3852,7 @@
             denominator <- observation_count - gamma * effective_df
             if (!is.finite(residual_rss) || residual_rss <= 0 ||
                     !is.finite(effective_df) || denominator <= 0) {
-                return(if (retain) NULL else invalid_criterion)
+                return(invalid_result(key, retain))
             }
             criterion <- as.numeric(
                 observation_count * residual_rss / denominator^2
@@ -3751,7 +3876,7 @@
                     evaluation=evaluation_count
                 )
             }
-            return(if (retain) NULL else invalid_criterion)
+            return(invalid_result(key, retain))
         }
         elapsed_objective <- proc.time()[['elapsed']] - evaluation_started
         objective_seconds <<- c(
@@ -4345,6 +4470,19 @@
         minimum_log_sp=format(min(initial), digits=5),
         maximum_log_sp=format(max(initial), digits=5)
     )
+    guarded_gradient <- function(gradient) {
+        .sparse_guarded_gradient(
+            gradient,
+            key=cache_key,
+            failed=function(key) identical(key, last_invalid_key) &&
+                !exists(key, envir=objective_cache, inherits=FALSE),
+            on_skip=function() reporter$emit(
+                1L,
+                'gradient skipped at failed point',
+                evaluation=evaluation_count
+            )
+        )
+    }
     lower_bound <- rep.int(-25, penalty_count)
     upper_bound <- rep.int(if (gcv) 35 else 25, penalty_count)
     optimization_arguments <- list(
@@ -4363,9 +4501,15 @@
         optimization_arguments$gr <- exact_gradient
     } else if (gradient_method %in% c('stochastic', 'hybrid')) {
         optimization_arguments$gr <- stochastic_gradient
-    } else if (identical(gradient_method, 'finite') &&
-            gradient_workers > 1L) {
+    } else if (identical(gradient_method, 'finite')) {
+        # Supplied even for one worker, so that the guard below also covers
+        # what would otherwise be optim()'s internal differences.
         optimization_arguments$gr <- finite_gradient
+    }
+    if (is.function(optimization_arguments$gr)) {
+        optimization_arguments$gr <- guarded_gradient(
+            optimization_arguments$gr
+        )
     }
     hessian_selection <- .sparse_select_hessian_method(
         hessian_requested,
@@ -4652,6 +4796,15 @@
     checkpoint_state$evaluation_count <- evaluation_count
     if (!is.null(checkpoint)) .checkpoint_write(checkpoint_state, checkpoint)
     solution <- evaluate(optimization$par, retain=TRUE)
+    if (!is.null(solution) && isTRUE(solution$stabilization > 0)) {
+        warning(
+            'The selected smoothing parameters leave the penalized system ',
+            'numerically singular; the fit used a relative diagonal ridge of ',
+            format(solution$stabilization, digits=3), '. Terms whose column ',
+            'spaces nearly overlap are likely confounded at this solution.',
+            call.=FALSE
+        )
+    }
     if (is.null(solution) || !is.numeric(solution$sp)) {
         stop(
             'Sparse ', criterion_method,
@@ -5325,6 +5478,8 @@
             numeric_updates=numeric_update_count,
             parallel_gradient_factorizations=parallel_gradient_factorizations,
             full_factorizations=full_factorization_count,
+            stabilized_factorizations=stabilized_factorization_count,
+            final_stabilization=solution$stabilization,
             numeric_update_error=numeric_update_error,
             cached_objectives=length(ls(objective_cache, all.names=TRUE)),
             gradient_requested=gradient_requested,

@@ -79,6 +79,7 @@ check_term <- function(term) {
 
 check_term("ti(x, subject, bs=c('cr', 're'), k=c(5, 5))")
 check_term("ti(x, subject, bs='fs', k=5)")
+check_term("ti(x, subject, bs='fs', k=5, xt='cr')")
 check_term("ti(subject, x, bs=c('re', 'tp'), k=c(5, 6))")
 check_term("ti(x, z, subject, bs=c('cr', 'cr', 're'), k=c(4, 4, 5))")
 

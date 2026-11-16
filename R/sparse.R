@@ -684,6 +684,23 @@
     )
 }
 
+# Evaluates `expr` and reports how far resident memory rose above its
+# starting level while it ran. Linux resets the peak-resident counter when
+# "5" is written to /proc/self/clear_refs; where that fails, `bytes` is NA.
+.cdrgam_measure_peak_growth <- function(expr) {
+    reset <- tryCatch({
+        writeLines('5', '/proc/self/clear_refs')
+        TRUE
+    }, error=function(e) FALSE, warning=function(w) FALSE)
+    baseline <- .cdrgam_proc_memory('VmRSS')
+    value <- expr
+    peak <- .cdrgam_proc_memory('VmHWM')
+    bytes <- if (reset && is.finite(baseline) && is.finite(peak)) {
+        max(0, peak - baseline)
+    } else NA_real_
+    list(value=value, bytes=bytes)
+}
+
 .cdrgam_r_memory <- function() {
     usage <- tryCatch(gc(), error=function(error) NULL)
     if (is.null(usage) || ncol(usage) < 2L) return(NA_real_)
@@ -3580,7 +3597,13 @@
         paste(formatC(log_sp, digits=17, format='fg'), collapse='\034')
     }
 
+    factor_failure <- NULL
+    record_factor_failure <- function(condition) {
+        factor_failure <<- conditionMessage(condition)
+        NULL
+    }
     factor_system <- function(sp) {
+        factor_failure <<- NULL
         system_values <- base_system_values
         for (i in seq_along(penalty_mappings)) {
             mapping <- penalty_mappings[[i]]
@@ -3593,12 +3616,12 @@
             factor <- .factor_schur_system(system, schur_layout, supernodal)
             if (is.null(factor)) {
                 full_factorization_count <<- full_factorization_count + 1L
-                factor <- .cdr_sparse_cholesky(Matrix::Cholesky(
+                factor <- tryCatch(Matrix::Cholesky(
                     system,
                     LDL=FALSE,
                     perm=TRUE,
                     super=supernodal
-                ))
+                ), warning=record_factor_failure, error=record_factor_failure)
             } else {
                 numeric_update_count <<- numeric_update_count + 1L
             }
@@ -3648,10 +3671,20 @@
         factored <- factor_system(sp)
         if (is.null(factored$factor)) {
             if (!retain && record) {
+                # The smoothing parameters and solver message identify the
+                # failing point so it can be reproduced outside the fit.
                 reporter$emit(
                     1L,
                     'factorization failed',
-                    evaluation=evaluation_count
+                    evaluation=evaluation_count,
+                    reason=if (is.null(factor_failure)) {
+                        if (is.null(schur_layout)) 'numeric update failed'
+                        else 'Schur factorization failed'
+                    } else factor_failure,
+                    log_sp=paste(
+                        sprintf('%s=%.4g', sp_names, log_sp),
+                        collapse=','
+                    )
                 )
             }
             return(if (retain) NULL else invalid_criterion)
@@ -4159,11 +4192,12 @@
     checkpoint_complete <- checkpoint_state$stage %in% c(
         'optimization_complete', 'complete'
     ) && !is.null(checkpoint_state$optimization)
-    probe_value <- evaluate(
+    probe <- .cdrgam_measure_peak_growth(evaluate(
         initial,
         retain=FALSE,
         record=!checkpoint_complete
-    )
+    ))
+    probe_value <- probe$value
     if (!is.finite(probe_value) || is.null(last_solution)) {
         stop(
             'Could not evaluate the initial sparse ',
@@ -4171,9 +4205,15 @@
             ' objective'
         )
     }
-    gradient_worker_bytes <- .cdrgam_sparse_worker_bytes(
-        last_solution$system,
-        last_solution$factor
+    # A worker allocates at least what one objective evaluation did here;
+    # the nonzero-count formula alone missed most of that on large fits.
+    gradient_worker_bytes <- max(
+        .cdrgam_sparse_worker_bytes(
+            last_solution$system,
+            last_solution$factor
+        ),
+        probe$bytes,
+        na.rm=TRUE
     )
     gradient_plan <- .cdrgam_memory_parallel_plan(
         cores,

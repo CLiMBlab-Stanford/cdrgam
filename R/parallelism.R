@@ -49,15 +49,16 @@
 # Limits parallel workers so that their memory fits the available budget.
 # Workers are forked copies of the calling process; once a child's garbage
 # collector writes to inherited objects, the operating system copies those
-# pages, so each worker can come to duplicate much of its parent. Each worker
-# is therefore charged `per_worker_bytes`, the memory it allocates itself,
-# plus `fork_fraction` of the parent's resident memory `parent_bytes`.
+# pages. R's collector sets a mark bit in every live object it visits, so one
+# full collection in a child can copy nearly all of its parent. Each worker is
+# therefore charged `per_worker_bytes`, the memory it allocates itself, plus
+# `fork_fraction` of the parent's resident memory `parent_bytes`.
 .cdrgam_memory_parallel_plan <- function(
         cores, tasks, workers=NULL, per_worker_bytes,
         memory_fraction=0.5, reserve_bytes=512 * 1024^2,
         memory=.cdrgam_memory_availability(),
         parent_bytes=.cdrgam_proc_memory('VmRSS'),
-        fork_fraction=0.5
+        fork_fraction=1
 ) {
     plan <- .cdrgam_parallel_plan(cores, tasks, workers)
     requested_workers <- plan$workers

@@ -121,7 +121,27 @@
     }
 }
 
+# Prepares a component for repeated row extraction. A column-compressed
+# matrix stores no row index, so `X[rows, ]` scans every stored entry and
+# extracting all chunks costs chunks times the whole matrix, which grows
+# quadratically with the data. The transpose is stored once instead; its
+# columns are the original rows, and selecting them touches only the
+# entries of those rows.
+.sparse_component_row_source <- function(component) {
+    # Grouped components keep a dense base, whose rows are cheap to select.
+    if (!inherits(component, 'sparseMatrix')) return(component)
+    structure(
+        list(transposed=Matrix::t(methods::as(
+            methods::as(component, 'CsparseMatrix'), 'generalMatrix'
+        ))),
+        class='cdrgam_sparse_row_source'
+    )
+}
+
 .sparse_component_rows <- function(component, rows) {
+    if (inherits(component, 'cdrgam_sparse_row_source')) {
+        return(Matrix::t(component$transposed[, rows, drop=FALSE]))
+    }
     if (!inherits(component, 'cdrgam_sparse_grouped_component')) {
         return(component[rows, , drop=FALSE])
     }
@@ -3380,12 +3400,13 @@
     )
     XtX_sum <- .sparse_pairwise_sum()
     Xty <- numeric(dimension)
+    row_sources <- lapply(matrices, .sparse_component_row_source)
     for (chunk_index in seq_along(crossprod_starts)) {
         start <- crossprod_starts[[chunk_index]]
         end <- min(observation_count, start + crossprod_chunk_size - 1L)
         rows <- start:end
         component_chunks <- lapply(
-            matrices,
+            row_sources,
             .sparse_component_rows,
             rows=rows
         )
@@ -3411,6 +3432,7 @@
             )
         }
     }
+    rm(row_sources)
     XtX <- Matrix::forceSymmetric(XtX_sum$result(), uplo='U')
     penalty_count <- length(penalty_components)
     reporter$phase(
@@ -3424,9 +3446,14 @@
     # compressed-column value slot, and subsequently update only those numeric
     # values. Absolute values prevent cancellation from accidentally removing
     # a structurally possible entry from the symbolic factorization.
+    # The penalties are summed among themselves first, so that the large
+    # cross product is merged once rather than once per penalty.
+    penalty_pattern_sum <- .sparse_pairwise_sum()
+    for (component in penalty_components) penalty_pattern_sum$add(abs(component))
+    penalty_pattern <- penalty_pattern_sum$result()
     system_pattern <- abs(Matrix::forceSymmetric(XtX, uplo='U'))
-    for (component in penalty_components) {
-        system_pattern <- system_pattern + abs(component)
+    if (!is.null(penalty_pattern)) {
+        system_pattern <- system_pattern + penalty_pattern
     }
     system_template <- Matrix::forceSymmetric(system_pattern, uplo='U')
     template_columns <- rep.int(

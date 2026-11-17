@@ -1,5 +1,13 @@
 # cdrgam (development version)
 
+- Sparse Gaussian setup builds the stored system pattern with one merge of
+  the cross product instead of one per penalty, and extracts each chunk's
+  design rows from a transposed copy of every ungrouped sparse component,
+  so a chunk no longer scans the whole column-compressed matrix. On 200
+  subjects of a reading-time model with 52 penalties, system assembly fell
+  from 145 to 42 s and cross-product accumulation from 106 to 97 s, with an
+  identical pattern and identical coefficients.
+
 - Automatic sparse gradient selection now measures before choosing finite
   differences. When its estimate favors them, a fit times one warm objective
   evaluation and one exact gradient at the starting point and decides from

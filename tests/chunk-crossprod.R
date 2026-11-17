@@ -50,3 +50,28 @@ stopifnot(
             'x'
         ))
 )
+
+# Row extraction through a transposed source matches direct subscripting for
+# ungrouped sparse components, dense matrices, and grouped components.
+row_source <- cdrgam:::.sparse_component_row_source
+component_rows <- cdrgam:::.sparse_component_rows
+ungrouped <- Matrix::rsparsematrix(500L, 40L, density=0.05)
+dense_matrix <- matrix(stats::rnorm(500L * 3L), 500L)
+grouped <- function(base) structure(list(
+    base=base,
+    group_index=rep(1:5, each=100L),
+    group_count=5L,
+    base_dimension=ncol(base)
+), class='cdrgam_sparse_grouped_component')
+same_rows <- function(component, rows) {
+    expected <- as.matrix(component_rows(component, rows))
+    observed <- as.matrix(component_rows(row_source(component), rows))
+    identical(dim(expected), dim(observed)) && identical(expected, observed)
+}
+for (rows in list(1:120, 121:500, 250L)) {
+    stopifnot(
+        same_rows(ungrouped, rows),
+        same_rows(dense_matrix, rows),
+        same_rows(grouped(dense_matrix), rows)
+    )
+}

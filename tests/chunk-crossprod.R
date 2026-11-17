@@ -26,3 +26,27 @@ stopifnot(
     agree(dense),
     agree(sparse)
 )
+
+# Columns that share no row give exact zeros in the dense blocks; these are
+# not stored, so the pattern matches a plain sparse cross product. Here two
+# groups of dense columns occupy disjoint rows, as for two subjects in one
+# chunk.
+first <- Matrix::Matrix(rbind(
+    matrix(stats::rnorm(200L * 40L), 200L),
+    matrix(0, 200L, 40L)
+), sparse=TRUE)
+second <- Matrix::Matrix(rbind(
+    matrix(0, 200L, 40L),
+    matrix(stats::rnorm(200L * 40L), 200L)
+), sparse=TRUE)
+disjoint <- cbind(first, second)
+disjoint_product <- chunk_crossprod(disjoint)
+stopifnot(
+    agree(disjoint),
+    all(methods::slot(disjoint_product, 'x') != 0),
+    length(methods::slot(disjoint_product, 'x')) ==
+        length(methods::slot(
+            Matrix::forceSymmetric(Matrix::crossprod(disjoint), uplo='U'),
+            'x'
+        ))
+)

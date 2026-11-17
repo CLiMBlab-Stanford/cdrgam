@@ -34,7 +34,10 @@
         columns <- c(columns, sparse[sparse_product@j + 1L])
         values <- c(values, sparse_product@x)
     }
-    upper <- rows <= columns
+    # The dense blocks hold exact zeros wherever two columns share no row,
+    # such as coefficients of different subjects within one chunk. Storing
+    # them would enlarge the pattern and couple blocks that are separate.
+    upper <- rows <= columns & values != 0
     Matrix::sparseMatrix(
         i=rows[upper], j=columns[upper], x=values[upper],
         dims=c(ncol(X), ncol(X)), symmetric=TRUE

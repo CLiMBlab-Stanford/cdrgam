@@ -1,5 +1,12 @@
 # cdrgam (development version)
 
+- Chunked cross products no longer store the exact zeros of their dense
+  blocks. When a chunk held rows of several subjects, the dense block stored
+  a zero for every pair of coefficients from different subjects; on 20
+  subjects of a reading-time model that added 389,312 stored zeros. These
+  zeros coupled the subject blocks in the stored system pattern and caused
+  every Schur factorization to fail.
+
 - The sparse Schur factorization accepts explicit zeros between coefficient
   blocks in the stored system pattern, and its block layout is validated
   against that stored pattern. Previously every Schur factorization of a

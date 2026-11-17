@@ -1154,8 +1154,19 @@
         penalty_count,
         gradient_workers,
         dimension,
-        saved=NULL
+        saved=NULL,
+        measured_objective_seconds=NULL,
+        measured_exact_seconds=NULL
 ) {
+    # Measured times replace the structural estimates below. The first
+    # objective evaluation includes one-time setup and is several times
+    # slower than later ones, and the Schur cost ratio assumes an evaluation
+    # costs about one core factorization, which does not hold when many
+    # blocks surround a small core.
+    if (length(measured_objective_seconds) == 1L &&
+            is.finite(measured_objective_seconds)) {
+        objective_seconds <- measured_objective_seconds
+    }
     finite_evaluations <- 2 * penalty_count
     predicted_finite_seconds <- objective_seconds * finite_evaluations /
         max(1L, gradient_workers)
@@ -1190,6 +1201,10 @@
         max(1, exact_trace_rhs / 64)
     }
     predicted_exact_seconds <- objective_seconds * exact_cost_ratio
+    if (length(measured_exact_seconds) &&
+            all(is.finite(measured_exact_seconds))) {
+        predicted_exact_seconds <- stats::median(measured_exact_seconds)
+    }
     exact_core_bytes <- if (schur_trace) {
         8 * as.double(core_dimension)^2
     } else {
@@ -1207,6 +1222,7 @@
     } else {
         NULL
     }
+    saved_exact_seconds <- c(saved_exact_seconds, measured_exact_seconds)
     reuse_saved <- identical(gradient_requested, 'auto') &&
         length(saved_gradient) == 1L &&
         saved_gradient %in% c('exact', 'finite')
@@ -4385,6 +4401,46 @@
         dimension=dimension,
         saved=checkpoint_state$optimizer_selection
     )
+    # An estimate that prefers finite differences is checked by timing one
+    # warm objective evaluation and one exact gradient at the starting point.
+    # Together they cost a few evaluations, far less than one
+    # finite-difference gradient when the choice matters.
+    if (!gcv && identical(selection_gradient_requested, 'auto') &&
+            identical(optimizer_selection$gradient, 'finite') &&
+            identical(
+                optimizer_selection$reason,
+                'predicted finite differences are faster'
+            )) {
+        # exact_gradient() records its timing in the checkpoint's selection;
+        # the new selection must start from the state before this timing.
+        saved_selection <- checkpoint_state$optimizer_selection
+        timing_started <- proc.time()[['elapsed']]
+        evaluate(initial, retain=FALSE, record=FALSE)
+        warm_objective_seconds <- proc.time()[['elapsed']] - timing_started
+        timing_started <- proc.time()[['elapsed']]
+        measured_score <- exact_gradient(initial)
+        measured_exact <- proc.time()[['elapsed']] - timing_started
+        if (all(is.finite(measured_score))) {
+            optimizer_selection <- .sparse_optimizer_selection(
+                gradient_requested=selection_gradient_requested,
+                outer_optimizer_requested=selection_outer_optimizer_requested,
+                trace_method=trace_method,
+                factor=last_solution$factor,
+                objective_seconds=utils::tail(objective_seconds, 1L),
+                exact_trace_rhs=exact_trace_rhs,
+                penalty_count=penalty_count,
+                gradient_workers=gradient_workers,
+                dimension=dimension,
+                saved=saved_selection,
+                measured_objective_seconds=warm_objective_seconds,
+                measured_exact_seconds=measured_exact
+            )
+            optimizer_selection$reason <- paste(
+                'measured:', optimizer_selection$reason
+            )
+        }
+        checkpoint_state$optimizer_selection <- saved_selection
+    }
     if (gcv) {
         gcv_gradient_memory <- .sparse_select_hessian_method(
             'auto',

@@ -142,6 +142,44 @@ stopifnot(
     identical(automatic_solve$outer_optimizer, 'lbfgsb')
 )
 
+# Measured times replace the estimates: a fast measured exact gradient
+# overturns an estimate that favored finite differences, and a slow one
+# confirms it.
+measured_fast <- cdrgam:::.sparse_optimizer_selection(
+    gradient_requested='auto',
+    outer_optimizer_requested='auto',
+    trace_method='solve',
+    factor=direct_factor,
+    objective_seconds=1,
+    exact_trace_rhs=10000L,
+    penalty_count=2L,
+    gradient_workers=1L,
+    dimension=6L,
+    measured_objective_seconds=0.5,
+    measured_exact_seconds=1
+)
+measured_slow <- cdrgam:::.sparse_optimizer_selection(
+    gradient_requested='auto',
+    outer_optimizer_requested='auto',
+    trace_method='solve',
+    factor=direct_factor,
+    objective_seconds=1,
+    exact_trace_rhs=10000L,
+    penalty_count=2L,
+    gradient_workers=1L,
+    dimension=6L,
+    measured_objective_seconds=0.5,
+    measured_exact_seconds=10
+)
+stopifnot(
+    identical(measured_fast$gradient, 'exact'),
+    identical(measured_fast$outer_optimizer, 'bfgs_trust'),
+    measured_fast$predicted_exact_seconds == 1,
+    measured_fast$predicted_finite_seconds == 2,
+    identical(measured_fast$measured_exact_seconds, 1),
+    identical(measured_slow$gradient, 'finite')
+)
+
 explicit_trust <- cdrgam:::.sparse_optimizer_selection(
     gradient_requested='auto',
     outer_optimizer_requested='bfgs_trust',

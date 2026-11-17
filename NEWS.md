@@ -1,5 +1,15 @@
 # cdrgam (development version)
 
+- Automatic sparse gradient selection now measures before choosing finite
+  differences. When its estimate favors them, a fit times one warm objective
+  evaluation and one exact gradient at the starting point and decides from
+  those times. The estimate scaled the first evaluation, which includes
+  one-time setup, by a Schur cost ratio that assumes an evaluation costs
+  about one core factorization. On 200 subjects of a reading-time model with
+  200 subject blocks around a 580-coefficient core, it predicted 620 s per
+  exact gradient against a measured 5 to 10 s, so finite differences were
+  chosen at about 50 to 100 s per gradient.
+
 - Chunked cross products no longer store the exact zeros of their dense
   blocks. When a chunk held rows of several subjects, the dense block stored
   a zero for every pair of coefficients from different subjects; on 20

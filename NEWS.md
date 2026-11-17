@@ -1,5 +1,14 @@
 # cdrgam (development version)
 
+- The sparse Schur factorization accepts explicit zeros between coefficient
+  blocks in the stored system pattern, and its block layout is validated
+  against that stored pattern. Previously every Schur factorization of a
+  model whose pattern held such zeros failed, and each evaluation silently
+  fell back to a full Cholesky factorization with a fresh symbolic analysis.
+  On a 111,238-coefficient model this made every evaluation far more
+  expensive in memory than the Schur path. A fallback from Schur to a full
+  factorization is now reported in the fit log.
+
 - Sparse Gaussian fits handle smoothing parameters at which the penalized
   system is not numerically positive definite, as happens when penalties on
   terms with nearly overlapping column spaces approach zero. Such a system no

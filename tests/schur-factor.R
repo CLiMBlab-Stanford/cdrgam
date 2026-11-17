@@ -28,6 +28,28 @@ legacy_schur$transfer <- NULL
 legacy_solution <- cdrgam:::.cdr_factor_solve(legacy_schur, rhs)
 stopifnot(max(abs(direct_solution - legacy_solution)) < 1e-11)
 
+# Matrix products can leave explicit zeros in the stored pattern, including
+# between blocks. Such entries do not couple the blocks: the Schur factor
+# must accept them, while a nonzero entry between blocks is still rejected.
+coupled <- system
+coupled[3L, 5L] <- 0.1
+coupled <- methods::as(Matrix::forceSymmetric(coupled, uplo='U'), 'CsparseMatrix')
+stored_zero <- coupled
+stored_x <- methods::slot(stored_zero, 'x')
+stored_columns <- rep.int(0:5, diff(methods::slot(stored_zero, 'p')))
+stored_x[methods::slot(stored_zero, 'i') == 2L & stored_columns == 4L] <- 0
+methods::slot(stored_zero, 'x') <- stored_x
+stopifnot(any(stored_x == 0))
+zero_schur <- cdrgam:::.factor_schur_system(stored_zero, layout, supernodal=FALSE)
+stopifnot(
+    inherits(zero_schur, 'cdrgam_schur_factor'),
+    max(abs(cdrgam:::.cdr_factor_solve(zero_schur, rhs) - direct_solution)) <
+        1e-11
+)
+stopifnot(is.null(
+    cdrgam:::.factor_schur_system(coupled, layout, supernodal=FALSE)
+))
+
 direct_logdet <- as.numeric(determinant(as.matrix(system), logarithm=TRUE)$modulus)
 schur_logdet <- cdrgam:::.cdr_factor_logdet(schur)
 stopifnot(abs(direct_logdet - schur_logdet) < 1e-11)

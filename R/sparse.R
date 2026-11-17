@@ -3567,7 +3567,9 @@
             function(group) sum(lengths(group)),
             numeric(1)
         ), decreasing=TRUE)
-        triplet <- methods::as(unit_system, 'TsparseMatrix')
+        # Validate against the absolute pattern that every evaluated system
+        # is stored in, so that no smoothing parameters can couple blocks.
+        triplet <- methods::as(system_pattern, 'TsparseMatrix')
         row_index <- methods::slot(triplet, 'i') + 1L
         column_index <- methods::slot(triplet, 'j') + 1L
         values <- methods::slot(triplet, 'x')
@@ -3679,6 +3681,7 @@
         )
     }
     stabilized_factorization_count <- 0L
+    schur_fallback_reported <- FALSE
     # Positions of the diagonal entries in the stored upper triangle, for the
     # stabilizing ridge below.
     diagonal_positions <- local({
@@ -3707,6 +3710,16 @@
                 on_error=record_factor_failure
             )
             if (is.null(factor) && !not_positive_definite(factor_failure)) {
+                # A full factorization repeats the symbolic analysis and is
+                # far more expensive than the Schur path, so report it.
+                if (!schur_fallback_reported) {
+                    reporter$emit(
+                        1L,
+                        'Schur factorization unavailable; using full Cholesky',
+                        reason=factor_failure
+                    )
+                    schur_fallback_reported <<- TRUE
+                }
                 full_factorization_count <<- full_factorization_count + 1L
                 factor <- tryCatch(Matrix::Cholesky(
                     system,

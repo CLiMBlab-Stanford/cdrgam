@@ -138,6 +138,91 @@
     )
 }
 
+# Nonzero entries of rows start:end of one component as chunk-relative row
+# and component-relative column indices, both one-based. A transposed
+# source is sliced through its column pointers, so the cost is that of the
+# entries returned.
+.sparse_component_triplets <- function(component, start, end) {
+    if (inherits(component, 'cdrgam_sparse_row_source')) {
+        transposed <- component$transposed
+        pointers <- methods::slot(transposed, 'p')
+        first <- pointers[[start]]
+        last <- pointers[[end + 1L]]
+        if (last <= first) return(NULL)
+        positions <- seq.int(first + 1L, last)
+        return(list(
+            i=rep.int(seq_len(end - start + 1L), diff(pointers[start:(end + 1L)])),
+            j=methods::slot(transposed, 'i')[positions] + 1L,
+            x=methods::slot(transposed, 'x')[positions]
+        ))
+    }
+    rows <- start:end
+    if (inherits(component, 'cdrgam_sparse_grouped_component')) {
+        base <- component$base[rows, , drop=FALSE]
+        k <- component$base_dimension
+        i <- rep(seq_along(rows), each=k)
+        j <- rep((component$group_index[rows] - 1L) * k, each=k) +
+            rep.int(seq_len(k), times=length(rows))
+        x <- as.vector(t(base))
+    } else {
+        block <- methods::as(
+            methods::as(
+                methods::as(component[rows, , drop=FALSE], 'CsparseMatrix'),
+                'generalMatrix'
+            ),
+            'TsparseMatrix'
+        )
+        i <- methods::slot(block, 'i') + 1L
+        j <- methods::slot(block, 'j') + 1L
+        x <- methods::slot(block, 'x')
+    }
+    keep <- x != 0
+    if (!any(keep)) return(NULL)
+    list(i=i[keep], j=j[keep], x=x[keep])
+}
+
+# Assembles weighted rows start:end of the design over their nonempty
+# columns. Returns the compact matrix and the global index of each of its
+# columns, in increasing order, or NULL when the rows are empty.
+.sparse_compact_chunk <- function(sources, column_offsets, start, end,
+        root_weights) {
+    pieces <- lapply(seq_along(sources), function(index) {
+        triplets <- .sparse_component_triplets(sources[[index]], start, end)
+        if (is.null(triplets)) return(NULL)
+        triplets$j <- triplets$j + column_offsets[[index]]
+        triplets
+    })
+    pieces <- pieces[!vapply(pieces, is.null, logical(1))]
+    if (!length(pieces)) return(NULL)
+    i <- unlist(lapply(pieces, `[[`, 'i'), use.names=FALSE)
+    global <- unlist(lapply(pieces, `[[`, 'j'), use.names=FALSE)
+    x <- unlist(lapply(pieces, `[[`, 'x'), use.names=FALSE)
+    columns <- sort(unique(global))
+    list(
+        X=Matrix::sparseMatrix(
+            i=i,
+            j=match(global, columns),
+            x=x * root_weights[i],
+            dims=c(end - start + 1L, length(columns))
+        ),
+        columns=columns
+    )
+}
+
+# Places a symmetric matrix over increasing global indices `columns` into
+# a dimension-by-dimension symmetric matrix. The map is increasing, so the
+# stored upper triangle stays upper.
+.sparse_expand_symmetric <- function(compact, columns, dimension) {
+    triplet <- methods::as(compact, 'TsparseMatrix')
+    Matrix::sparseMatrix(
+        i=columns[methods::slot(triplet, 'i') + 1L],
+        j=columns[methods::slot(triplet, 'j') + 1L],
+        x=methods::slot(triplet, 'x'),
+        dims=c(dimension, dimension),
+        symmetric=TRUE
+    )
+}
+
 .sparse_component_rows <- function(component, rows) {
     if (inherits(component, 'cdrgam_sparse_row_source')) {
         return(Matrix::t(component$transposed[, rows, drop=FALSE]))
@@ -3401,27 +3486,28 @@
     XtX_sum <- .sparse_pairwise_sum()
     Xty <- numeric(dimension)
     row_sources <- lapply(matrices, .sparse_component_row_source)
+    column_offsets <- cumsum(c(0, vapply(
+        matrices, .sparse_component_ncol, numeric(1)
+    )))[seq_along(matrices)]
     for (chunk_index in seq_along(crossprod_starts)) {
         start <- crossprod_starts[[chunk_index]]
         end <- min(observation_count, start + crossprod_chunk_size - 1L)
         rows <- start:end
-        component_chunks <- lapply(
-            row_sources,
-            .sparse_component_rows,
-            rows=rows
+        # The chunk is assembled over its nonempty columns only. A chunk
+        # touches a few groups, so most of the design's columns are empty
+        # there, and work proportional to every column would make the
+        # accumulation grow with columns times chunks.
+        chunk <- .sparse_compact_chunk(
+            row_sources, column_offsets, start, end, root_weights[rows]
         )
-        design_chunk <- if (length(component_chunks) == 1L) {
-            component_chunks[[1L]]
-        } else {
-            do.call(cbind, component_chunks)
+        if (!is.null(chunk)) {
+            XtX_sum$add(.sparse_expand_symmetric(
+                .sparse_chunk_crossprod(chunk$X), chunk$columns, dimension
+            ))
+            Xty[chunk$columns] <- Xty[chunk$columns] + as.numeric(
+                Matrix::crossprod(chunk$X, weighted_y[rows])
+            )
         }
-        weighted_chunk <- Matrix::Diagonal(x=root_weights[rows]) %*%
-            design_chunk
-        XtX_sum$add(.sparse_chunk_crossprod(weighted_chunk))
-        Xty <- Xty + as.numeric(Matrix::crossprod(
-            weighted_chunk,
-            weighted_y[rows]
-        ))
         if (reporter$level >= 3L) {
             reporter$emit(
                 3L,

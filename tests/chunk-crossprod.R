@@ -75,3 +75,35 @@ for (rows in list(1:120, 121:500, 250L)) {
         same_rows(grouped(dense_matrix), rows)
     )
 }
+
+# A chunk assembled over its nonempty columns, with its cross product placed
+# back at the global indices, matches the cross product of the full chunk.
+set.seed(11)
+components <- list(
+    Matrix::rsparsematrix(500L, 30L, density=0.05),
+    grouped(matrix(stats::rnorm(500L * 3L), 500L)),
+    Matrix::Matrix(cbind(1, stats::rnorm(500L)), sparse=TRUE),
+    grouped(matrix(stats::rnorm(500L * 2L), 500L))
+)
+offsets <- cumsum(c(0, vapply(
+    components, cdrgam:::.sparse_component_ncol, numeric(1)
+)))[seq_along(components)]
+total_columns <- sum(vapply(components, cdrgam:::.sparse_component_ncol, numeric(1)))
+sources <- lapply(components, row_source)
+weights <- stats::runif(500L)
+for (range in list(c(1L, 120L), c(180L, 260L), c(401L, 500L))) {
+    rows <- range[[1L]]:range[[2L]]
+    full <- do.call(cbind, lapply(components, component_rows, rows=rows))
+    full <- Matrix::Diagonal(x=weights[rows]) %*% full
+    reference <- as.matrix(Matrix::crossprod(full))
+    chunk <- cdrgam:::.sparse_compact_chunk(
+        sources, offsets, range[[1L]], range[[2L]], weights[rows]
+    )
+    expanded <- cdrgam:::.sparse_expand_symmetric(
+        chunk_crossprod(chunk$X), chunk$columns, total_columns
+    )
+    stopifnot(
+        ncol(chunk$X) < total_columns,
+        max(abs(as.matrix(expanded) - reference)) < 1e-10 * max(1, abs(reference))
+    )
+}

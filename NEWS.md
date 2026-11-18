@@ -1,5 +1,14 @@
 # cdrgam (development version)
 
+- Chunked cross products assemble each chunk's design over its nonempty
+  columns only, slicing rows from transposed components through their
+  column pointers, and place the chunk's product back at the global
+  indices. A chunk touches a few groups, so work proportional to every
+  column grew with columns times chunks. On 988 subjects of a reading-time
+  model (111,238 coefficients, 354 chunks), accumulation fell from 939 to
+  524 s, with row extraction and assembly falling from 701 to 229 s and an
+  identical cross product.
+
 - Sparse Gaussian fits log their full named smoothing-parameter vector at
   the end of each optimizer restart and at the final solution, and while
   the criterion improves at most every 15 minutes, so that an interrupted

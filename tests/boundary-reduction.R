@@ -211,6 +211,33 @@ stopifnot(
     reduced$simplifications$action == 'boundary_nullspace_reduction'
 )
 
+# A parameter the outer Hessian classifies as an upper boundary, short of
+# the box limit, is reduced when its score still favors more smoothing, and
+# not when it favors less.
+hessian_fit <- fit
+hessian_fit$sparse$convergence$boundary <- NULL
+hessian_fit$optimizer$gradient <- c(-3.3e-4, -3.3e-4, 0.1)
+hessian_fit$sparse$convergence$hessian_boundary <- data.frame(
+    smoothing_parameter=c('s(cdr_term_1)1', 's(cdr_term_1)2'),
+    side='upper',
+    stringsAsFactors=FALSE
+)
+hessian_plan <- cdrgam:::.cdr_boundary_reduction_plan(hessian_fit, design)
+unclassified_fit <- hessian_fit
+unclassified_fit$sparse$convergence$hessian_boundary <- NULL
+unclassified_plan <- cdrgam:::.cdr_boundary_reduction_plan(
+    unclassified_fit, design
+)
+rising_fit <- hessian_fit
+rising_fit$optimizer$gradient <- c(3.3e-4, 3.3e-4, 0.1)
+rising_plan <- cdrgam:::.cdr_boundary_reduction_plan(rising_fit, design)
+stopifnot(
+    length(hessian_plan$entries) == 1L,
+    identical(hessian_plan$entries[[1L]]$penalty_indices, 1:2),
+    length(unclassified_plan$entries) == 0L,
+    length(rising_plan$entries) == 0L
+)
+
 # A certified full-rank penalty is a zero-variance estimate. Remove the term
 # without requiring a formula edit, and remap later terms' warm starts after
 # their generated smoothing-parameter names shift.

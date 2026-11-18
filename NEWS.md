@@ -1,5 +1,16 @@
 # cdrgam (development version)
 
+- Boundary reduction treats a smoothing parameter that the outer Hessian
+  classifies as an upper or lower boundary like one at the optimizer's box
+  limit: only a score favoring less smoothing, at an upper boundary, blocks
+  reduction. Such a parameter is flat along its own direction, so the
+  optimizer can stop short of the limit with a score that still points past
+  it. In a reading-time model, one penalty of a by-subject interaction IRF
+  stopped at log smoothing parameter 24.04 with a score of -3.3e-4, three
+  times the gradient tolerance; the fit ended without converging, and
+  autosimplification removed the whole term instead of the one inactive
+  subspace.
+
 - Chunked cross products assemble each chunk's design over its nonempty
   columns only, slicing rows from transposed components through their
   column pointers, and place the chunk's product back at the global

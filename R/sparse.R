@@ -2419,6 +2419,24 @@
     names(score) <- names(fit$sp)
     projected_score <- abs(score)
     boundary <- fit$sparse$convergence$boundary
+    # A smoothing parameter the outer Hessian classifies as a boundary is
+    # flat along its own direction, so the optimizer may stop short of the
+    # box limit with a score that still points past it. Such a score is
+    # projected like one at the box limit: at an upper boundary only a
+    # positive score, which favors less smoothing, blocks reduction.
+    hessian_boundary <- fit$sparse$convergence$hessian_boundary
+    if (is.data.frame(hessian_boundary) && nrow(hessian_boundary) &&
+            all(c('smoothing_parameter', 'side') %in% names(hessian_boundary))) {
+        classified <- stats::setNames(
+            as.character(hessian_boundary$side),
+            as.character(hessian_boundary$smoothing_parameter)
+        )
+        classified <- classified[classified %in% c('upper', 'lower')]
+        boundary <- c(
+            boundary,
+            classified[setdiff(names(classified), names(boundary))]
+        )
+    }
     if (length(boundary)) {
         upper <- intersect(names(boundary)[boundary == 'upper'], names(score))
         lower <- intersect(names(boundary)[boundary == 'lower'], names(score))

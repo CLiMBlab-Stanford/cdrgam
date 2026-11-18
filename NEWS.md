@@ -1,5 +1,11 @@
 # cdrgam (development version)
 
+- Sparse Gaussian fits log their full named smoothing-parameter vector at
+  the end of each optimizer restart and at the final solution, and while
+  the criterion improves at most every 15 minutes, so that an interrupted
+  run leaves a recent best in its log. The reporter previously showed only
+  the first six values.
+
 - Sparse Gaussian setup builds the stored system pattern with one merge of
   the cross product instead of one per penalty, and extracts each chunk's
   design rows from a transposed copy of every ungrouped sparse component,

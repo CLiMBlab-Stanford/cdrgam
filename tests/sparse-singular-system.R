@@ -59,3 +59,36 @@ stopifnot(identical(guarded(c(1, 2)), c(2, 4)), calls == 2L)
 stopifnot(identical(guarded(c(25, -25)), c(2, 4)), skips == 2L)
 
 cat('Singular-system checks passed.\n')
+
+# A fit logs its full named smoothing-parameter vector at the end, as one
+# field that the reporter does not shorten.
+simulation <- simulate_cdr(
+    list(x=function(lag) exp(-lag)),
+    n_impulses=60, n_responses=80, duration=10, window=2, noise_sd=1, seed=9
+)
+design <- prepare_cdrgam(
+    response ~ irf(x, window=c(0, 2), k=5) + s(time, k=8),
+    simulation$impulses, simulation$responses, quiet=TRUE
+)
+log_lines <- c(
+    utils::capture.output(
+        messages <- utils::capture.output(
+            fit <- cdrgam:::.fit_sparse_gaussian(
+                design, family=gaussian(), method='REML', trace=1,
+                sparse_control=list(final_newton=FALSE)
+            ),
+            type='message'
+        )
+    ),
+    messages
+)
+final_line <- grep('final smoothing parameters', log_lines, value=TRUE)
+stopifnot(length(final_line) == 1L)
+logged <- strsplit(sub('.*log_sp=', '', final_line), ',', fixed=TRUE)[[1L]]
+stopifnot(
+    length(logged) == length(fit$sp),
+    !any(logged == '...'),
+    all(grepl('^s\\(', logged))
+)
+
+cat('Smoothing-parameter logging checks passed.\n')

@@ -3595,6 +3595,24 @@
     }
     checkpoint_last_written <- evaluation_count
     checkpoint_last_written_time <- proc.time()[['elapsed']]
+    # The full smoothing-parameter vector is logged as one field, because the
+    # reporter shortens vectors. While the fit improves it is logged at most
+    # every `best_report_interval` seconds, so a run that is interrupted still
+    # leaves a recent best in its log.
+    best_report_interval <- 900
+    best_reported_criterion <- Inf
+    best_reported_time <- -Inf
+    report_smoothing_parameters <- function(event, log_sp, criterion) {
+        reporter$emit(
+            1L,
+            event,
+            criterion=format(criterion, digits=12),
+            log_sp=paste(
+                sprintf('%s=%.6g', sp_names, log_sp),
+                collapse=','
+            )
+        )
+    }
     last_level_one_report <- -Inf
     if (resumed) {
         reporter$emit(
@@ -3968,6 +3986,16 @@
                 checkpoint_best <<- criterion
                 checkpoint_state$best_log_sp <<- log_sp
                 checkpoint_state$best_criterion <<- criterion
+            }
+            if (checkpoint_best < best_reported_criterion &&
+                    now - best_reported_time >= best_report_interval) {
+                report_smoothing_parameters(
+                    'best smoothing parameters',
+                    checkpoint_state$best_log_sp,
+                    checkpoint_best
+                )
+                best_reported_criterion <<- checkpoint_best
+                best_reported_time <<- now
             }
             if (!is.null(checkpoint) &&
                     (evaluation_count - checkpoint_last_written >= 10L ||
@@ -4876,6 +4904,11 @@
                 criterion=format(optimization_runs[[run_index]]$value, digits=10),
                 convergence=optimization_runs[[run_index]]$convergence
             )
+            report_smoothing_parameters(
+                'restart smoothing parameters',
+                optimization_runs[[run_index]]$par,
+                optimization_runs[[run_index]]$value
+            )
         }
     }
     run_values <- vapply(
@@ -5702,6 +5735,11 @@
     checkpoint_state$hessian_retained_elements <- hessian_retained_elements
     checkpoint_state$converged <- convergence$converged
     if (!is.null(checkpoint)) .checkpoint_write(checkpoint_state, checkpoint)
+    report_smoothing_parameters(
+        'final smoothing parameters',
+        log(solution$sp),
+        solution$criterion
+    )
     reporter$emit(
         1L,
         'fit complete',

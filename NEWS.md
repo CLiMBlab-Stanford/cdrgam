@@ -1,5 +1,12 @@
 # cdrgam (development version)
 
+- Sparse Gaussian REML diagnostics report `newton_step_max`, the largest
+  coordinate of the Newton step on the log smoothing-parameter scale, and
+  `predicted_decrease_floor`, the smallest criterion change the practical
+  convergence test treats as resolvable. In a reading-time model the
+  largest gradient component was 0.033 against a tolerance of 1e-4, while
+  the predicted decrease was 1.2e-5 against a floor of 3.6e-3.
+
 - Boundary reduction treats a smoothing parameter that the outer Hessian
   classifies as an upper or lower boundary like one at the optimizer's box
   limit: only a score favoring less smoothing, at an upper boundary, blocks

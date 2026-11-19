@@ -5346,6 +5346,10 @@
     # With an analytic Hessian the exact gradient comes from the same pieces,
     # so record how much a Newton step would still lower the criterion.
     predicted_decrease <- NA_real_
+    newton_step_max <- NA_real_
+    predicted_decrease_floor <- if (gcv) NA_real_ else {
+        .outer_objective_floor(solution$criterion)
+    }
     exact_gradient_maximum <- NA_real_
     if (!is.null(analytic) && !gcv) {
         analytic_gradient <- solution$reml_df * analytic$rss_scores /
@@ -5353,17 +5357,13 @@
             analytic$penalty_scores
         free <- setdiff(seq_len(penalty_count), hessian_boundary_index)
         if (length(free)) {
-            free_hessian <- analytic$hessian[free, free, drop=FALSE]
-            decomposition <- eigen(
-                (free_hessian + t(free_hessian)) / 2,
-                symmetric=TRUE
+            newton <- .sparse_newton_summary(
+                analytic$hessian[free, free, drop=FALSE],
+                analytic_gradient[free],
+                solution$criterion
             )
-            magnitudes <- pmax(
-                abs(decomposition$values),
-                max(1e-8, 1e-8 * max(abs(decomposition$values)))
-            )
-            rotated <- crossprod(decomposition$vectors, analytic_gradient[free])
-            predicted_decrease <- 0.5 * sum(rotated^2 / magnitudes)
+            predicted_decrease <- newton$predicted_decrease
+            newton_step_max <- newton$newton_step_max
             exact_gradient_maximum <- max(abs(analytic_gradient[free]))
         }
     }
@@ -5508,6 +5508,8 @@
         hessian_boundary=hessian_boundary,
         hessian_negative_directions=hessian_negative_directions,
         predicted_decrease=predicted_decrease,
+        predicted_decrease_floor=predicted_decrease_floor,
+        newton_step_max=newton_step_max,
         exact_gradient_maximum=exact_gradient_maximum,
         boundary_profile_level=boundary_profile_level,
         newton_refinement=if (is.null(newton_refinement)) NULL else list(
@@ -6426,6 +6428,28 @@ logLik.cdrgam_sparse <- function(object, ...) {
 # boundary parameters; `extra` holds their values. `objective` evaluates the
 # criterion at the full parameter vector and is used for profile bounds. Returns the fields recorded in the convergence list and the
 # Hessian on the negative log restricted-likelihood scale.
+# Summarizes the Newton step at a reported optimum over the free smoothing
+# parameters. `predicted_decrease` is the quadratic-model reduction of the
+# criterion, with near-zero curvatures floored; `newton_step_max` is the
+# largest coordinate of that step on the log smoothing-parameter scale; and
+# `predicted_decrease_floor` is the smallest reduction the criterion resolves
+# numerically, the same floor the practical convergence test uses. A large
+# gradient along a well-curved direction gives a negligible step and a
+# predicted decrease below the floor.
+.sparse_newton_summary <- function(hessian, gradient, criterion) {
+    decomposition <- eigen((hessian + t(hessian)) / 2, symmetric=TRUE)
+    magnitudes <- pmax(
+        abs(decomposition$values),
+        max(1e-8, 1e-8 * max(abs(decomposition$values)))
+    )
+    rotated <- drop(crossprod(decomposition$vectors, gradient))
+    list(
+        predicted_decrease=0.5 * sum(rotated^2 / magnitudes),
+        newton_step_max=max(abs(decomposition$vectors %*% (rotated / magnitudes))),
+        predicted_decrease_floor=.outer_objective_floor(criterion)
+    )
+}
+
 .sparse_outer_curvature_summary <- function(
         criterion_hessian,
         gradient,
@@ -6504,15 +6528,17 @@ logLik.cdrgam_sparse <- function(object, ...) {
         )
     })))
     free <- setdiff(seq_len(parameter_count), boundary_index)
-    predicted <- NA_real_
+    newton <- list(
+        predicted_decrease=NA_real_,
+        newton_step_max=NA_real_,
+        predicted_decrease_floor=.outer_objective_floor(base_value)
+    )
     if (length(free) && length(gradient) == parameter_count) {
-        free_hessian <- criterion_hessian[free, free, drop=FALSE]
-        decomposition <- eigen((free_hessian + t(free_hessian)) / 2,
-            symmetric=TRUE)
-        magnitudes <- pmax(abs(decomposition$values),
-            max(1e-8, 1e-8 * max(abs(decomposition$values))))
-        rotated <- crossprod(decomposition$vectors, gradient[free])
-        predicted <- 0.5 * sum(rotated^2 / magnitudes)
+        newton <- .sparse_newton_summary(
+            criterion_hessian[free, free, drop=FALSE],
+            gradient[free],
+            base_value
+        )
     }
     list(
         hessian=hessian,
@@ -6529,7 +6555,9 @@ logLik.cdrgam_sparse <- function(object, ...) {
                 hessian, interior, parameter_names, log_sp
             )
         } else NULL,
-        predicted_decrease=predicted,
+        predicted_decrease=newton$predicted_decrease,
+        predicted_decrease_floor=newton$predicted_decrease_floor,
+        newton_step_max=newton$newton_step_max,
         exact_gradient_maximum=if (length(free)) {
             max(abs(gradient[free]))
         } else NA_real_,

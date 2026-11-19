@@ -529,10 +529,7 @@
     # this relative floor are not reliably distinguishable from sparse
     # factorization roundoff and cannot justify movement along a flat outer
     # direction.
-    baseline_objective_floor <- max(
-        1e-8,
-        1e-10 * (1 + abs(criterion))
-    )
+    baseline_objective_floor <- .outer_objective_floor(criterion)
     if (!is.numeric(objective_noise) || length(objective_noise) != 1L ||
             !is.finite(objective_noise) || objective_noise < 0) {
         objective_noise <- 0
@@ -582,6 +579,13 @@
         restart_radius=restart_radius,
         diagnostics=diagnostics
     )
+}
+
+# The smallest criterion change resolvable at `criterion`. REML criteria
+# scale with the number of observations, and smaller improvements are not
+# reliably distinguishable from sparse factorization roundoff.
+.outer_objective_floor <- function(criterion) {
+    max(1e-8, 1e-10 * (1 + abs(criterion)))
 }
 
 # Experimental bounded, safeguarded dense-BFGS outer optimizer. Unlike

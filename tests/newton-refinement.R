@@ -104,3 +104,25 @@ stopifnot(
     refined$sparse$convergence$predicted_decrease < 1e-3,
     !('optimizer_stopped_short' %in% reason_codes(refined))
 )
+
+# A fit reports the Newton step size and the resolvable criterion change
+# beside the predicted decrease.
+refined_diagnostics <- fit_diagnostics(refined)
+stopifnot(
+    is.finite(refined_diagnostics$newton_step_max),
+    refined_diagnostics$newton_step_max >= 0,
+    is.finite(refined_diagnostics$predicted_decrease_floor),
+    refined_diagnostics$predicted_decrease_floor >= 1e-8
+)
+
+# A large gradient along a well-curved direction gives a negligible Newton
+# step and a predicted decrease below the floor.
+newton <- cdrgam:::.sparse_newton_summary(
+    diag(c(45, 1)), c(0.033, 0), 3.57e7
+)
+stopifnot(
+    isTRUE(all.equal(newton$predicted_decrease, 0.5 * 0.033^2 / 45)),
+    isTRUE(all.equal(newton$newton_step_max, 0.033 / 45)),
+    isTRUE(all.equal(newton$predicted_decrease_floor, 1e-10 * (1 + 3.57e7))),
+    newton$predicted_decrease < newton$predicted_decrease_floor
+)

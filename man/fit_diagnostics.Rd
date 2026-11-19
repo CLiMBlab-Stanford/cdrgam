@@ -26,7 +26,17 @@ single smoothing parameter (listed in \code{hessian_negative_directions}),
 or, when the analytic Hessian was computed, a Newton step would still lower
 the -2 REML criterion by more than 0.1 (\code{predicted_decrease}). Negative
 curvature that mixes several smoothing parameters is reported as
-\code{indefinite_outer_hessian}.
+\code{indefinite_outer_hessian}. Such a fit also reports
+\code{newton_step_max}, the largest coordinate of that Newton step on the
+log smoothing-parameter scale, and \code{predicted_decrease_floor}, the
+smallest criterion change resolvable at the fitted criterion (\code{1e-10}
+times its magnitude, at least \code{1e-8}). \code{gradient_norm} is the
+largest gradient component over all smoothing parameters and
+\code{exact_gradient_maximum} the largest over the free ones. Along a
+well-curved direction either can exceed the gradient tolerance while the
+Newton step and \code{predicted_decrease} stay negligible; convergence is
+judged from \code{predicted_decrease} against
+\code{predicted_decrease_floor}.
 }
 \description{
 Report standardized fit convergence diagnostics

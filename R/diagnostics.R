@@ -16,7 +16,17 @@
 #'   `hessian_negative_directions`), or, when the analytic Hessian was
 #'   computed, a Newton step would still lower the -2 REML criterion by more
 #'   than 0.1 (`predicted_decrease`). Negative curvature that mixes several
-#'   smoothing parameters is reported as `indefinite_outer_hessian`.
+#'   smoothing parameters is reported as `indefinite_outer_hessian`. Such a
+#'   fit also reports `newton_step_max`, the largest coordinate of that Newton
+#'   step on the log smoothing-parameter scale, and
+#'   `predicted_decrease_floor`, the smallest criterion change resolvable at
+#'   the fitted criterion (`1e-10` times its magnitude, at least `1e-8`).
+#'   `gradient_norm` is the largest gradient component over all smoothing
+#'   parameters and `exact_gradient_maximum` the largest over the free ones.
+#'   Along a well-curved direction either can exceed the gradient tolerance
+#'   while the Newton step and `predicted_decrease` stay negligible;
+#'   convergence is judged from `predicted_decrease` against
+#'   `predicted_decrease_floor`.
 #' @export
 fit_diagnostics <- function(object) {
     if (!is_cdrgam(object)) stop('object must be a fitted cdrgam model')

@@ -93,7 +93,7 @@ Predict.matrix.cdr.rescaled.smooth <- function(object, data) {
     unique(indices)
 }
 
-.cdr_plot_basis <- function(info, lag, predictor=NULL) {
+.cdr_plot_basis <- function(info, lag, predictor=NULL, surface_axis=2L) {
     lag_scale <- if (is.null(info$lag_scale)) 1 else info$lag_scale
     predictor_scale <- if (is.null(info$predictor_scale)) {
         1
@@ -106,12 +106,18 @@ Predict.matrix.cdr.rescaled.smooth <- function(object, data) {
         startsWith(info$type, 'varying')
     if (surface) {
         if (is.null(predictor)) stop('A surface term requires predictor values')
+        surface_axis <- as.integer(surface_axis)
+        if (length(surface_axis) != 1L || is.na(surface_axis) ||
+                surface_axis < 2L ||
+                (!is.null(info$axis) && surface_axis > length(info$axis))) {
+            stop('surface_axis must identify a non-lag IRF axis')
+        }
         grid <- expand.grid(lag=lag, predictor=predictor)
         if (!is.null(info$axis)) {
             axis_data <- stats::setNames(lapply(seq_along(info$axis), function(index) {
                 axis <- info$axis[[index]]
                 if (index == 1L) return(grid$lag / axis$scale)
-                if (index == 2L) return(grid$predictor / axis$scale)
+                if (index == surface_axis) return(grid$predictor / axis$scale)
                 rep.int(stats::median(axis$grid), nrow(grid))
             }), vapply(info$axis, `[[`, character(1), 'internal'))
             basis <- mgcv::PredictMat(
@@ -245,10 +251,11 @@ Predict.matrix.cdr.rescaled.smooth <- function(object, data) {
         component,
         group_levels,
         se,
-        unconditional
+        unconditional,
+        surface_axis=2L
 ) {
     info <- object$cdrgam$terms[[index]]
-    evaluated <- .cdr_plot_basis(info, lag, predictor)
+    evaluated <- .cdr_plot_basis(info, lag, predictor, surface_axis)
     grouped <- length(info$group_levels) > 0L
     if (grouped && identical(component, 'term')) component <- 'deviation'
     if (!grouped && component %in% c('population', 'conditional', 'deviation')) {
@@ -294,7 +301,8 @@ Predict.matrix.cdr.rescaled.smooth <- function(object, data) {
         }
         if (grouped && component %in% c('population', 'conditional', 'total')) {
             population_basis <- .cdr_plot_basis(
-                object$cdrgam$terms[[population_index]], lag, predictor
+                object$cdrgam$terms[[population_index]], lag, predictor,
+                surface_axis
             )$basis
             parts[[length(parts) + 1L]] <- .cdr_plot_term_part(
                 object, population_index, population_basis
@@ -458,6 +466,7 @@ Predict.matrix.cdr.rescaled.smooth <- function(object, data) {
     panels <- list()
     for (index in indices) {
         row <- registry[registry$index == index, ]
+        info <- object$cdrgam$terms[[index]]
         panel_view <- if (identical(view, 'auto')) {
             if (row$surface) 'surface' else 'irf'
         } else view
@@ -511,8 +520,9 @@ Predict.matrix.cdr.rescaled.smooth <- function(object, data) {
                 lag <- seq(min(knots), max(knots), length.out=n) * scale
             }
             if (is.null(predictor)) {
-                knots <- object$cdrgam$terms[[index]]$predictor_knots
-                scale <- object$cdrgam$terms[[index]]$predictor_scale
+                axis <- if (!is.null(info$axis)) info$axis[[2L]] else NULL
+                knots <- if (is.null(axis)) info$predictor_knots else axis$grid
+                scale <- if (is.null(axis)) info$predictor_scale else axis$scale
                 if (is.null(scale)) scale <- 1
                 predictor <- seq(
                     min(knots), max(knots), length.out=n_predictor
@@ -527,7 +537,7 @@ Predict.matrix.cdr.rescaled.smooth <- function(object, data) {
         }
         values <- .cdr_plot_evaluate(
             object, index, lag, predictor, component, at$group,
-            se, unconditional
+            se, unconditional, surface_axis=2L
         )
         if (!is.null(base_predictor)) {
             expanded <- merge(
@@ -541,22 +551,44 @@ Predict.matrix.cdr.rescaled.smooth <- function(object, data) {
             expanded$plot_predictor <- NULL
             values <- expanded
         }
-        if (identical(panel_view, 'surface') && any(!is.na(values$group))) {
-            for (group_level in unique(values$group)) {
-                panels[[length(panels) + 1L]] <- list(
-                    view=panel_view,
-                    label=paste0(row$label, ': ', group_level),
-                    data=values[values$group == group_level, ],
-                    ci_level=ci_level
+        append_surface <- function(values, label, axis_label=NULL) {
+            if (identical(panel_view, 'surface') && any(!is.na(values$group))) {
+                for (group_level in unique(values$group)) {
+                    panels[[length(panels) + 1L]] <<- list(
+                        view=panel_view,
+                        label=paste0(label, ': ', group_level),
+                        data=values[values$group == group_level, ],
+                        ci_level=ci_level, predictor_label=axis_label
+                    )
+                }
+            } else {
+                panels[[length(panels) + 1L]] <<- list(
+                    view=panel_view, label=label, data=values,
+                    ci_level=ci_level, predictor_label=axis_label
                 )
             }
-        } else {
-            panels[[length(panels) + 1L]] <- list(
-                view=panel_view,
-                label=row$label,
-                data=values,
-                ci_level=ci_level
-            )
+        }
+        axis_label <- if (identical(panel_view, 'surface') &&
+                !is.null(info$axis)) info$axis[[2L]]$label else NULL
+        main_label <- if (is.null(axis_label)) row$label else
+            paste0(row$label, ': ', axis_label)
+        append_surface(values, main_label, axis_label)
+        if (identical(view, 'auto') && identical(panel_view, 'surface') &&
+                !is.null(info$axis) && length(info$axis) > 2L) {
+            for (axis_index in seq.int(3L, length(info$axis))) {
+                axis <- info$axis[[axis_index]]
+                scale <- if (is.null(axis$scale)) 1 else axis$scale
+                axis_values <- seq(
+                    min(axis$grid), max(axis$grid), length.out=n_predictor
+                ) * scale
+                axis_values <- .cdr_plot_evaluate(
+                    object, index, lag, axis_values, component, at$group,
+                    se, unconditional, surface_axis=axis_index
+                )
+                append_surface(
+                    axis_values, paste0(row$label, ': ', axis$label), axis$label
+                )
+            }
         }
     }
     panels
@@ -637,7 +669,10 @@ Predict.matrix.cdr.rescaled.smooth <- function(object, data) {
         graphics::persp(
             lag, predictor, z,
             xlab=if (is.null(xlab)) 'Lag' else xlab,
-            ylab=if (is.null(ylab)) 'Predictor value' else ylab,
+            ylab=if (is.null(ylab)) {
+                if (is.null(panel$predictor_label)) 'Predictor value' else
+                    panel$predictor_label
+            } else ylab,
             zlab='Effect', main=title, col=palette[[length(palette) %/% 2L]],
             ticktype='detailed', ...
         )
@@ -647,7 +682,10 @@ Predict.matrix.cdr.rescaled.smooth <- function(object, data) {
         graphics::image(
             lag, predictor, z,
             xlab=if (is.null(xlab)) 'Lag' else xlab,
-            ylab=if (is.null(ylab)) 'Predictor value' else ylab,
+            ylab=if (is.null(ylab)) {
+                if (is.null(panel$predictor_label)) 'Predictor value' else
+                    panel$predictor_label
+            } else ylab,
             main=title, col=palette, zlim=c(-z_limit, z_limit), ...
         )
         graphics::contour(lag, predictor, z, add=TRUE, drawlabels=FALSE)
@@ -655,7 +693,10 @@ Predict.matrix.cdr.rescaled.smooth <- function(object, data) {
         graphics::contour(
             lag, predictor, z,
             xlab=if (is.null(xlab)) 'Lag' else xlab,
-            ylab=if (is.null(ylab)) 'Predictor value' else ylab,
+            ylab=if (is.null(ylab)) {
+                if (is.null(panel$predictor_label)) 'Predictor value' else
+                    panel$predictor_label
+            } else ylab,
             main=title, col=if (is.null(col)) 'black' else col[[1L]], ...
         )
     }

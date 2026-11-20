@@ -46,10 +46,19 @@
     plan
 }
 
+# Limits parallel workers so that their memory fits the available budget.
+# Workers are forked copies of the calling process; once a child's garbage
+# collector writes to inherited objects, the operating system copies those
+# pages. R's collector sets a mark bit in every live object it visits, so one
+# full collection in a child can copy nearly all of its parent. Each worker is
+# therefore charged `per_worker_bytes`, the memory it allocates itself, plus
+# `fork_fraction` of the parent's resident memory `parent_bytes`.
 .cdrgam_memory_parallel_plan <- function(
         cores, tasks, workers=NULL, per_worker_bytes,
         memory_fraction=0.5, reserve_bytes=512 * 1024^2,
-        memory=.cdrgam_memory_availability()
+        memory=.cdrgam_memory_availability(),
+        parent_bytes=.cdrgam_proc_memory('VmRSS'),
+        fork_fraction=1
 ) {
     plan <- .cdrgam_parallel_plan(cores, tasks, workers)
     requested_workers <- plan$workers
@@ -70,14 +79,26 @@
     budget <- if (is.finite(available)) {
         max(0, min(memory_fraction * available, available - reserve_bytes))
     } else NA_real_
+    if (length(fork_fraction) != 1L || !is.numeric(fork_fraction) ||
+            !is.finite(fork_fraction) || fork_fraction < 0) {
+        stop('fork_fraction must be one nonnegative finite number')
+    }
+    inherited_bytes <- if (length(parent_bytes) == 1L &&
+            is.numeric(parent_bytes) && is.finite(parent_bytes) &&
+            parent_bytes > 0) {
+        fork_fraction * parent_bytes
+    } else 0
+    charged_bytes <- per_worker_bytes + inherited_bytes
     memory_workers <- if (is.finite(budget)) {
-        max(1L, floor(budget / per_worker_bytes))
+        max(1L, floor(budget / charged_bytes))
     } else plan$workers
     resolved_workers <- min(plan$workers, memory_workers)
     plan$workers <- as.integer(resolved_workers)
     plan$blas_threads <- max(1L, plan$cores %/% plan$workers)
     plan$requested_workers <- as.integer(requested_workers)
     plan$per_worker_bytes <- as.numeric(per_worker_bytes)
+    plan$inherited_worker_bytes <- as.numeric(inherited_bytes)
+    plan$charged_worker_bytes <- as.numeric(charged_bytes)
     plan$memory_workers <- as.integer(memory_workers)
     plan$memory_limited <- plan$workers < requested_workers
     plan$memory_fraction <- memory_fraction
@@ -104,7 +125,8 @@
 }
 
 .cdrgam_sparse_score_batch_plan <- function(
-        task_count, workers, derivative_bytes, batch_size=NULL
+        task_count, workers, derivative_bytes, batch_size=NULL,
+        memory_fraction=0.55
 ) {
     task_count <- .cdrgam_positive_integer(task_count, 'score task count')
     workers <- min(
@@ -113,10 +135,15 @@
     )
     maximum_batch <- task_count
     derivative_bytes <- max(1, as.double(derivative_bytes))
+    if (length(memory_fraction) != 1L || !is.numeric(memory_fraction) ||
+            !is.finite(memory_fraction) || memory_fraction <= 0 ||
+            memory_fraction > 1) {
+        stop('score batch memory_fraction must lie in (0, 1]')
+    }
     memory <- .cdrgam_memory_availability()
     memory_batch <- if (is.finite(memory$available_bytes)) {
         max(1L, floor(
-            0.55 * memory$available_bytes / derivative_bytes
+            memory_fraction * memory$available_bytes / derivative_bytes
         ))
     } else 1L
     resolved_batch_size <- if (is.null(batch_size)) {
@@ -135,6 +162,7 @@
         groups=groups,
         batch_size=resolved_batch_size,
         derivative_bytes=derivative_bytes,
+        memory_fraction=memory_fraction,
         memory=memory
     )
 }

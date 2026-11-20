@@ -132,25 +132,55 @@
     list(setup=setup, info=info)
 }
 
-.rank_regularization <- function(system, action, tolerance, penalty) {
+# Factor a sparse system, returning NULL when it is not numerically positive
+# definite. CHOLMOD reports that condition with a warning and, for some
+# factorization modes, still returns a factor, so a warning is a failure.
+.cdr_sparse_cholesky <- function(expression) {
+    tryCatch(
+        expression,
+        warning=function(condition) NULL,
+        error=function(condition) NULL
+    )
+}
+
+# Whether a successful sparse factor shows an identifiable system. Each pivot
+# divided by the matching system diagonal entry is the fraction of that
+# coefficient direction not explained by the directions factored before it.
+# Exactly collinear directions give values near machine precision whether or
+# not rounding left the pivot positive; the ratio does not depend on column
+# scaling.
+.cdr_sparse_factor_identifiable <- function(factor, system, tolerance) {
+    pivots <- as.numeric(Matrix::diag(factor))
+    permutation <- methods::slot(factor, 'perm')
+    scale <- as.numeric(Matrix::diag(system))
+    if (length(permutation) == length(scale)) scale <- scale[permutation + 1L]
+    ratio <- pivots / scale
+    length(ratio) > 0L && all(is.finite(ratio)) && min(ratio) > tolerance
+}
+
+.rank_regularization <- function(
+        system, action, tolerance, penalty, supernodal=FALSE) {
     dense <- is.matrix(system)
-    probe <- if (dense) {
-        tryCatch(chol(system), error=function(e) NULL)
-    } else {
-        tryCatch(
-            suppressWarnings(Matrix::Cholesky(
-                Matrix::Matrix(system, sparse=TRUE),
-                LDL=FALSE, perm=TRUE, super=FALSE
-            )),
-            error=function(e) NULL
-        )
+    factorable <- function(candidate, check_rank=FALSE) {
+        if (dense) {
+            return(!is.null(tryCatch(
+                chol(candidate), error=function(e) NULL
+            )))
+        }
+        candidate <- Matrix::Matrix(candidate, sparse=TRUE)
+        factor <- .cdr_sparse_cholesky(Matrix::Cholesky(
+            candidate, LDL=FALSE, perm=TRUE, super=supernodal
+        ))
+        !is.null(factor) && (!check_rank ||
+            .cdr_sparse_factor_identifiable(factor, candidate, tolerance))
     }
-    condition <- if (dense && !is.null(probe)) {
+    probe <- factorable(system, check_rank=TRUE)
+    condition <- if (dense && isTRUE(probe)) {
         tryCatch(rcond(system), error=function(e) 0)
     } else {
         NA_real_
     }
-    if (!is.null(probe) && (!dense ||
+    if (isTRUE(probe) && (!dense ||
             (is.finite(condition) && condition > tolerance))) {
         return(list(value=0, resolution='none'))
     }
@@ -158,6 +188,22 @@
     diagonal_scale <- max(abs(Matrix::diag(system)), 1)
     relative <- if (identical(action, 'minimum_norm')) tolerance else penalty
     value <- relative * diagonal_scale
+    if (identical(action, 'minimum_norm')) {
+        diagonal <- if (dense) diag(nrow(system)) else {
+            Matrix::Diagonal(nrow(system))
+        }
+        while (!factorable(system + value * diagonal)) {
+            relative <- relative * 10
+            value <- relative * diagonal_scale
+            if (!is.finite(value) || relative > 1) {
+                stop(
+                    'Unable to construct a stable minimum-norm ridge ',
+                    'approximation for the rank-deficient model',
+                    call.=FALSE
+                )
+            }
+        }
+    }
     warning(
         if (identical(action, 'minimum_norm')) {
             paste0(
@@ -632,9 +678,11 @@
             axis=term$axis,
             linear_predictors=term$linear_predictors,
             linear_predictor_summaries=term$linear_predictor_summaries,
+            linear_predictor_centers=term$linear_predictor_centers,
             basis=term$basis,
             transform=term$transform,
             group=term$group,
+            group_penalty=term$group_penalty,
             group_levels=term$group_levels,
             base_dimension=term$base_dimension,
             rank=term$rank,
@@ -852,9 +900,11 @@
             axis=term$axis,
             linear_predictors=term$linear_predictors,
             linear_predictor_summaries=term$linear_predictor_summaries,
+            linear_predictor_centers=term$linear_predictor_centers,
             basis=term$basis,
             transform=term$transform,
             group=term$group,
+            group_penalty=term$group_penalty,
             group_levels=term$group_levels,
             base_dimension=term$base_dimension,
             rank=term$rank,
@@ -905,8 +955,10 @@
         deviance=solution$deviance,
         reml=solution$criterion,
         optimizer=result$optimization,
-        converged=isTRUE(solution$converged) &&
-            identical(result$optimization$convergence, 0L),
+        converged=isTRUE(solution$converged) && (
+            identical(result$optimization$convergence, 0L) ||
+                isTRUE(result$optimization$plateau$accepted)
+        ),
         cdrgam=list(
             schema_version=1L,
             engine='block',

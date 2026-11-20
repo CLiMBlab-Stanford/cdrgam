@@ -159,8 +159,13 @@ stopifnot(grepl(
 ))
 stopifnot(inherits(formula(fit, type='mgcv'), 'formula'))
 stopifnot(grepl(
-    'cdr_term_1',
+    'irf_surprisal',
     paste(deparse(formula(fit, type='mgcv')), collapse='')
+))
+stopifnot(!grepl(
+    'bs = "cdr"',
+    paste(deparse(formula(fit, type='mgcv')), collapse=''),
+    fixed=TRUE
 ))
 stopifnot(grepl(
     's\\(trial',

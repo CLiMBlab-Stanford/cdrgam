@@ -17,7 +17,8 @@ contributors remain responsible for the code and documentation they publish.
 
 | Provider | Tool or agent | Model identifier | Period | Roles | Identification basis |
 | --- | --- | --- | --- | --- | --- |
-| OpenAI | Codex | GPT-5 | 2026-09 | implementation, testing, documentation, review, refactoring | The active environment identifies the agent as Codex based on GPT-5. |
+| OpenAI | Codex | GPT-5 | 2026-09--2026-10 | implementation, testing, documentation, review, refactoring | The active environment identifies the agent as Codex based on GPT-5. |
+| Anthropic | Claude Code | claude-opus-5-5 | 2026-11 | implementation, testing, documentation | The active environment identifies the agent as Claude Code running model claude-opus-5-5. |
 
 ## Agent registration
 

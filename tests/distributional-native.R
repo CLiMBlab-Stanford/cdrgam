@@ -1,5 +1,11 @@
 library(cdrgam)
 
+# These checks compare designs with native-unit references, so they fit
+# without predictor rescaling.
+
+# These comparisons check solver agreement on models fitted before linear
+# predictor centering became the default; they keep uncentered predictors.
+
 set.seed(9341)
 n_impulses <- 180L
 n_responses <- 260L
@@ -16,7 +22,8 @@ formulas <- list(
         irf(location_signal, window=c(0, 1.5), k_l=6) - irf(1),
     scale=~ irf(scale_signal, window=c(0, 1.5), k_l=6) - irf(1)
 )
-design <- prepare_cdrgam(
+design <- prepare_cdrgam(rescale_predictors=FALSE,
+    center_predictors=FALSE,
     formulas,
     impulses,
     responses,
@@ -36,7 +43,8 @@ fit <- cdrgam.fit(
     backend='mgcv',
     method='REML'
 )
-one_step <- cdrgam(
+one_step <- cdrgam(rescale_predictors=FALSE,
+    center_predictors=FALSE,
     formulas,
     impulses,
     responses,
@@ -86,6 +94,7 @@ hybrid_sparse <- cdrgam.fit(
     },
     sparse_control=list(
         gradient='hybrid',
+        warmup='stochastic',
         gradient_probes=8L,
         optimizer_maxit=1L,
         optimizer_gradient_tolerance=1e6
@@ -208,15 +217,23 @@ stopifnot(
     max(abs(sparse_with_se$se.fit - block_with_se$se.fit)) < 1e-3
 )
 
-reference <- mgcv::gam(
-    unname(fit$cdrgam$formula$mgcv),
+exported_specification <- as_mgcv_spec(
+    design,
     family=mgcv::gaulss(),
-    data=as.list(fit$model),
     method='REML'
 )
+reference <- do.call(mgcv::gam, exported_specification)
 stopifnot(
     max(abs(stats::coef(fit) - stats::coef(reference))) < 1e-9,
-    max(abs(stats::vcov(fit) - stats::vcov(reference))) < 1e-9
+    max(abs(stats::vcov(fit) - stats::vcov(reference))) < 1e-9,
+    all(vapply(
+        formula(fit, type='mgcv'),
+        function(value) !grepl(
+            'cdr_term_|bs = "cdr"',
+            paste(deparse(value), collapse='')
+        ),
+        logical(1)
+    ))
 )
 
 location_irf <- estimate_irf(
@@ -293,7 +310,8 @@ smooth_formulas <- list(
 )
 responses$location_offset <- seq(-0.1, 0.1, length.out=n_responses)
 responses$scale_offset <- seq(0.05, -0.05, length.out=n_responses)
-smooth_design <- prepare_cdrgam(
+smooth_design <- prepare_cdrgam(rescale_predictors=FALSE,
+    center_predictors=FALSE,
     smooth_formulas,
     impulses,
     responses,
@@ -378,7 +396,8 @@ expect_error <- function(expression, pattern) {
     stopifnot(!is.na(message), grepl(pattern, message, fixed=TRUE))
 }
 expect_error(
-    prepare_cdrgam(
+    prepare_cdrgam(rescale_predictors=FALSE,
+        center_predictors=FALSE,
         list(mean=formulas$location, scale=formulas$scale),
         impulses,
         responses,
@@ -391,6 +410,7 @@ expect_error(
     'requires family="gaulss"'
 )
 scaled_design <- prepare_cdrgam(
+    center_predictors=FALSE,
     formulas,
     impulses,
     responses,
@@ -444,3 +464,43 @@ expect_error(
 )
 
 cat('Native distributional regression checks passed.\n')
+
+# A small rescaled location-scale fit whose inner gradient settles just above
+# the absolute tolerance must still count as converged once its line search
+# can no longer change the objective; otherwise the dense optimizer ends at an
+# "invalid" fit that it had accepted moments earlier.
+stalled <- simulate_cdr(
+    list(x=function(lag) exp(-2 * lag)), n_impulses=80, n_responses=100,
+    duration=12, window=1.5, noise_sd=0.5, seed=731
+)
+stalled_responses <- stalled$responses
+stalled_responses$row_id <- seq_len(nrow(stalled_responses))
+stalled_impulses <- stalled$impulses
+for (column in c('document', 'sentence', 'position')) {
+    values <- switch(column,
+        document=function(n) rep(c('a', 'b'), length.out=n),
+        sentence=function(n) rep(c(1L, 2L), each=2L, length.out=n),
+        position=function(n) rep(1:3, length.out=n)
+    )
+    stalled_impulses[[column]] <- values(nrow(stalled_impulses))
+    stalled_responses[[column]] <- values(nrow(stalled_responses))
+}
+stalled_responses <- stalled_responses[
+    stalled_responses$row_id > 60 & stalled_responses$row_id <= 90,
+]
+stalled_responses$item_id <- interaction(
+    stalled_responses$document, stalled_responses$sentence,
+    stalled_responses$position, drop=TRUE
+)
+stalled_design <- prepare_cdrgam(
+    list(
+        location=response ~ s(item_id, bs='re') + irf(x) - irf(1),
+        scale=~ irf(x) - irf(1)
+    ),
+    stalled_impulses, stalled_responses, window=c(0, 1.5),
+    knots_l=c(0, 0.1, 0.3, 0.8, 1.5), k_l=5L, bs_l='cr',
+    rescale_predictors=TRUE, quiet=TRUE
+)
+stalled_fit <- cdrgam.fit(stalled_design, family='gaulss', backend='block',
+    method='REML')
+stopifnot(isTRUE(stalled_fit$converged), is.finite(stalled_fit$reml))

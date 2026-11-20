@@ -1,6 +1,6 @@
 Package: cdrgam
 Title: Continuous-Time Deconvolution Using Generalized Additive Models
-Version: 0.2.0
+Version: 0.3.0
 Authors@R:
     person("Cory", "Shain", , "cory.shain@gmail.com", role = c("aut", "cre"),
            comment = c(ORCID = "https://orcid.org/0000-0002-2704-7197"))
@@ -14,7 +14,7 @@ Description: Fits continuous-time deconvolutional regression models as
     Fitted objects provide standard model methods and retain their translated
     'mgcv' representation.
 License: MIT + file LICENSE
-URL: https://climblab.org/cdrgam/,
+URL: https://climblab-stanford.github.io/cdrgam/,
     https://github.com/CLiMBlab-Stanford/cdrgam
 BugReports: https://github.com/CLiMBlab-Stanford/cdrgam/issues
 Imports:

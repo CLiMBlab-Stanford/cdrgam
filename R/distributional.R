@@ -68,7 +68,8 @@
         ),
         configuration=list(
             drop.unused.levels=arguments$drop.unused.levels,
-            rescale_predictors=arguments$rescale_predictors
+            rescale_predictors=arguments$rescale_predictors,
+            center_predictors=arguments$center_predictors
         )
     )
     class(output) <- c('cdrgam_distributional_design', 'cdrgam_design')
@@ -112,9 +113,11 @@
         axis=term$axis,
         linear_predictors=term$linear_predictors,
         linear_predictor_summaries=term$linear_predictor_summaries,
+        linear_predictor_centers=term$linear_predictor_centers,
         basis=term$basis,
         transform=term$transform,
         group=term$group,
+        group_penalty=term$group_penalty,
         group_levels=term$group_levels,
         base_dimension=term$base_dimension,
         rank=term$rank,

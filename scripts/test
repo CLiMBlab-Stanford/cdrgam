@@ -3,14 +3,14 @@ set -eu
 
 scope=${1:-all}
 case "$scope" in
-    api) tests='formula-streams effects marginaleffects' ;;
-    design) tests='axis-irf automatic-simplification identifiability predictor-scaling' ;;
-    gaussian) tests='compressed boundary-reduction checkpoint-progress randomized-equivalence schur-factor sparse-gcv sparse-robustness' ;;
-    generalized) tests='generalized-families generalized-gcv' ;;
-    distributional) tests='distributional-checkpoint distributional-native distributional-qncv distributional-score' ;;
-    optimizer) tests='boundary-reduction checkpoint-progress hybrid-transition parallelism sparse-gcv generalized-gcv distributional-qncv' ;;
+    api) tests='fit-diagnostics formula-streams mgcv-export effects effect-composition marginaleffects' ;;
+    design) tests='axis-irf automatic-simplification group-penalty identifiability predictor-centering predictor-scaling' ;;
+    gaussian) tests='compressed pairwise-sum chunk-crossprod condition-indicator penalty-logdet newton-refinement optimizer-diagnostics boundary-reduction checkpoint-progress randomized-equivalence schur-factor sparse-factor-smooth sparse-tensor-interaction sparse-gcv sparse-selected-inverse sparse-boundary-hessian sparse-robustness sparse-singular-system' ;;
+    generalized) tests='generalized-families generalized-gcv generalized-curvature' ;;
+    distributional) tests='distributional-checkpoint distributional-native distributional-qncv distributional-score distributional-efs' ;;
+    optimizer) tests='boundary-reduction newton-refinement optimizer-diagnostics checkpoint-progress hybrid-transition parallelism sparse-gcv sparse-selected-inverse sparse-boundary-hessian generalized-gcv distributional-qncv' ;;
     recovery) tests='mixed-recovery nonlinear-recovery synthetic-recovery varying-recovery' ;;
-    all) tests='automatic-simplification axis-irf boundary-reduction checkpoint-progress compressed distributional-checkpoint distributional-native distributional-qncv distributional-score effects formula-streams generalized-families generalized-gcv hybrid-transition identifiability marginaleffects mixed-recovery nonlinear-recovery parallelism predictor-scaling randomized-equivalence schur-factor sparse-gcv sparse-robustness synthetic-recovery varying-recovery' ;;
+    all) tests='automatic-simplification axis-irf boundary-reduction checkpoint-progress compressed pairwise-sum chunk-crossprod condition-indicator penalty-logdet newton-refinement optimizer-diagnostics distributional-checkpoint distributional-native distributional-qncv distributional-score distributional-efs effects effect-composition fit-diagnostics formula-streams group-penalty mgcv-export generalized-families generalized-gcv generalized-curvature hybrid-transition identifiability marginaleffects mixed-recovery nonlinear-recovery parallelism predictor-centering predictor-scaling randomized-equivalence schur-factor sparse-factor-smooth sparse-tensor-interaction sparse-gcv sparse-selected-inverse sparse-singular-system sparse-boundary-hessian sparse-robustness synthetic-recovery varying-recovery' ;;
     *)
         if [ -f "tests/$scope.R" ]; then
             tests=$scope
@@ -37,7 +37,7 @@ trap 'rm -rf "$test_library" "$source_copy"' EXIT HUP INT TERM
 mkdir -p "$test_library/cache"
 export XDG_CACHE_HOME="$test_library/cache"
 mkdir "$source_copy/cdrgam"
-cp -a DESCRIPTION LICENSE NAMESPACE R man src tests \
+cp -R DESCRIPTION LICENSE NAMESPACE R man src tests \
     "$source_copy/cdrgam/"
 "$r_bin" CMD INSTALL --preclean -l "$test_library" \
     "$source_copy/cdrgam" >/dev/null

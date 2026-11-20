@@ -1,5 +1,8 @@
 library(cdrgam)
 
+# These comparisons check solver agreement on models fitted before linear
+# predictor centering became the default; they keep uncentered predictors.
+
 stopifnot(
     identical(cdrgam_family('poisson')$link, 'log'),
     identical(cdrgam_family('binomial', 'probit')$link, 'probit'),
@@ -31,6 +34,7 @@ fit_and_check <- function(response, family) {
     data$responses$base_offset <- seq(-0.1, 0.1, length.out=nrow(data$responses))
     prior_weights <- rep(c(1, 2), length.out=nrow(data$responses))
     design <- prepare_cdrgam(
+        center_predictors=FALSE,
         response ~ offset(base_offset) +
             irf(signal, window=c(0, 1.5), k_l=6) +
             irf(noise, window=c(0, 1.5), k_l=5) - irf(1),
@@ -247,6 +251,24 @@ fit_and_check <- function(response, family) {
             method='REML',
             weights=prior_weights
         ))
+        if (!identical(block$optimizer$convergence, 0L) &&
+                isTRUE(block$converged)) {
+            # A stall on a flat plateau converges with a warning.
+            diagnostics <- fit_diagnostics(block)
+            stopifnot(
+                isTRUE(block$optimizer$plateau$accepted),
+                identical(diagnostics$outcome, 'warning'),
+                'smoothing_parameter_plateau' %in%
+                    vapply(diagnostics$reasons, `[[`, character(1), 'code')
+            )
+        }
+        if (!isTRUE(block$converged)) {
+            stop(
+                'block ', family$family, ' fit did not converge: ',
+                block$optimizer$message, '; log sp ',
+                paste(format(log(block$sp), digits=4), collapse=', ')
+            )
+        }
         stopifnot(
             isTRUE(block$converged),
             max(abs(block$linear.predictors - fit$linear.predictors)) < 3e-3,
@@ -322,7 +344,14 @@ fit_and_check <- function(response, family) {
             all(diag(sparse_covariance) >= 0),
             all(is.finite(sparse_irf$estimate)),
             all(is.finite(sparse_irf$se)),
-            inherits(sparse_unconditional, 'try-error'),
+            # Generalized REML now has a finite-difference outer Hessian, so
+            # unconditional covariance is available unless that Hessian is
+            # indefinite after boundary parameters are excluded.
+            if (inherits(sparse_unconditional, 'try-error')) {
+                grepl('positive-definite outer Hessian',
+                    sparse_unconditional, fixed=TRUE) ||
+                    !identical(sparse_fit$method, 'REML')
+            } else all(is.finite(sparse_unconditional)),
             sparse_fit$sparse$warm_starts > 0L,
             sparse_fit$sparse$score_plan$batch_size >= 1L,
             identical(
@@ -371,6 +400,7 @@ random_data$responses$subject <- factor(rep(
     length.out=nrow(random_data$responses)
 ))
 random_design <- prepare_cdrgam(
+    center_predictors=FALSE,
     response ~ s(subject, bs='re') +
         irf(signal, window=c(0, 1.5), k_l=6) - irf(1),
     random_data$impulses,

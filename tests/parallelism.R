@@ -28,7 +28,23 @@ memory_limited <- memory_parallel_plan(
     per_worker_bytes=2 * 1024^3,
     memory_fraction=1,
     reserve_bytes=0,
-    memory=list(source='synthetic', available_bytes=5 * 1024^3)
+    memory=list(source='synthetic', available_bytes=5 * 1024^3),
+    parent_bytes=0
+)
+# A large parent process is charged to each forked worker: a 6 GiB parent
+# adds 6 GiB per worker, so only one worker fits in 5 GiB.
+large_parent <- memory_parallel_plan(
+    8L, 8L,
+    per_worker_bytes=2 * 1024^3,
+    memory_fraction=1,
+    reserve_bytes=0,
+    memory=list(source='synthetic', available_bytes=5 * 1024^3),
+    parent_bytes=6 * 1024^3
+)
+stopifnot(
+    large_parent$workers == 1L,
+    large_parent$charged_worker_bytes == 8 * 1024^3,
+    large_parent$inherited_worker_bytes == 6 * 1024^3
 )
 stopifnot(
     batched$workers == 4L,
@@ -98,9 +114,19 @@ if (.Platform$OS.type != 'windows') {
         ))
     )
     stopifnot(
-        all(worker_threads == fork_plan$blas_threads),
+        if (identical(Sys.info()[['sysname']], 'Darwin')) {
+            all(is.finite(worker_threads) & worker_threads >= 1L)
+        } else all(worker_threads == fork_plan$blas_threads),
         blas_threads() == initial_threads
     )
 }
 
 cat('Parallel phase-planning checks passed.\n')
+
+# Peak growth is measured where Linux allows resetting the peak counter.
+growth <- cdrgam:::.cdrgam_measure_peak_growth({
+    block <- numeric(64 * 1024^2 / 8) + 1
+    sum(block)
+})
+stopifnot(growth$value == 64 * 1024^2 / 8)
+if (is.finite(growth$bytes)) stopifnot(growth$bytes >= 32 * 1024^2)

@@ -11,7 +11,10 @@ summaries from models fitted before summaries were stored.}
 }
 \value{
 A data frame with one row per impulse-response term. The \code{predictors},
-\code{axes}, and \code{axis_summaries} columns are list columns.
+\code{axes}, \code{axis_summaries}, and \code{centers} columns are list columns.
+\code{centers} gives the source-unit value at which each centered linear
+predictor makes the term zero; it is empty for terms without centered linear
+predictors.
 }
 \description{
 Returns the term and source-scale axis metadata needed to construct effect

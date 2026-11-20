@@ -1,9 +1,38 @@
 #' Report standardized fit convergence diagnostics
 #'
 #' @param object A fitted `cdrgam` model.
-#' @return A named list containing at least `converged`, `code`, and `message`.
-#'   Custom backends also report available objective counts, gradient norms,
-#'   boundary information, and Hessian diagnostics.
+#' @return A named list containing at least `outcome`, `reasons`, `converged`,
+#'   `code`, and `message`. `outcome` is `"success"`, `"warning"`, or
+#'   `"nonconverged"`. A warning means that optimization converged but a
+#'   recorded numerical or inferential diagnostic requires review. Custom
+#'   backends also report available objective counts, gradient norms, boundary
+#'   information, conditioning, and Hessian diagnostics. `notes` lists
+#'   findings that do not change `outcome`. A sparse Gaussian REML fit adds a
+#'   `boundary_variance_components` note when smoothing parameters are
+#'   classified as on the boundary of their range; their profile bounds are
+#'   in `hessian_boundary`. The `optimizer_stopped_short` reason means the
+#'   reported optimum is not one: either a negative-curvature direction of the
+#'   interior Hessian lies along a single smoothing parameter (listed in
+#'   `hessian_negative_directions`), or, when the analytic Hessian was
+#'   computed, a Newton step would still lower the -2 REML criterion by more
+#'   than 0.1 (`predicted_decrease`). Negative curvature that mixes several
+#'   smoothing parameters is reported as `indefinite_outer_hessian`. Such a
+#'   fit also reports `newton_step_max`, the largest coordinate of that Newton
+#'   step on the log smoothing-parameter scale, and
+#'   `predicted_decrease_floor`, the smallest criterion change resolvable at
+#'   the fitted criterion (`1e-10` times its magnitude, at least `1e-8`).
+#'   A dense generalized block fit whose optimizer stalls on a flat
+#'   criterion plateau counts as converged only when every gradient component
+#'   of the -2 LAML criterion is below 0.01 and at least one log smoothing
+#'   parameter exceeds 8 in absolute value; it then reports outcome
+#'   `"warning"`, the parameters in `plateau`, and the reason
+#'   `smoothing_parameter_plateau`.
+#'   `gradient_norm` is the largest gradient component over all smoothing
+#'   parameters and `exact_gradient_maximum` the largest over the free ones.
+#'   Along a well-curved direction either can exceed the gradient tolerance
+#'   while the Newton step and `predicted_decrease` stay negligible;
+#'   convergence is judged from `predicted_decrease` against
+#'   `predicted_decrease_floor`.
 #' @export
 fit_diagnostics <- function(object) {
     if (!is_cdrgam(object)) stop('object must be a fitted cdrgam model')
@@ -16,7 +45,7 @@ fit_diagnostics <- function(object) {
         gradient_norm <- if (length(diagnostic_gradient)) {
             max(abs(diagnostic_gradient))
         } else NA_real_
-        return(list(
+        diagnostics <- list(
             converged=isTRUE(object$converged),
             code=object$optimizer$convergence,
             message=if (isTRUE(object$converged)) {
@@ -24,23 +53,56 @@ fit_diagnostics <- function(object) {
             } else object$optimizer$message,
             total_objective_evaluations=object$distributional$evaluations,
             gradient_norm=gradient_norm,
-            inner_gradient_norm=object$distributional$gradient_norm
-        ))
+            inner_gradient_norm=object$distributional$gradient_norm,
+            condition_indicator=object$sparse$condition_indicator,
+            hessian_positive_definite=NA
+        )
+        return(.cdrgam_finalize_fit_diagnostics(object, diagnostics))
     }
     if (inherits(object, 'cdrgam_sparse')) {
-        return(object$sparse$convergence)
+        diagnostics <- object$sparse$convergence
+        diagnostics$condition_indicator <- object$sparse$condition_indicator
+        diagnostics$condition_indicator_full <-
+            object$sparse$condition_indicator_full
+        return(.cdrgam_finalize_fit_diagnostics(object, diagnostics))
     }
     if (inherits(object, 'cdrgam_block')) {
-        converged <- identical(object$optimizer$convergence, 0L)
-        return(list(
+        plateau <- object$optimizer$plateau
+        plateau_accepted <- isTRUE(plateau$accepted)
+        converged <- identical(object$optimizer$convergence, 0L) ||
+            plateau_accepted
+        hessian <- object$outer.info$hess
+        hessian_eigenvalues <- if (is.matrix(hessian) && nrow(hessian)) {
+            tryCatch(
+                eigen(hessian, symmetric=TRUE, only.values=TRUE)$values,
+                error=function(error) NA_real_
+            )
+        } else numeric()
+        diagnostics <- list(
             converged=converged,
             code=object$optimizer$convergence,
-            message=if (converged) {
+            message=if (plateau_accepted) {
+                paste0(
+                    'converged on a criterion plateau after ',
+                    object$optimizer$message
+                )
+            } else if (converged) {
                 'full convergence'
             } else if (is.null(object$optimizer$message)) {
                 'optimizer convergence was not reached'
-            } else object$optimizer$message
-        ))
+            } else object$optimizer$message,
+            condition_indicator=object$cdrgam$identifiability$global$condition_indicator,
+            hessian_positive_definite=if (!length(hessian_eigenvalues)) {
+                NA
+            } else {
+                all(is.finite(hessian_eigenvalues)) &&
+                    min(hessian_eigenvalues) > sqrt(.Machine$double.eps)
+            },
+            plateau=if (plateau_accepted) {
+                names(object$sp)[plateau$plateau]
+            }
+        )
+        return(.cdrgam_finalize_fit_diagnostics(object, diagnostics))
     }
     outer_message <- object$outer.info$conv
     converged <- if (!is.null(object$converged)) {
@@ -48,13 +110,185 @@ fit_diagnostics <- function(object) {
     } else if (!is.null(outer_message)) {
         tolower(outer_message) %in% c('full convergence', 'converged')
     } else TRUE
-    list(
+    hessian <- object$outer.info$hess
+    hessian_eigenvalues <- if (is.matrix(hessian) && nrow(hessian)) {
+        tryCatch(
+            eigen(hessian, symmetric=TRUE, only.values=TRUE)$values,
+            error=function(error) NA_real_
+        )
+    } else numeric()
+    diagnostics <- list(
         converged=converged,
         code=if (converged) 0L else NA_integer_,
         message=if (is.null(outer_message)) {
             'native mgcv convergence state'
-        } else outer_message
+        } else outer_message,
+        condition_indicator=object$cdrgam$identifiability$global$condition_indicator,
+        hessian_positive_definite=if (!length(hessian_eigenvalues)) {
+            NA
+        } else {
+            all(is.finite(hessian_eigenvalues)) &&
+                min(hessian_eigenvalues) > sqrt(.Machine$double.eps)
+        }
     )
+    .cdrgam_finalize_fit_diagnostics(object, diagnostics)
+}
+
+.cdrgam_diagnostic_reason <- function(code, message) {
+    list(code=code, message=message)
+}
+
+.cdrgam_finalize_fit_diagnostics <- function(object, diagnostics) {
+    reasons <- list()
+    add_reason <- function(code, message) {
+        reasons[[length(reasons) + 1L]] <<-
+            .cdrgam_diagnostic_reason(code, message)
+    }
+    if (!isTRUE(diagnostics$converged)) {
+        add_reason(
+            'optimizer_nonconvergence',
+            if (is.null(diagnostics$message)) {
+                'Optimizer convergence was not reached.'
+            } else as.character(diagnostics$message)
+        )
+    }
+    # A Newton step that would still lower the -2 REML criterion by more than
+    # 0.1 (0.05 log-likelihood units) means the reported optimum is not one.
+    stopped_short_reported <- FALSE
+    # Only sparse Gaussian fits run the final Newton refinement.
+    family <- object$family
+    advice <- .sparse_newton_advice(
+        diagnostics$newton_refinement,
+        available=inherits(object, 'cdrgam_sparse') &&
+            identical(family$family, 'gaussian') &&
+            identical(family$link, 'identity')
+    )
+    advice <- if (length(advice)) {
+        paste0(' ', toupper(substr(advice, 1, 1)), substring(advice, 2), '.')
+    } else ''
+    predicted <- diagnostics$predicted_decrease
+    if (length(predicted) == 1L && is.finite(predicted) && predicted > 0.1) {
+        stopped_short_reported <- TRUE
+        add_reason(
+            'optimizer_stopped_short',
+            paste0(
+                'The optimizer stopped before the optimum: a Newton step ',
+                'would lower the -2 REML criterion by about ',
+                format(predicted, digits=3),
+                '.', advice
+            )
+        )
+    }
+    if (identical(diagnostics$hessian_positive_definite, FALSE)) {
+        directions <- diagnostics$hessian_negative_directions
+        single <- if (is.data.frame(directions)) {
+            directions$kind == 'single'
+        } else logical()
+        if (any(single) && !stopped_short_reported) {
+            stopped_short_reported <- TRUE
+            add_reason(
+                'optimizer_stopped_short',
+                paste0(
+                    'The optimizer stopped before the optimum: the criterion ',
+                    'still decreases along ',
+                    paste(unique(directions$parameter[single]), collapse=', '),
+                    '.', advice
+                )
+            )
+        }
+        if (!length(single) || !all(single)) {
+            add_reason(
+                'indefinite_outer_hessian',
+                paste(
+                    'The outer Hessian is not positive definite;',
+                    'smoothing-parameter stability or variance-component',
+                    'inference may be unreliable.'
+                )
+            )
+        }
+    }
+    plateau <- diagnostics[['plateau', exact=TRUE]]
+    if (length(plateau)) {
+        add_reason(
+            'smoothing_parameter_plateau',
+            paste0(
+                'The optimizer stopped on a flat criterion plateau, where ',
+                'smoothing parameter(s) ', paste(plateau, collapse=', '),
+                ' have no finite optimum; their terms are effectively ',
+                'reduced to their unpenalized space.'
+            )
+        )
+    }
+    boundary <- diagnostics$boundary
+    if (length(boundary)) {
+        add_reason(
+            'smoothing_parameter_boundary',
+            paste0(
+                'Smoothing parameter(s) remain at an optimizer boundary: ',
+                paste(names(boundary), collapse=', '), '.'
+            )
+        )
+    }
+    resolution <- object$cdrgam$rank$resolution
+    if (isTRUE(resolution %in% c(
+            'minimum-norm-ridge-approximation', 'fixed-ridge-penalty'
+        ))) {
+        add_reason(
+            'rank_deficiency_regularized',
+            paste0(
+                'A rank-deficient system was resolved using ', resolution,
+                '; coefficient inference depends on that resolution.'
+            )
+        )
+    }
+    condition <- diagnostics$condition_indicator
+    rank_tolerance <- object$cdrgam$rank$tolerance
+    if (is.null(rank_tolerance) || !is.finite(rank_tolerance)) {
+        rank_tolerance <- sqrt(.Machine$double.eps)
+    }
+    condition_tolerance <- rank_tolerance^2
+    diagnostics$condition_tolerance <- condition_tolerance
+    if (length(condition) == 1L && is.finite(condition) &&
+            condition <= condition_tolerance) {
+        add_reason(
+            'ill_conditioned_penalized_system',
+            paste0(
+                'The penalized system condition indicator (',
+                format(condition, digits=4), ') is at or below the diagnostic ',
+                'tolerance (', format(condition_tolerance, digits=4), ').'
+            )
+        )
+    }
+    notes <- list()
+    hessian_boundary <- diagnostics$hessian_boundary
+    if (is.data.frame(hessian_boundary) && nrow(hessian_boundary)) {
+        upper <- hessian_boundary$side == 'upper'
+        notes[[length(notes) + 1L]] <- .cdrgam_diagnostic_reason(
+            'boundary_variance_components',
+            paste0(
+                nrow(hessian_boundary), ' smoothing parameter(s) are on the ',
+                'boundary of their range and are excluded from the outer-',
+                'Hessian check',
+                if (any(upper)) paste0(
+                    '; variance components estimated as zero: ',
+                    paste(hessian_boundary$smoothing_parameter[upper],
+                        collapse=', ')
+                ) else '',
+                '. Effect inference treats these components as fixed; ',
+                'compare with boundary = "bound" to check sensitivity.'
+            )
+        )
+    }
+    diagnostics$notes <- notes
+    diagnostics$outcome <- if (!isTRUE(diagnostics$converged)) {
+        'nonconverged'
+    } else if (length(reasons)) {
+        'warning'
+    } else {
+        'success'
+    }
+    diagnostics$reasons <- reasons
+    diagnostics
 }
 
 .cdrgam_simplification_sp_indices <- function(object) {

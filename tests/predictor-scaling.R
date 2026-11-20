@@ -31,8 +31,19 @@ native <- prepare_cdrgam(
     responses,
     series='series',
     history='ragged',
+    rescale_predictors=FALSE,
     quiet=TRUE
 )
+# Rescaling is the default.
+default_scaling <- prepare_cdrgam(
+    model_formula,
+    impulses,
+    responses,
+    series='series',
+    history='ragged',
+    quiet=TRUE
+)
+stopifnot(isTRUE(default_scaling$scaling$enabled))
 scaled <- prepare_cdrgam(
     model_formula,
     impulses,
@@ -162,10 +173,14 @@ for (backend in c('block', 'sparse')) {
         newdata=list(impulses=impulses, responses=prediction_data)
     )
     custom_table <- summary(custom_fit)$p.table
+    # These fits stop at different points of a flat smoothing-parameter
+    # plateau, so the estimates agree to a small fraction of their standard
+    # error; a unit-conversion error would be off by a factor of sd(z).
     stopifnot(
         max(abs(custom_prediction - fitted(custom_fit))) < 1e-7,
         abs(custom_table['z', 'Estimate'] -
-            native_table['z', 'Estimate']) < 1e-7
+            native_table['z', 'Estimate']) <
+            1e-2 * native_table['z', 'Std. Error']
     )
 }
 

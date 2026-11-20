@@ -10,9 +10,38 @@ fit_diagnostics(object)
 \item{object}{A fitted \code{cdrgam} model.}
 }
 \value{
-A named list containing at least \code{converged}, \code{code}, and
-\code{message}. Custom backends also report available objective counts,
-gradient norms, boundary information, and Hessian diagnostics.
+A named list containing at least \code{outcome}, \code{reasons},
+\code{converged}, \code{code}, and \code{message}. \code{outcome} is
+\code{"success"}, \code{"warning"}, or \code{"nonconverged"}. A warning
+means that optimization converged but a recorded numerical or inferential
+diagnostic requires review. Custom backends also report available objective
+counts, gradient norms, boundary information, conditioning, and Hessian
+diagnostics. \code{notes} lists findings that do not change \code{outcome}.
+A sparse Gaussian REML fit adds a \code{boundary_variance_components} note
+when smoothing parameters are classified as on the boundary of their range;
+their profile bounds are in \code{hessian_boundary}. The
+\code{optimizer_stopped_short} reason means the reported optimum is not one:
+either a negative-curvature direction of the interior Hessian lies along a
+single smoothing parameter (listed in \code{hessian_negative_directions}),
+or, when the analytic Hessian was computed, a Newton step would still lower
+the -2 REML criterion by more than 0.1 (\code{predicted_decrease}). Negative
+curvature that mixes several smoothing parameters is reported as
+\code{indefinite_outer_hessian}. Such a fit also reports
+\code{newton_step_max}, the largest coordinate of that Newton step on the
+log smoothing-parameter scale, and \code{predicted_decrease_floor}, the
+smallest criterion change resolvable at the fitted criterion (\code{1e-10}
+times its magnitude, at least \code{1e-8}). A dense generalized block fit
+whose optimizer stalls on a flat criterion plateau counts as converged only
+when every gradient component of the -2 LAML criterion is below 0.01 and at
+least one log smoothing parameter exceeds 8 in absolute value; it then
+reports outcome \code{"warning"}, the parameters in \code{plateau}, and the
+reason \code{smoothing_parameter_plateau}. \code{gradient_norm} is the
+largest gradient component over all smoothing parameters and
+\code{exact_gradient_maximum} the largest over the free ones. Along a
+well-curved direction either can exceed the gradient tolerance while the
+Newton step and \code{predicted_decrease} stay negligible; convergence is
+judged from \code{predicted_decrease} against
+\code{predicted_decrease_floor}.
 }
 \description{
 Report standardized fit convergence diagnostics

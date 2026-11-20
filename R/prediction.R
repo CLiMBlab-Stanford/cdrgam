@@ -55,6 +55,16 @@
             value
         })
         names(predictor_values) <- predictors
+        scaling <- object$cdrgam$scaling
+        if (is.null(scaling)) scaling <- object$cdrgam$preparation$scaling
+        # Centered linear predictors enter as deviations from their stored
+        # training centers. Fits without stored centers are uncentered.
+        centers <- info$linear_predictor_centers
+        for (predictor in intersect(names(centers), predictors)) {
+            predictor_values[[predictor]] <- predictor_values[[predictor]] -
+                centers[[predictor]] /
+                .cdr_scaling_divisor(scaling, 'impulses', predictor)
+        }
         links <- .build_history_links(
             source_impulses,
             source_responses,
@@ -330,6 +340,28 @@
 }
 
 .cdr_predict_random_effect <- function(effect, responses) {
+    if (identical(effect$kind, 'factor_smooth')) {
+        factor_value <- as.character(responses[[effect$factor]])
+        group <- match(factor_value, effect$levels)
+        unknown <- is.na(group)
+        if (any(unknown)) {
+            warning(
+                'Factor levels absent from the original fit had their random ',
+                'effects set to zero',
+                call.=FALSE
+            )
+        }
+        base <- mgcv::PredictMat(
+            effect$base_smooth,
+            as.list(responses),
+            n=nrow(responses)
+        ) %*% effect$rotation
+        return(.sparse_factor_smooth_matrix(
+            base,
+            group,
+            length(effect$levels)
+        ))
+    }
     data <- responses
     unknown <- rep.int(FALSE, nrow(data))
     for (variable in effect$variables) {

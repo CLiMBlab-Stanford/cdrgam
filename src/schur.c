@@ -166,7 +166,9 @@ SEXP cdrgam_schur_factor_sparse(SEXP system, SEXP core_indices,
                 int local_column = block_offsets[row_block] +
                     block_position[row];
                 REAL(transfer)[core_column + q * local_column] = value;
-            } else if (row != column) {
+            } else if (row != column && value != 0) {
+                /* The stored pattern may hold explicit zeros between
+                   blocks; only a nonzero value couples them. */
                 error("Sparse Schur layout contains coupling between blocks");
             }
         }

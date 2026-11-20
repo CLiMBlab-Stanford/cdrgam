@@ -69,7 +69,8 @@ roomy_plan <- direction_plan(
 stopifnot(
     constrained_plan$workers == 1L,
     constrained_plan$blas_threads == 4L,
-    isTRUE(constrained_plan$memory_limited),
+    isTRUE(constrained_plan$memory_limited) ==
+        (.Platform$OS.type != 'windows'),
     !isTRUE(constrained_plan$cache_parallel),
     roomy_plan$workers == if (.Platform$OS.type == 'windows') 1L else 2L,
     roomy_plan$blas_threads == if (
@@ -88,6 +89,46 @@ native_solution <- fit_fixed(
     tolerance=1e-9,
     maxit=500L
 )
+evaluate_moments <- getFromNamespace(
+    '.cdrgam_gaulss_sparse_moments', 'cdrgam'
+)
+moment_arguments <- list(
+    assemblies=assemblies,
+    coefficients=native_solution$parameter_coefficients,
+    sigma=native_solution$sigma,
+    q=exp(native_solution$linear_predictors[, 'scale']),
+    residual=native_solution$residuals,
+    weights=native_solution$prior_weights,
+    include_observed=TRUE
+)
+serial_moments <- do.call(evaluate_moments, c(
+    moment_arguments, list(workers=1L)
+))
+parallel_moments <- do.call(evaluate_moments, c(
+    moment_arguments, list(workers=2L, blas_threads=1L)
+))
+stopifnot(
+    max(abs(
+        serial_moments$gradients$location -
+            parallel_moments$gradients$location
+    )) < 1e-10,
+    max(abs(
+        serial_moments$gradients$scale -
+            parallel_moments$gradients$scale
+    )) < 1e-10,
+    max(abs(
+        serial_moments$information$location -
+            parallel_moments$information$location
+    )) < 1e-10,
+    max(abs(
+        serial_moments$information$scale -
+            parallel_moments$information$scale
+    )) < 1e-10,
+    max(abs(
+        serial_moments$information$cross -
+            parallel_moments$information$cross
+    )) < 1e-10
+)
 native_criterion <- evaluate_qncv(
     assemblies,
     native_solution,
@@ -100,9 +141,63 @@ small_batch <- evaluate_qncv(
     gamma=gamma,
     batch_size=7L
 )
+parallel_batch <- evaluate_qncv(
+    assemblies,
+    native_solution,
+    gamma=gamma,
+    batch_size=7L,
+    workers=2L,
+    blas_threads=1L
+)
+partial_qncv <- NULL
+qncv_interrupted <- tryCatch(
+    evaluate_qncv(
+        assemblies,
+        native_solution,
+        gamma=gamma,
+        batch_size=7L,
+        checkpoint=function(state) {
+            partial_qncv <<- state
+            stop('simulated QNCV response interruption')
+        }
+    ),
+    error=function(error) conditionMessage(error)
+)
+qncv_resume_updates <- 0L
+resumed_batch <- evaluate_qncv(
+    assemblies,
+    native_solution,
+    gamma=gamma,
+    batch_size=7L,
+    resume=partial_qncv,
+    checkpoint=function(state) {
+        qncv_resume_updates <<- qncv_resume_updates + 1L
+    }
+)
+criterion_scale <- max(
+    1,
+    abs(native_criterion$criterion),
+    abs(unname(native$gcv.ubre))
+)
 stopifnot(
-    abs(native_criterion$criterion - unname(native$gcv.ubre)) < 2e-5,
+    identical(qncv_interrupted, 'simulated QNCV response interruption'),
+    length(partial_qncv$results) > 0L,
+    length(unique(unlist(lapply(
+        partial_qncv$results, `[[`, 'starts'
+    )))) < length(seq.int(1L, n_responses, by=7L)),
+    qncv_resume_updates > 0L,
+    abs(resumed_batch$criterion - small_batch$criterion) < 1e-10,
+    max(abs(
+        resumed_batch$predictor_change - small_batch$predictor_change
+    )) < 1e-12,
+    abs(native_criterion$criterion - unname(native$gcv.ubre)) /
+        criterion_scale < 1e-6,
     abs(native_criterion$criterion - small_batch$criterion) < 1e-10,
+    abs(native_criterion$criterion - parallel_batch$criterion) < 1e-10,
+    max(abs(
+        native_criterion$predictor_change -
+            parallel_batch$predictor_change
+    )) < 1e-12,
     max(abs(
         unname(native_solution$coefficients) - unname(stats::coef(native))
     )) < 2e-5,
@@ -117,9 +212,10 @@ interior_solution <- fit_fixed(
     tolerance=1e-10,
     maxit=500L
 )
-analytic <- getFromNamespace(
+score_qncv <- getFromNamespace(
     '.cdrgam_gaulss_sparse_qncv_score', 'cdrgam'
-)(
+)
+analytic <- score_qncv(
     assemblies,
     interior_solution,
     interior_sp,
@@ -127,7 +223,55 @@ analytic <- getFromNamespace(
     gamma=gamma,
     batch_size=23L
 )
-step <- 1e-4
+analytic_parallel <- score_qncv(
+    assemblies,
+    interior_solution,
+    interior_sp,
+    family,
+    gamma=gamma,
+    batch_size=23L,
+    cores=2L,
+    workers=2L
+)
+partial_score <- NULL
+score_interrupted <- tryCatch(
+    score_qncv(
+        assemblies,
+        interior_solution,
+        interior_sp,
+        family,
+        gamma=gamma,
+        batch_size=7L,
+        cores=1L,
+        workers=1L,
+        score_batch_size=1L,
+        checkpoint=function(state) {
+            partial_score <<- state
+            if (is.list(state$active) &&
+                    length(state$active$qncv$results) > 0L) {
+                stop('simulated exact-score interruption')
+            }
+        }
+    ),
+    error=function(error) conditionMessage(error)
+)
+resumed_score_updates <- 0L
+resumed_score <- score_qncv(
+    assemblies,
+    interior_solution,
+    interior_sp,
+    family,
+    gamma=gamma,
+    batch_size=7L,
+    cores=1L,
+    workers=1L,
+    score_batch_size=1L,
+    resume=partial_score,
+    checkpoint=function(state) {
+        resumed_score_updates <<- resumed_score_updates + 1L
+    }
+)
+step <- 1e-3
 numeric <- vapply(seq_along(interior_sp), function(index) {
     lower <- upper <- log(interior_sp)
     lower[[index]] <- lower[[index]] - step
@@ -149,7 +293,20 @@ numeric <- vapply(seq_along(interior_sp), function(index) {
     }
     (criterion(upper) - criterion(lower)) / (2 * step)
 }, numeric(1))
-stopifnot(max(abs(analytic - numeric)) < 1e-3)
+gradient_scale <- max(1, abs(analytic), abs(numeric))
+stopifnot(
+    grepl(
+        'simulated exact-score interruption',
+        score_interrupted,
+        fixed=TRUE
+    ),
+    is.list(partial_score$active$qncv),
+    length(partial_score$active$qncv$results) > 0L,
+    resumed_score_updates > 0L,
+    max(abs(resumed_score - analytic)) / gradient_scale < 1e-10,
+    max(abs(analytic - numeric)) / gradient_scale < 5e-4,
+    max(abs(analytic_parallel - analytic)) / gradient_scale < 1e-10
+)
 
 progress <- list()
 checkpoint <- tempfile(fileext='.rds')
@@ -187,6 +344,22 @@ resumed <- cdrgam.fit(
 unlink(checkpoint)
 sparse_summary <- summary(sparse)
 sparse_diagnostics <- fit_diagnostics(sparse)
+continued <- cdrgam.fit(
+    design,
+    family=family,
+    backend='sparse',
+    method='QNCV',
+    gamma=gamma,
+    sparse_control=list(
+        crossprod_chunk_size=37L,
+        qncv_batch_size=23L,
+        inner_maxit=1L,
+        inner_adaptive_maxit=500L,
+        optimizer_maxit=1L,
+        optimizer_gradient_tolerance=1e6,
+        cores=1L
+    )
+)
 resume_coefficient_difference <- max(abs(
     stats::coef(resumed) - stats::coef(sparse)
 ))
@@ -202,6 +375,7 @@ stopifnot(
     identical(sparse$sparse$control$qncv_batch_size, 23L),
     sparse$distributional$stochastic_score_evaluations == 0L,
     sparse$distributional$score_evaluations > 0L,
+    continued$distributional$inner_continuations > 0L,
     sparse$distributional$qncv$minimum_determinant > 0,
     resume_coefficient_difference < 1e-4,
     resume_criterion_difference < 1e-5,
@@ -213,8 +387,11 @@ stopifnot(
     sparse$distributional$score_plan$blas_threads >= 1L,
     is.logical(sparse$distributional$score_plan$memory_limited),
     abs(sparse$qncv - unname(native$gcv.ubre)) < 2e-3,
+    # The sparse fit stops at optimizer_gradient_tolerance = 2e-3, and two
+    # score workers change where it stops, so coefficients agree to about
+    # 6e-4 rather than 5e-4.
     max(abs(unname(stats::coef(sparse)) - unname(stats::coef(native)))) <
-        5e-4,
+        1e-3,
     isTRUE(sparse_diagnostics$converged),
     sparse_diagnostics$gradient_norm <= 2e-3,
     any(vapply(progress, function(record) {

@@ -1,4 +1,4 @@
-# cdrgam (development version)
+# cdrgam 0.3.0
 
 - Sparse Gaussian REML diagnostics report `newton_step_max`, the largest
   coordinate of the Newton step on the log smoothing-parameter scale, and

@@ -8,7 +8,7 @@
 ## Citation
 
 Source:
-[`DESCRIPTION`](https://github.com/CLiMBlab-Stanford/cdrgam/blob/dev/DESCRIPTION)
+[`DESCRIPTION`](https://github.com/CLiMBlab-Stanford/cdrgam/blob/main/DESCRIPTION)
 
 Shain C (2026). *cdrgam: Continuous-Time Deconvolution Using Generalized
 Additive Models*. R package version 0.3.0,

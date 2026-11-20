@@ -2,7 +2,7 @@
 
 Computes a Wald test of the null hypothesis that a functional returned
 by
-[`estimate_effect`](https://climblab-stanford.github.io/cdrgam/reference/estimate_effect.md)
+[`estimate_effect`](https://climblab.org/cdrgam/reference/estimate_effect.md)
 is zero at every grid point.
 
 ## Usage
@@ -39,7 +39,7 @@ test_effect(
 - axes:
 
   Named axis requests, as in
-  [`estimate_effect`](https://climblab-stanford.github.io/cdrgam/reference/estimate_effect.md).
+  [`estimate_effect`](https://climblab.org/cdrgam/reference/estimate_effect.md).
 
 - impulses, responses:
 
@@ -62,7 +62,7 @@ test_effect(
 - reference:
 
   Optional named list of reference values for evaluation axes, as in
-  [`estimate_effect`](https://climblab-stanford.github.io/cdrgam/reference/estimate_effect.md).
+  [`estimate_effect`](https://climblab.org/cdrgam/reference/estimate_effect.md).
 
 - unconditional:
 
@@ -120,4 +120,4 @@ generalized additive model. *Biometrika*, 100(1), 221–228.
 
 ## See also
 
-[`estimate_effect`](https://climblab-stanford.github.io/cdrgam/reference/estimate_effect.md)
+[`estimate_effect`](https://climblab.org/cdrgam/reference/estimate_effect.md)

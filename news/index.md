@@ -134,10 +134,9 @@
   tolerance and marked the fit as nonconverged.
 
 - `rescale_predictors` now defaults to `TRUE` in
-  [`prepare_cdrgam()`](https://climblab-stanford.github.io/cdrgam/reference/prepare_cdrgam.md)
-  and
-  [`cdrgam()`](https://climblab-stanford.github.io/cdrgam/reference/cdrgam.md),
-  so continuous predictors and lag coordinates are divided by their
+  [`prepare_cdrgam()`](https://climblab.org/cdrgam/reference/prepare_cdrgam.md)
+  and [`cdrgam()`](https://climblab.org/cdrgam/reference/cdrgam.md), so
+  continuous predictors and lag coordinates are divided by their
   training standard deviations unless `rescale_predictors = FALSE`.
   Effect estimates and plots are still reported in native units.
   `center_predictors` already defaulted to `TRUE`.
@@ -182,7 +181,7 @@
   previously stored a dense selected inverse over the union of penalty
   supports, whose memory grew with the square of that union.
 
-- [`fit_diagnostics()`](https://climblab-stanford.github.io/cdrgam/reference/fit_diagnostics.md)
+- [`fit_diagnostics()`](https://climblab.org/cdrgam/reference/fit_diagnostics.md)
   distinguishes an optimizer that stopped short from a genuinely
   indefinite outer Hessian. Negative curvature along a single smoothing
   parameter, or a Newton step that would still lower the -2 REML
@@ -213,9 +212,9 @@
 
 - Unconditional sparse inference (`unconditional = TRUE` in
   [`vcov()`](https://rdrr.io/r/stats/vcov.html),
-  [`estimate_effect()`](https://climblab-stanford.github.io/cdrgam/reference/estimate_effect.md),
+  [`estimate_effect()`](https://climblab.org/cdrgam/reference/estimate_effect.md),
   and
-  [`test_effect()`](https://climblab-stanford.github.io/cdrgam/reference/test_effect.md))
+  [`test_effect()`](https://climblab.org/cdrgam/reference/test_effect.md))
   now stops with an error when the outer Hessian is not positive
   definite after boundary smoothing parameters are excluded. It
   previously inverted an indefinite block whenever the inversion
@@ -253,7 +252,7 @@
   `fit$sparse$convergence$hessian_boundary`, excluded from the
   positive-definiteness check and from unconditional covariance, and
   reported as a `boundary_variance_components` note in
-  [`fit_diagnostics()`](https://climblab-stanford.github.io/cdrgam/reference/fit_diagnostics.md)
+  [`fit_diagnostics()`](https://climblab.org/cdrgam/reference/fit_diagnostics.md)
   that does not change `outcome`. Previously they made the Hessian
   indefinite and produced a warning. Flat directions that mix several
   smoothing parameters are still reported as an indefinite Hessian.
@@ -267,9 +266,9 @@
   other smoothing parameters fixed. With
   `sparse_control$boundary_sensitivity = TRUE`, the fit at the bounds is
   stored, and
-  [`estimate_effect()`](https://climblab-stanford.github.io/cdrgam/reference/estimate_effect.md)
+  [`estimate_effect()`](https://climblab.org/cdrgam/reference/estimate_effect.md)
   and
-  [`test_effect()`](https://climblab-stanford.github.io/cdrgam/reference/test_effect.md)
+  [`test_effect()`](https://climblab.org/cdrgam/reference/test_effect.md)
   accept `boundary = "bound"` to check whether conclusions depend on
   treating those components as zero.
 
@@ -301,7 +300,7 @@
   `grouping = "conditional"`, the grouped deviations of the hierarchy
   terms are added at the same level.
 
-- [`estimate_effect()`](https://climblab-stanford.github.io/cdrgam/reference/estimate_effect.md)
+- [`estimate_effect()`](https://climblab.org/cdrgam/reference/estimate_effect.md)
   gains `reference`, which subtracts the functional at reference axis
   values and carries the joint covariance into the standard errors. A
   reference value of a linear predictor gives the effect of changing
@@ -314,9 +313,9 @@
   `term`; grouped deviations remain available through `grouping`.
 
 - New
-  [`test_effect()`](https://climblab-stanford.github.io/cdrgam/reference/test_effect.md)
+  [`test_effect()`](https://climblab.org/cdrgam/reference/test_effect.md)
   computes joint Wald tests that an
-  [`estimate_effect()`](https://climblab-stanford.github.io/cdrgam/reference/estimate_effect.md)
+  [`estimate_effect()`](https://climblab.org/cdrgam/reference/estimate_effect.md)
   functional is zero over its grid, using a rank-truncated
   pseudo-inverse.
 
@@ -344,7 +343,7 @@
   `center_predictors = FALSE` to restore uncentered predictors, or
   `irf(center = )` per term. Fits made before this change keep their
   uncentered meaning.
-  [`effect_catalog()`](https://climblab-stanford.github.io/cdrgam/reference/effect_catalog.md)
+  [`effect_catalog()`](https://climblab.org/cdrgam/reference/effect_catalog.md)
   reports the stored centers.
 
 - Solver checkpoints resume when the stored floating-point summaries of

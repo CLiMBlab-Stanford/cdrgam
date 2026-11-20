@@ -140,5 +140,5 @@ reference value of `z` gives differences between the interaction curves.
 
 ## See also
 
-[`test_effect`](https://climblab-stanford.github.io/cdrgam/reference/test_effect.md)
+[`test_effect`](https://climblab.org/cdrgam/reference/test_effect.md)
 for joint Wald tests of the same functionals.

@@ -19,7 +19,7 @@ as_mgcv_spec(x, family = stats::gaussian(), method = NULL, ...)
 - x:
 
   A `cdrgam_design` returned by
-  [`prepare_cdrgam()`](https://climblab-stanford.github.io/cdrgam/reference/prepare_cdrgam.md).
+  [`prepare_cdrgam()`](https://climblab.org/cdrgam/reference/prepare_cdrgam.md).
 
 - family:
 

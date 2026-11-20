@@ -33,7 +33,7 @@ formula(
   Formula representation to return. The `"mgcv"` export formula uses
   named matrix terms whose penalties are supplied by the remaining
   components returned by
-  [`as_mgcv_spec()`](https://climblab-stanford.github.io/cdrgam/reference/as_mgcv_spec.md).
+  [`as_mgcv_spec()`](https://climblab.org/cdrgam/reference/as_mgcv_spec.md).
 
 - ...:
 

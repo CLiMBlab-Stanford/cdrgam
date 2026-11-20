@@ -1,18 +1,18 @@
 # Specify an impulse-response term
 
 Use `irf()` as a top-level additive term inside a
-[`cdrgam()`](https://climblab-stanford.github.io/cdrgam/reference/cdrgam.md)
-formula. Ordinary terms retain their usual R and mgcv meanings. By
-default each predictor enters linearly as a convolution weight. Numeric
-`k_p` entries add smooth predictor marginals and `k_t` adds a
-response-time marginal. Smooth non-lag marginals are centered, so a
-tensor term represents the interaction beyond its lower-order terms.
-Linear predictors are centered at their training means by default; see
-`center` and the `center_predictors` argument of
-[`cdrgam()`](https://climblab-stanford.github.io/cdrgam/reference/cdrgam.md).
-Before constraints, a tensor term's coefficient count grows as the
-product of its axis dimensions. Larger bases are supported, but each
-added axis therefore increases preparation, fitting, and inference costs
+[`cdrgam()`](https://climblab.org/cdrgam/reference/cdrgam.md) formula.
+Ordinary terms retain their usual R and mgcv meanings. By default each
+predictor enters linearly as a convolution weight. Numeric `k_p` entries
+add smooth predictor marginals and `k_t` adds a response-time marginal.
+Smooth non-lag marginals are centered, so a tensor term represents the
+interaction beyond its lower-order terms. Linear predictors are centered
+at their training means by default; see `center` and the
+`center_predictors` argument of
+[`cdrgam()`](https://climblab.org/cdrgam/reference/cdrgam.md). Before
+constraints, a tensor term's coefficient count grows as the product of
+its axis dimensions. Larger bases are supported, but each added axis
+therefore increases preparation, fitting, and inference costs
 multiplicatively. With `group`, the term is expanded into
 factor-specific deviations. The `group_penalty` argument selects its
 shared penalty decomposition. Unless explicitly removed with `- irf(1)`,

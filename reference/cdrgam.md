@@ -62,11 +62,11 @@ cdrgam.fit(
 - formula:
 
   An extended formula containing ordinary mgcv terms and optional
-  [`irf()`](https://climblab-stanford.github.io/cdrgam/reference/irf.md)
-  terms. An implicit `irf(1)` is added unless suppressed with
-  `- irf(1)`. For `family="gaulss"`, this may instead be a named list
-  with `location` and `scale` formulas. The location formula supplies
-  the response; the scale formula may be one-sided.
+  [`irf()`](https://climblab.org/cdrgam/reference/irf.md) terms. An
+  implicit `irf(1)` is added unless suppressed with `- irf(1)`. For
+  `family="gaulss"`, this may instead be a named list with `location`
+  and `scale` formulas. The location formula supplies the response; the
+  scale formula may be one-sided.
 
 - impulses:
 
@@ -79,30 +79,30 @@ cdrgam.fit(
 - window:
 
   Default inclusive lag window inherited by each
-  [`irf()`](https://climblab-stanford.github.io/cdrgam/reference/irf.md)
-  term that does not supply its own window. `NULL` retains the
-  term-level default `c(0, Inf)`. Every impulse in the applicable series
-  and window is included in the response-level design.
+  [`irf()`](https://climblab.org/cdrgam/reference/irf.md) term that does
+  not supply its own window. `NULL` retains the term-level default
+  `c(0, Inf)`. Every impulse in the applicable series and window is
+  included in the response-level design.
 
 - knots_l:
 
   Optional model-level default for
-  [`irf()`](https://climblab-stanford.github.io/cdrgam/reference/irf.md)
-  lag-basis construction points. A term-level value, including `NULL`,
-  takes precedence.
+  [`irf()`](https://climblab.org/cdrgam/reference/irf.md) lag-basis
+  construction points. A term-level value, including `NULL`, takes
+  precedence.
 
 - k_l, k_t, k_p:
 
   Optional model-level defaults for the corresponding
-  [`irf()`](https://climblab-stanford.github.io/cdrgam/reference/irf.md)
-  axis dimensions. An argument supplied by an individual term, including
-  an explicit `NULL`, overrides its model-level default.
+  [`irf()`](https://climblab.org/cdrgam/reference/irf.md) axis
+  dimensions. An argument supplied by an individual term, including an
+  explicit `NULL`, overrides its model-level default.
 
 - bs_l, bs_t, bs_p:
 
   Optional model-level defaults for the corresponding
-  [`irf()`](https://climblab-stanford.github.io/cdrgam/reference/irf.md)
-  marginal basis names. Term-level arguments take precedence.
+  [`irf()`](https://climblab.org/cdrgam/reference/irf.md) marginal basis
+  names. Term-level arguments take precedence.
 
 - series:
 
@@ -163,7 +163,7 @@ cdrgam.fit(
 - family:
 
   A standard family object or a family name accepted by
-  [`cdrgam_family()`](https://climblab-stanford.github.io/cdrgam/reference/cdrgam_family.md).
+  [`cdrgam_family()`](https://climblab.org/cdrgam/reference/cdrgam_family.md).
   `gaulss` rejects non-unit prior weights because mgcv's family accepts
   but does not use them.
 
@@ -404,13 +404,16 @@ cdrgam.fit(
   largest supported variance when parameters trade off.
   `boundary_sensitivity = TRUE` also stores the fit at the bounds, which
   roughly doubles the stored factorization, so that
-  [`estimate_effect`](https://climblab-stanford.github.io/cdrgam/reference/estimate_effect.md)
+  [`estimate_effect`](https://climblab.org/cdrgam/reference/estimate_effect.md)
   and
-  [`test_effect`](https://climblab-stanford.github.io/cdrgam/reference/test_effect.md)
-  accept `boundary = "bound"`. For Gaussian REML, `final_newton = TRUE`
-  (the default) refines the optimum after the outer optimizer stops.
-  Each step uses the exact gradient and analytic outer Hessian, holds
-  boundary smoothing parameters fixed, replaces negative eigenvalues by
+  [`test_effect`](https://climblab.org/cdrgam/reference/test_effect.md)
+  accept `boundary = "bound"`. For Gaussian fits, `final_newton = TRUE`
+  (the default) refines the optimum after the outer optimizer stops. For
+  REML each step uses the exact gradient and analytic outer Hessian and
+  holds boundary smoothing parameters fixed. For GCV.Cp it differences
+  the exact gradient, holds no parameter fixed, and scales
+  `newton_tolerance` by the criterion divided by the number of
+  observations. Either way the step replaces negative eigenvalues by
   their absolute values so the step still descends, follows the most
   negative eigenvector when the gradient is negligible but curvature is
   negative, and is accepted only if the criterion decreases. It stops
@@ -459,7 +462,7 @@ cdrgam.fit(
 - design:
 
   A reusable `cdrgam_design` returned by
-  [`prepare_cdrgam()`](https://climblab-stanford.github.io/cdrgam/reference/prepare_cdrgam.md).
+  [`prepare_cdrgam()`](https://climblab.org/cdrgam/reference/prepare_cdrgam.md).
 
 ## Value
 

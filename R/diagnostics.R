@@ -21,6 +21,12 @@
 #'   step on the log smoothing-parameter scale, and
 #'   `predicted_decrease_floor`, the smallest criterion change resolvable at
 #'   the fitted criterion (`1e-10` times its magnitude, at least `1e-8`).
+#'   A dense generalized block fit whose optimizer stalls on a flat
+#'   criterion plateau counts as converged only when every gradient component
+#'   of the -2 LAML criterion is below 0.01 and at least one log smoothing
+#'   parameter exceeds 8 in absolute value; it then reports outcome
+#'   `"warning"`, the parameters in `plateau`, and the reason
+#'   `smoothing_parameter_plateau`.
 #'   `gradient_norm` is the largest gradient component over all smoothing
 #'   parameters and `exact_gradient_maximum` the largest over the free ones.
 #'   Along a well-curved direction either can exceed the gradient tolerance
@@ -61,7 +67,10 @@ fit_diagnostics <- function(object) {
         return(.cdrgam_finalize_fit_diagnostics(object, diagnostics))
     }
     if (inherits(object, 'cdrgam_block')) {
-        converged <- identical(object$optimizer$convergence, 0L)
+        plateau <- object$optimizer$plateau
+        plateau_accepted <- isTRUE(plateau$accepted)
+        converged <- identical(object$optimizer$convergence, 0L) ||
+            plateau_accepted
         hessian <- object$outer.info$hess
         hessian_eigenvalues <- if (is.matrix(hessian) && nrow(hessian)) {
             tryCatch(
@@ -72,7 +81,12 @@ fit_diagnostics <- function(object) {
         diagnostics <- list(
             converged=converged,
             code=object$optimizer$convergence,
-            message=if (converged) {
+            message=if (plateau_accepted) {
+                paste0(
+                    'converged on a criterion plateau after ',
+                    object$optimizer$message
+                )
+            } else if (converged) {
                 'full convergence'
             } else if (is.null(object$optimizer$message)) {
                 'optimizer convergence was not reached'
@@ -83,6 +97,9 @@ fit_diagnostics <- function(object) {
             } else {
                 all(is.finite(hessian_eigenvalues)) &&
                     min(hessian_eigenvalues) > sqrt(.Machine$double.eps)
+            },
+            plateau=if (plateau_accepted) {
+                names(object$sp)[plateau$plateau]
             }
         )
         return(.cdrgam_finalize_fit_diagnostics(object, diagnostics))
@@ -189,6 +206,18 @@ fit_diagnostics <- function(object) {
                 )
             )
         }
+    }
+    plateau <- diagnostics[['plateau', exact=TRUE]]
+    if (length(plateau)) {
+        add_reason(
+            'smoothing_parameter_plateau',
+            paste0(
+                'The optimizer stopped on a flat criterion plateau, where ',
+                'smoothing parameter(s) ', paste(plateau, collapse=', '),
+                ' have no finite optimum; their terms are effectively ',
+                'reduced to their unpenalized space.'
+            )
+        )
     }
     boundary <- diagnostics$boundary
     if (length(boundary)) {

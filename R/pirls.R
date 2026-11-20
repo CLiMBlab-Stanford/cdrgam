@@ -1860,7 +1860,9 @@
         lower=-25,
         upper=25,
         pirls_tolerance=1e-9,
-        optimizer_control=list(factr=1e7)
+        optimizer_control=list(factr=1e7),
+        plateau_log_sp=8,
+        plateau_gradient_tolerance=1e-2
 ) {
     family <- .as_family(family)
     canonical <- (identical(family$family, 'binomial') &&
@@ -1953,9 +1955,52 @@
     )
     solution <- evaluate(optimization$par, retain=TRUE)
     if (is.null(solution)) stop('Dense LAML optimization ended at an invalid fit')
+    if (!identical(optimization$convergence, 0L)) {
+        optimization$plateau <- .cdrgam_dense_laml_plateau(
+            evaluate,
+            optimization$par,
+            optimization$value,
+            penalty_count,
+            plateau_log_sp=plateau_log_sp,
+            gradient_tolerance=plateau_gradient_tolerance
+        )
+    }
     list(
         optimization=optimization,
         solution=solution,
         evaluations=evaluations
+    )
+}
+
+# Checks whether an L-BFGS-B stop that did not report convergence is a stop
+# on a flat plateau of the criterion rather than a failure. As a log
+# smoothing parameter grows, the criterion flattens toward the fit with that
+# term reduced to its unpenalized space, and the line search can stall with
+# no improvement left to find. The stop is accepted only when every
+# central-difference gradient component is below `gradient_tolerance` on the
+# -2 LAML scale, so a further unit change in any log smoothing parameter
+# changes the criterion negligibly, and at least one smoothing parameter is
+# beyond `plateau_log_sp` in absolute value. `plateau` names those
+# parameters; `accepted` is FALSE for any other stop, which therefore stays
+# nonconverged.
+.cdrgam_dense_laml_plateau <- function(
+        evaluate, parameters, value, penalty_count,
+        plateau_log_sp=8, gradient_tolerance=1e-2, step=1e-3
+) {
+    gradient <- vapply(seq_along(parameters), function(index) {
+        lower <- upper <- parameters
+        lower[[index]] <- lower[[index]] - step
+        upper[[index]] <- upper[[index]] + step
+        (evaluate(upper) - evaluate(lower)) / (2 * step)
+    }, numeric(1))
+    penalties <- seq_len(penalty_count)
+    plateau <- penalties[abs(parameters[penalties]) > plateau_log_sp]
+    list(
+        accepted=length(plateau) > 0L && all(is.finite(gradient)) &&
+            max(abs(gradient)) < gradient_tolerance,
+        plateau=plateau,
+        gradient=gradient,
+        gradient_tolerance=gradient_tolerance,
+        plateau_log_sp=plateau_log_sp
     )
 }

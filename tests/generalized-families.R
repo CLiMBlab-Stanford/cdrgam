@@ -251,6 +251,17 @@ fit_and_check <- function(response, family) {
             method='REML',
             weights=prior_weights
         ))
+        if (!identical(block$optimizer$convergence, 0L) &&
+                isTRUE(block$converged)) {
+            # A stall on a flat plateau converges with a warning.
+            diagnostics <- fit_diagnostics(block)
+            stopifnot(
+                isTRUE(block$optimizer$plateau$accepted),
+                identical(diagnostics$outcome, 'warning'),
+                'smoothing_parameter_plateau' %in%
+                    vapply(diagnostics$reasons, `[[`, character(1), 'code')
+            )
+        }
         if (!isTRUE(block$converged)) {
             stop(
                 'block ', family$family, ' fit did not converge: ',

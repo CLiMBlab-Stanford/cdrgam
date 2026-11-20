@@ -30,7 +30,12 @@ curvature that mixes several smoothing parameters is reported as
 \code{newton_step_max}, the largest coordinate of that Newton step on the
 log smoothing-parameter scale, and \code{predicted_decrease_floor}, the
 smallest criterion change resolvable at the fitted criterion (\code{1e-10}
-times its magnitude, at least \code{1e-8}). \code{gradient_norm} is the
+times its magnitude, at least \code{1e-8}). A dense generalized block fit
+whose optimizer stalls on a flat criterion plateau counts as converged only
+when every gradient component of the -2 LAML criterion is below 0.01 and at
+least one log smoothing parameter exceeds 8 in absolute value; it then
+reports outcome \code{"warning"}, the parameters in \code{plateau}, and the
+reason \code{smoothing_parameter_plateau}. \code{gradient_norm} is the
 largest gradient component over all smoothing parameters and
 \code{exact_gradient_maximum} the largest over the free ones. Along a
 well-curved direction either can exceed the gradient tolerance while the

@@ -955,8 +955,10 @@
         deviance=solution$deviance,
         reml=solution$criterion,
         optimizer=result$optimization,
-        converged=isTRUE(solution$converged) &&
-            identical(result$optimization$convergence, 0L),
+        converged=isTRUE(solution$converged) && (
+            identical(result$optimization$convergence, 0L) ||
+                isTRUE(result$optimization$plateau$accepted)
+        ),
         cdrgam=list(
             schema_version=1L,
             engine='block',

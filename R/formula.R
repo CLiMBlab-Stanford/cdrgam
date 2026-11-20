@@ -2295,9 +2295,12 @@ prepare_cdrgam <- function(
 #'   when parameters trade off. `boundary_sensitivity = TRUE` also stores the
 #'   fit at the bounds, which roughly doubles the stored factorization, so
 #'   that [estimate_effect()] and [test_effect()] accept `boundary = "bound"`.
-#'   For Gaussian REML, `final_newton = TRUE` (the default) refines the
-#'   optimum after the outer optimizer stops. Each step uses the exact gradient and analytic
-#'   outer Hessian, holds boundary smoothing parameters fixed, replaces
+#'   For Gaussian fits, `final_newton = TRUE` (the default) refines the
+#'   optimum after the outer optimizer stops. For REML each step uses the
+#'   exact gradient and analytic outer Hessian and holds boundary smoothing
+#'   parameters fixed. For GCV.Cp it differences the exact gradient, holds no
+#'   parameter fixed, and scales `newton_tolerance` by the criterion divided
+#'   by the number of observations. Either way the step replaces
 #'   negative eigenvalues by their absolute values so the step still descends,
 #'   follows the most negative eigenvector when the gradient is negligible
 #'   but curvature is negative, and is accepted only if the criterion

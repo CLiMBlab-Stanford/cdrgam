@@ -658,7 +658,8 @@
         max_steps=5L,
         radius=2,
         tolerance=1e-3,
-        reporter=NULL
+        reporter=NULL,
+        criterion_scale=function(value) max(1, abs(value))
 ) {
     steps <- list()
     status <- 'max_steps'
@@ -731,7 +732,7 @@
                 trial_value <- objective(trial)
                 required <- if (identical(direction$kind, 'newton')) {
                     value + 1e-4 * sum(gradient * change)
-                } else value - 1e-8 * max(1, abs(value))
+                } else value - 1e-8 * criterion_scale(value)
                 if (is.finite(trial_value) && trial_value < required) {
                     accepted <- list(
                         log_sp=trial,
@@ -5049,8 +5050,11 @@
         )
     }
     newton_refinement <- NULL
-    if (final_newton && !gcv && newton_max_steps > 0L) {
-        newton_feasible <- identical(hessian_selection$method, 'analytic') ||
+    if (final_newton && newton_max_steps > 0L) {
+        # GCV curvature differences the exact gradient, so it needs no
+        # analytic Hessian memory.
+        newton_feasible <- gcv ||
+            identical(hessian_selection$method, 'analytic') ||
             identical(hessian_requested, 'analytic')
         if (!newton_feasible) {
             newton_refinement <- list(
@@ -5080,7 +5084,12 @@
             )
             newton_refinement <- .sparse_newton_refinement(
                 objective=function(log_sp) evaluate(log_sp),
-                curvature=function(log_sp) {
+                curvature=if (gcv) function(log_sp) {
+                    list(
+                        gradient=exact_gradient(log_sp),
+                        hessian=gcv_hessian(log_sp)
+                    )
+                } else function(log_sp) {
                     retained <- evaluate(log_sp, retain=TRUE)
                     if (is.null(retained)) return(NULL)
                     analytic <- .sparse_analytic_profiled_hessian(
@@ -5106,7 +5115,10 @@
                 value=solution$criterion,
                 lower=lower_bound,
                 upper=upper_bound,
+                # The boundary curvature tolerance is on the REML scale, so
+                # GCV holds no smoothing parameter fixed.
                 boundary=function(hessian, log_sp) {
+                    if (gcv) return(integer())
                     .sparse_outer_hessian_boundary(
                         hessian / 2,
                         log_sp,
@@ -5115,8 +5127,16 @@
                     )
                 },
                 max_steps=newton_max_steps,
-                tolerance=newton_tolerance,
-                reporter=reporter
+                # A change d in -2 REML is a relative change of about d / n in
+                # the scale estimate, and GCV is proportional to that scale.
+                tolerance=if (gcv) {
+                    newton_tolerance * abs(solution$criterion) /
+                        observation_count
+                } else newton_tolerance,
+                reporter=reporter,
+                # GCV is a variance-scale criterion, often far below 1.
+                criterion_scale=if (gcv) function(value) abs(value) else
+                    function(value) max(1, abs(value))
             )
             reporter$emit(
                 1L,
@@ -5551,7 +5571,11 @@
             .sparse_indefinite_message(
                 hessian_negative_directions,
                 criterion_method,
-                gcv=gcv
+                gcv=gcv,
+                advice=.sparse_newton_advice(
+                    newton_refinement,
+                    available=newton_max_steps > 0L
+                )
             ),
             call.=FALSE
         )
@@ -6616,7 +6640,25 @@ logLik.cdrgam_sparse <- function(object, ...) {
 
 # Words the warning for a non-positive-definite outer Hessian according to
 # the kinds of negative-curvature direction.
-.sparse_indefinite_message <- function(directions, criterion, gcv=FALSE) {
+# Advice for a fit that stopped short, given the final Newton refinement
+# record: NULL when refinement did not run, or `available = FALSE` when the
+# fitting path has none. Returns NULL when no setting is expected to help.
+.sparse_newton_advice <- function(refinement, available=TRUE) {
+    if (!available) return(NULL)
+    if (is.null(refinement)) return('refit with sparse_control$final_newton = TRUE')
+    switch(
+        as.character(refinement$status),
+        skipped_memory=paste0(
+            'refit with sparse_control$hessian = "analytic" so that the ',
+            'final Newton refinement runs'
+        ),
+        max_steps='refit with a larger sparse_control$newton_max_steps',
+        NULL
+    )
+}
+
+.sparse_indefinite_message <- function(directions, criterion, gcv=FALSE,
+                                       advice=NULL) {
     single <- is.data.frame(directions) && nrow(directions) &&
         all(directions$kind == 'single')
     if (single) {
@@ -6624,7 +6666,7 @@ logLik.cdrgam_sparse <- function(object, ...) {
             'Sparse ', criterion, ' optimizer stopped before the optimum: ',
             'the criterion still decreases along ',
             paste(unique(directions$parameter), collapse=', '),
-            '; refit with sparse_control$final_newton = TRUE'
+            if (length(advice)) paste0('; ', advice)
         ))
     }
     paste0(

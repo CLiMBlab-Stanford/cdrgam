@@ -138,6 +138,17 @@ fit_diagnostics <- function(object) {
     # A Newton step that would still lower the -2 REML criterion by more than
     # 0.1 (0.05 log-likelihood units) means the reported optimum is not one.
     stopped_short_reported <- FALSE
+    # Only sparse Gaussian fits run the final Newton refinement.
+    family <- object$family
+    advice <- .sparse_newton_advice(
+        diagnostics$newton_refinement,
+        available=inherits(object, 'cdrgam_sparse') &&
+            identical(family$family, 'gaussian') &&
+            identical(family$link, 'identity')
+    )
+    advice <- if (length(advice)) {
+        paste0(' ', toupper(substr(advice, 1, 1)), substring(advice, 2), '.')
+    } else ''
     predicted <- diagnostics$predicted_decrease
     if (length(predicted) == 1L && is.finite(predicted) && predicted > 0.1) {
         stopped_short_reported <- TRUE
@@ -147,7 +158,7 @@ fit_diagnostics <- function(object) {
                 'The optimizer stopped before the optimum: a Newton step ',
                 'would lower the -2 REML criterion by about ',
                 format(predicted, digits=3),
-                '. Refit with sparse_control$final_newton = TRUE.'
+                '.', advice
             )
         )
     }
@@ -164,7 +175,7 @@ fit_diagnostics <- function(object) {
                     'The optimizer stopped before the optimum: the criterion ',
                     'still decreases along ',
                     paste(unique(directions$parameter[single]), collapse=', '),
-                    '. Refit with sparse_control$final_newton = TRUE.'
+                    '.', advice
                 )
             )
         }

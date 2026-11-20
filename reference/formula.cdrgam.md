@@ -2,7 +2,7 @@
 
 Returns the raw user formula, the normalized CDR formula with structural
 defaults, the effective formula after automatic simplification, or the
-translated mgcv formula.
+native mgcv export formula.
 
 ## Usage
 
@@ -10,7 +10,7 @@ translated mgcv formula.
 # S3 method for class 'cdrgam_design'
 formula(
   x,
-  type = c("raw", "normalized", "effective"),
+  type = c("raw", "normalized", "effective", "mgcv"),
   ...
 )
 
@@ -30,8 +30,10 @@ formula(
 
 - type:
 
-  Formula representation to return. The `"mgcv"` translation is
-  available for fitted models.
+  Formula representation to return. The `"mgcv"` export formula uses
+  named matrix terms whose penalties are supplied by the remaining
+  components returned by
+  [`as_mgcv_spec()`](https://climblab-stanford.github.io/cdrgam/reference/as_mgcv_spec.md).
 
 - ...:
 

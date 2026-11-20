@@ -24,7 +24,8 @@ cdrgam(
   response_time = "time",
   history = c("auto", "dense", "ragged"),
   chunk_size = 10000,
-  rescale_predictors = FALSE,
+  rescale_predictors = TRUE,
+  center_predictors = TRUE,
   family = stats::gaussian(),
   method = NULL,
   engine = c("bam", "gam"),
@@ -61,11 +62,11 @@ cdrgam.fit(
 - formula:
 
   An extended formula containing ordinary mgcv terms and optional
-  [`irf()`](https://climblab.org/cdrgam/reference/irf.md) terms. An
-  implicit `irf(1)` is added unless suppressed with `- irf(1)`. For
-  `family="gaulss"`, this may instead be a named list with `location`
-  and `scale` formulas. The location formula supplies the response; the
-  scale formula may be one-sided.
+  [`irf()`](https://climblab-stanford.github.io/cdrgam/reference/irf.md)
+  terms. An implicit `irf(1)` is added unless suppressed with
+  `- irf(1)`. For `family="gaulss"`, this may instead be a named list
+  with `location` and `scale` formulas. The location formula supplies
+  the response; the scale formula may be one-sided.
 
 - impulses:
 
@@ -78,30 +79,30 @@ cdrgam.fit(
 - window:
 
   Default inclusive lag window inherited by each
-  [`irf()`](https://climblab.org/cdrgam/reference/irf.md) term that does
-  not supply its own window. `NULL` retains the term-level default
-  `c(0, Inf)`. Every impulse in the applicable series and window is
-  included in the response-level design.
+  [`irf()`](https://climblab-stanford.github.io/cdrgam/reference/irf.md)
+  term that does not supply its own window. `NULL` retains the
+  term-level default `c(0, Inf)`. Every impulse in the applicable series
+  and window is included in the response-level design.
 
 - knots_l:
 
   Optional model-level default for
-  [`irf()`](https://climblab.org/cdrgam/reference/irf.md) lag-basis
-  construction points. A term-level value, including `NULL`, takes
-  precedence.
+  [`irf()`](https://climblab-stanford.github.io/cdrgam/reference/irf.md)
+  lag-basis construction points. A term-level value, including `NULL`,
+  takes precedence.
 
 - k_l, k_t, k_p:
 
   Optional model-level defaults for the corresponding
-  [`irf()`](https://climblab.org/cdrgam/reference/irf.md) axis
-  dimensions. An argument supplied by an individual term, including an
-  explicit `NULL`, overrides its model-level default.
+  [`irf()`](https://climblab-stanford.github.io/cdrgam/reference/irf.md)
+  axis dimensions. An argument supplied by an individual term, including
+  an explicit `NULL`, overrides its model-level default.
 
 - bs_l, bs_t, bs_p:
 
   Optional model-level defaults for the corresponding
-  [`irf()`](https://climblab.org/cdrgam/reference/irf.md) marginal basis
-  names. Term-level arguments take precedence.
+  [`irf()`](https://climblab-stanford.github.io/cdrgam/reference/irf.md)
+  marginal basis names. Term-level arguments take precedence.
 
 - series:
 
@@ -125,14 +126,31 @@ cdrgam.fit(
 
 - rescale_predictors:
 
-  If `TRUE`, divide continuous numeric predictors by their training-data
-  standard deviations before model construction. No centering is
-  performed. Binary, constant, categorical, grouping, and series
-  variables are unchanged. Lag and explicit time predictors share the
-  standard deviation of the untiled impulse-time column; history windows
-  are still constructed in native time units. Stored scaling metadata
-  are reused for prediction, while CDR effect estimates and plots are
-  reported in native source units.
+  If `TRUE`, the default, divide continuous numeric predictors by their
+  training-data standard deviations before model construction. No
+  centering is performed. Binary, constant, categorical, grouping, and
+  series variables are unchanged. Lag and explicit time predictors share
+  the standard deviation of the untiled impulse-time column; history
+  windows are still constructed in native time units. Stored scaling
+  metadata are reused for prediction, while CDR effect estimates and
+  plots are reported in native source units.
+
+- center_predictors:
+
+  If `TRUE`, the default, center linear IRF predictors, including binary
+  ones, at their means over the training history links. Every term is
+  then defined relative to an average event: removing `irf(1)` removes
+  the response to an average event, and omitting a lower-order term of
+  an interaction removes that effect at the other predictors' means. The
+  prepared design's `centering` table records each predictor's center.
+  `irf(1)` is then the response to an event whose linear predictors are
+  at those means, each linear term is the deviation from that response,
+  and lower-order terms of a linear interaction are effects with the
+  other predictors at their means. Effects and predictions still take
+  source predictor values. `FALSE` leaves linear predictors uncentered,
+  so `irf(1)` is the response at zero. Terms can override the setting
+  with `irf(center = )`. Response-aligned `by` covariates are never
+  centered.
 
 - drop.unused.levels:
 
@@ -145,7 +163,7 @@ cdrgam.fit(
 - family:
 
   A standard family object or a family name accepted by
-  [`cdrgam_family()`](https://climblab.org/cdrgam/reference/cdrgam_family.md).
+  [`cdrgam_family()`](https://climblab-stanford.github.io/cdrgam/reference/cdrgam_family.md).
   `gaulss` rejects non-unit prior weights because mgcv's family accepts
   but does not use them.
 
@@ -219,27 +237,48 @@ cdrgam.fit(
   generalized sparse solver accepts `crossprod_chunk_size`,
   `supernodal`, `optimizer_maxit`, `optimizer_gradient_tolerance`,
   `optimizer_trust_radius`, `cores`, `gradient`, `score_workers`,
-  `score_batch_size`, and `finite_difference_step`. Generalized REML
+  `score_batch_size`, `finite_difference_step`, `hessian`,
+  `hessian_step`, and the boundary classification options
+  `boundary_curvature_tolerance`, `boundary_hessian_log_sp`,
+  `boundary_profile`, and `boundary_profile_level`. Generalized REML
   uses an exact gradient and safeguarded trust-region optimization.
-  Generalized `"GCV.Cp"` uses L-BFGS-B and accepts `gradient="auto"`
-  (the default), `"exact"`, or `"finite"`. Automatic selection compares
-  the memory and structural cost of a selected-inverse analytic gradient
-  with two conditional PIRLS fits per smoothing parameter. The exact
-  calculation differentiates the deviance, working weights, and
-  effective degrees of freedom through the converged PIRLS equations.
-  The remaining controls below apply to Gaussian sparse fits. The
-  distributional sparse solver accepts `crossprod_chunk_size`,
-  `supernodal`, `optimizer_maxit`, `optimizer_gradient_tolerance`,
-  `inner_tolerance`, `inner_maxit`, `cores`, `gradient`,
-  `gradient_probes`, `gradient_workers`, `score_batch_size`, and
-  `qncv_batch_size`. Its `gradient` may be `"auto"` (the default),
-  `"exact"`, or `"hybrid"`. Automatic selection uses exact scores for
-  small joint systems and a deterministic matrix-free stochastic warm-up
-  followed by exact-score refinement for large systems. QNCV resolves
-  `"auto"` to `"exact"` and rejects `"hybrid"` because its analytic
-  score is evaluated in streamed response batches. Hybrid warm-up stops
-  early when rejected conditional fits exhaust a budget based on recent
-  fit times, then refines from the best valid point. `gradient_probes`
+  After optimization, `hessian = "gradient"` (the default)
+  central-differences the exact score with step `hessian_step` (default
+  `1e-2`), two score evaluations per outer parameter, to obtain the
+  outer Hessian used for boundary classification, profile bounds,
+  optimizer diagnostics, and unconditional inference; `hessian = "none"`
+  skips it. Generalized `"GCV.Cp"` uses L-BFGS-B and accepts
+  `gradient="auto"` (the default), `"exact"`, or `"finite"`. Automatic
+  selection compares the memory and structural cost of a
+  selected-inverse analytic gradient with two conditional PIRLS fits per
+  smoothing parameter. The exact calculation differentiates the
+  deviance, working weights, and effective degrees of freedom through
+  the converged PIRLS equations. The remaining controls below apply to
+  Gaussian sparse fits. The distributional sparse solver accepts
+  `crossprod_chunk_size`, `supernodal`, `optimizer_maxit`,
+  `optimizer_gradient_tolerance`, `inner_tolerance`,
+  `inner_relative_tolerance`, `inner_maxit`, `inner_algorithm`,
+  `inner_schur_rank`, `cores`, `gradient`, `gradient_probes`,
+  `gradient_workers`, `score_batch_size`, and `qncv_batch_size`. Its
+  `gradient` may be `"auto"` (the default), `"exact"`, or `"hybrid"`.
+  Automatic selection uses exact scores for small joint systems and a
+  deterministic matrix-free stochastic warm-up followed by exact-score
+  refinement for large systems. QNCV resolves `"auto"` to `"exact"` and
+  rejects `"hybrid"` because its analytic score is evaluated in streamed
+  response batches. `inner_relative_tolerance` defaults to `1e-8` and
+  accepts a conditional solve when both the actual and locally predicted
+  objective reductions, divided by one plus the objective magnitude,
+  fall below that threshold. This complements the absolute
+  penalized-score `inner_tolerance` for large coefficient systems.
+  `inner_algorithm="schur"` enables the experimental matrix-free Schur
+  solver. It eliminates the larger location or scale coefficient block,
+  preconditions the reduced system with the remaining sparse block
+  factor, and certifies the reconstructed step against the full joint
+  system. It augments that factor with a deterministic low-rank
+  approximation to the Schur correction. `inner_schur_rank` controls the
+  approximation rank and defaults to `6`. Hybrid warm-up stops early
+  when rejected conditional fits exhaust a budget based on recent fit
+  times, then refines from the best valid point. `gradient_probes`
   defaults to 64. Both generalized solvers warm-start each inner fit
   from the preceding valid outer evaluation and retry cold if it fails.
   They compute the exact score only when the outer optimizer requests a
@@ -274,23 +313,37 @@ cdrgam.fit(
   dimension. `gradient` entry may be `"auto"` (the default), `"finite"`,
   `"exact"`, `"stochastic"`, or `"hybrid"`. `gradient_probes` controls
   the fixed Rademacher trace probes used by the latter two methods;
-  `"hybrid"` uses stochastic scores for a warm start and then refines
-  with exact scores. `"auto"` compares predicted exact-score time and
-  memory with the cost of finite differences after the first objective
+  `"hybrid"` uses a warm start and then refines with exact scores. For
+  Gaussian location-scale REML, `warmup` selects that warm start:
+  `"efs"` runs up to `efs_maxit` (default `30`) extended Fellner-Schall
+  updates (Wood and Fasiolo, 2017), each needing one inner fit and
+  penalty traces but no outer score or line search, and sets smoothing
+  parameters still moving toward a limit to the search bound before the
+  exact phase; `"stochastic"` uses stochastic scores as before; `"none"`
+  skips the warm start; and `"auto"` (the default) uses `"efs"` whenever
+  `"hybrid"` would be selected and no warm start otherwise. The exact
+  phase solves each inner fit to `exact_inner_relative_tolerance`
+  (default the tighter of `1e-11` and `inner_relative_tolerance`), so
+  that criterion noise from the inner fit stays below the trust-region
+  improvements. `"auto"` compares predicted exact-score time and memory
+  with the cost of finite differences after the first objective
   factorization. `gradient_workers` optionally overrides the
   automatically selected number of central finite-difference worker
   processes. The resolved value is capped by `cores` and the number of
   directions and falls back to one on Windows. `finite_difference_step`
   defaults to `1e-3`. Sparse `"GCV.Cp"` uses the same cost-aware choice
-  between exact and finite gradients but always uses L-BFGS-B.
-  `outer_optimizer` may be `"auto"` (the default), `"lbfgsb"`, or the
-  experimental safeguarded `"bfgs_trust"`. Automatic selection uses
-  trust-region BFGS for exact gradients and L-BFGS-B otherwise.
-  Explicitly requesting `"bfgs_trust"` with `gradient="auto"` forces an
-  exact gradient. `optimizer_maxit` defaults to an initial budget of
-  `200`. When that default is exhausted, analytic curvature recovery may
-  add up to two more 200-iteration blocks. An explicitly supplied value
-  is a hard limit. `optimizer_gradient_tolerance` and
+  between exact and finite gradients. For Gaussian GCV, `"auto"` uses
+  safeguarded Newton when the exact gradient fits the memory budget and
+  there are at most six smoothing parameters, and L-BFGS-B otherwise.
+  The `cdrgam.gcv_newton_max_parameters` option changes that threshold.
+  `outer_optimizer` may be `"auto"` (the default), `"lbfgsb"`, the
+  safeguarded `"bfgs_trust"`, or `"newton"`. `"bfgs_trust"` applies to
+  REML and `"newton"` applies to Gaussian GCV. Explicitly requesting
+  either curvature optimizer with `gradient="auto"` forces an exact
+  gradient. `optimizer_maxit` defaults to an initial budget of `200`.
+  When that default is exhausted, analytic curvature recovery may add up
+  to two more 200-iteration blocks. An explicitly supplied value is a
+  hard limit. `optimizer_gradient_tolerance` and
   `optimizer_trust_radius` control its projected-gradient tolerance and
   initial trust radius. `hessian` selects the post-fit outer-Hessian
   calculation: `"auto"` (the default) uses the analytic Hessian when its
@@ -307,34 +360,77 @@ cdrgam.fit(
   effective Linux cgroup or SLURM allocation when available. On other
   systems, automatic selection uses the gradient Hessian when available
   memory cannot be determined; the `cdrgam.memory_limit_bytes` option
-  can provide an explicit process limit. Sparse `"GCV.Cp"` resolves
-  `hessian="auto"` to `"none"` because smoothing-parameter uncertainty
-  is not yet implemented. `hessian_step` controls the finite-difference
-  step and defaults to `1e-2`. `supernodal` optionally overrides the
-  automatically selected CHOLMOD factorization form. `trace_method` may
-  be `"auto"` (the default), `"solve"`, or `"schur_inverse"`; the latter
-  contracts penalties with block-local inverse entries and requires
-  `schur="always"`. `trace_chunk_size` bounds exact-score solves.
-  `boundary_action` controls empirically inactive penalty subspaces:
-  `"report"` (the default) records them, `"reduce"` projects certified
-  IRF curvature boundaries to their joint null space and reoptimizes
-  until no newly certified boundary remains, and `"error"` turns
-  optimizer nonconvergence into an error. `boundary_log_sp` is the
-  minimum log smoothing parameter considered for reduction and defaults
-  to `12`. `boundary_edf_tolerance` is the maximum effective degrees of
-  freedom that the penalized subspace may retain before reduction and
-  defaults to `0.01`. This scale-invariant check prevents a numerically
-  large smoothing parameter from removing active curvature.
-  Reduced-model inference is conditional on the recorded data-selected
-  boundary reduction. Full-rank boundaries that would remove an entire
-  term are reported but require user confirmation. `schur = "always"`
-  enables the experimental response-group Schur solver instead of the
-  default `"never"`. It batches block elimination, exact traces, and
-  solves through BLAS; a threaded BLAS implementation improves
-  large-core runtime. `crossprod_chunk_size` bounds the number of
-  response rows used while accumulating sparse normal equations, and
-  `restarts` requests additional deterministic smoothing-parameter
-  starts.
+  can provide an explicit process limit. Sparse Gaussian `"GCV.Cp"` uses
+  a post-fit Hessian as a local stability diagnostic. It differentiates
+  the exact sparse gradient when that gradient fits memory, otherwise it
+  differences the scalar criterion. GCV curvature is not reported as
+  smoothing-parameter covariance. `hessian_step` controls the
+  finite-difference step and defaults to `1e-2`. `supernodal` optionally
+  overrides the automatically selected CHOLMOD factorization form.
+  `trace_method` may be `"auto"` (the default), `"solve"`, or
+  `"schur_inverse"`; the latter contracts penalties with block-local
+  inverse entries and requires `schur="always"`. `trace_chunk_size`
+  bounds exact-score solves. `boundary_action` controls empirically
+  inactive penalty subspaces: `"reduce"` (the default) removes certified
+  zero-variance IRF terms, projects other certified IRF boundaries to
+  their joint null space, and reoptimizes until no newly certified
+  boundary remains; `"report"` records the same diagnostics without
+  changing the fitted design; and `"error"` turns optimizer
+  nonconvergence into an error. `boundary_log_sp` is the minimum log
+  smoothing parameter considered for reduction and defaults to `12`.
+  `boundary_edf_tolerance` is the maximum effective degrees of freedom
+  that the penalized subspace may retain before reduction and defaults
+  to `0.01`. This scale-invariant check prevents a numerically large
+  smoothing parameter from removing active curvature. After the outer
+  Hessian is computed, a Gaussian REML fit classifies a smoothing
+  parameter as on the boundary when its absolute log value is at least
+  `boundary_hessian_log_sp` (default `8`) and every entry of its
+  outer-Hessian row, which is on the negative log restricted-likelihood
+  scale, is at most `boundary_curvature_tolerance` (default `0.05`) in
+  absolute value. The criterion is then flat along that parameter alone.
+  A flat direction that mixes several smoothing parameters is not
+  classified this way and still makes the Hessian indefinite. Boundary
+  parameters are listed in `fit$sparse$convergence$hessian_boundary`,
+  are excluded from the positive-definiteness check and from
+  unconditional covariance, and do not by themselves trigger a warning.
+  For a parameter at its upper boundary, a variance component estimated
+  as zero, `boundary_profile = TRUE` (the default) records a profile
+  bound: the smallest log smoothing parameter whose -2 REML criterion
+  stays within `qchisq(2 * boundary_profile_level - 1, 1)` of the
+  optimum, with `boundary_profile_level` defaulting to `0.95`. This
+  one-sided level follows the 50:50 chi-squared mixture for a variance
+  component on its boundary. The other smoothing parameters stay at
+  their estimates during the search, so the bound can understate the
+  largest supported variance when parameters trade off.
+  `boundary_sensitivity = TRUE` also stores the fit at the bounds, which
+  roughly doubles the stored factorization, so that
+  [`estimate_effect`](https://climblab-stanford.github.io/cdrgam/reference/estimate_effect.md)
+  and
+  [`test_effect`](https://climblab-stanford.github.io/cdrgam/reference/test_effect.md)
+  accept `boundary = "bound"`. For Gaussian REML, `final_newton = TRUE`
+  (the default) refines the optimum after the outer optimizer stops.
+  Each step uses the exact gradient and analytic outer Hessian, holds
+  boundary smoothing parameters fixed, replaces negative eigenvalues by
+  their absolute values so the step still descends, follows the most
+  negative eigenvector when the gradient is negligible but curvature is
+  negative, and is accepted only if the criterion decreases. It stops
+  when the predicted decrease falls below `newton_tolerance` (default
+  `1e-3` on the -2 REML scale) with a positive-definite Hessian, or
+  after `newton_max_steps` steps (default `5`). Each step costs about
+  one analytic Hessian, so the phase is skipped with a warning when that
+  Hessian exceeds the automatic memory budget unless
+  `hessian = "analytic"`; the warning appears only when `final_newton`
+  is set explicitly. The outcome is recorded in
+  `fit$sparse$convergence$newton_refinement`. Reduced-model inference is
+  conditional on the recorded data-selected boundary reduction. Every
+  applied reduction records its source penalty, effective dimension, fit
+  stage, and reduced-model objective check. `schur = "always"` enables
+  the experimental response-group Schur solver instead of the default
+  `"never"`. It batches block elimination, exact traces, and solves
+  through BLAS; a threaded BLAS implementation improves large-core
+  runtime. `crossprod_chunk_size` bounds the number of response rows
+  used while accumulating sparse normal equations, and `restarts`
+  requests additional deterministic smoothing-parameter starts.
 
 - rank_action:
 
@@ -363,7 +459,7 @@ cdrgam.fit(
 - design:
 
   A reusable `cdrgam_design` returned by
-  [`prepare_cdrgam()`](https://climblab.org/cdrgam/reference/prepare_cdrgam.md).
+  [`prepare_cdrgam()`](https://climblab-stanford.github.io/cdrgam/reference/prepare_cdrgam.md).
 
 ## Value
 

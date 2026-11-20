@@ -12,8 +12,8 @@ may change while validation continues.
 ## Model interface
 
 A model combines ordinary response-aligned GAM terms with
-[`irf()`](https://climblab.org/cdrgam/reference/irf.md) terms whose
-predictors come from an impulse stream:
+[`irf()`](https://climblab-stanford.github.io/cdrgam/reference/irf.md)
+terms whose predictors come from an impulse stream:
 
 ``` r
 
@@ -37,7 +37,7 @@ implicit `irf(1)`, unless the formula removes it with `- irf(1)`. This
 is distinct from the ordinary response intercept.
 
 Use
-[`prepare_cdrgam()`](https://climblab.org/cdrgam/reference/prepare_cdrgam.md)
+[`prepare_cdrgam()`](https://climblab-stanford.github.io/cdrgam/reference/prepare_cdrgam.md)
 when the same compiled design will be fitted more than once:
 
 ``` r
@@ -67,7 +67,7 @@ prediction <- predict(model, newdata = list(
 
 The native `mgcv` backend accepts Gaussian, binomial, Poisson, and Gamma
 families through the validated
-[`cdrgam_family()`](https://climblab.org/cdrgam/reference/cdrgam_family.md)
+[`cdrgam_family()`](https://climblab-stanford.github.io/cdrgam/reference/cdrgam_family.md)
 registry, with an optional explicit link. Stream-aware prediction
 supports both response and link scales. The dense block backend provides
 a generalized reference implementation for `poisson(log)`,
@@ -89,6 +89,25 @@ divided by the same impulse-time standard deviation. Formulas remain
 unchanged; new data are transformed with the stored training statistics,
 and CDR plots and effect estimates use native source units.
 
+Linear IRF predictors, including binary ones, are centered by default at
+their means over the training history links. Every term is then defined
+relative to an average event, so removing `irf(1)` removes the response
+to an average event, and omitting a lower-order term of an interaction
+removes that effect at the other predictors’ means. Without centering,
+`- irf(1)` would instead require a zero response to an event whose
+predictors are all zero, and the average-event response would remain
+inside the predictor terms. The prepared design’s `centering` table
+records each predictor’s center. `irf(1)` is then the response to an
+event with average linear predictors, and each linear term is the
+deviation from that response. Smooth predictor axes are already centered
+by their own constraint, so both kinds of term share the same reference.
+Lower-order terms of a linear interaction are effects with the other
+predictors at their means. Set `center_predictors = FALSE` for
+uncentered predictors, where `irf(1)` is the response at zero, or
+override individual terms with `irf(center = )`, which also accepts one
+logical value per predictor or predictor names. Centers are stored with
+the fit and applied to new data; effects take source values.
+
 ## Plotting
 
 [`plot()`](https://rdrr.io/r/graphics/plot.default.html) provides
@@ -106,13 +125,13 @@ plot(model, view = "surface", select = "surprisal")
 Grouped terms support population, deviation, and conditional views. CDR
 plots show additive effects on the linear-predictor scale and can
 include conditional or smoothing-parameter-adjusted uncertainty.
-[`save_cdrgam_plots()`](https://climblab.org/cdrgam/reference/save_cdrgam_plots.md)
+[`save_cdrgam_plots()`](https://climblab-stanford.github.io/cdrgam/reference/save_cdrgam_plots.md)
 writes the same panels to PDF or raster devices. Native `mgcv` fits
 retain access to the translated GAM display through
 `plot(model, view = "gam")` or `mgcv::plot.gam(as_gam(model))`. The
 first form restores scaled ordinary-smooth axes to source units; the
 explicit
-[`as_gam()`](https://climblab.org/cdrgam/reference/cdrgam-class.md)
+[`as_gam()`](https://climblab-stanford.github.io/cdrgam/reference/cdrgam-class.md)
 escape hatch exposes the literal internal mgcv parameterization.
 
 ## Supported terms
@@ -147,8 +166,8 @@ and `ts` marginals; `ps` has a different knot contract and rejects
 
 ## Fitting backends
 
-[`cdrgam()`](https://climblab.org/cdrgam/reference/cdrgam.md) provides
-three fitting paths:
+[`cdrgam()`](https://climblab-stanford.github.io/cdrgam/reference/cdrgam.md)
+provides three fitting paths:
 
 - `backend = "mgcv"` fits the compiled response-level design with
   [`mgcv::gam()`](https://rdrr.io/pkg/mgcv/man/gam.html) or
@@ -240,12 +259,12 @@ Git.
 ## Development
 
 Development takes place on `dev` or a feature branch. See
-[CONTRIBUTING.md](https://climblab.org/cdrgam/CONTRIBUTING.md) for
-testing, commit attribution, and release requirements. Instructions for
-AI coding agents are in
-[AGENTS.md](https://climblab.org/cdrgam/AGENTS.md), and repository-level
-AI assistance is recorded in
-[AI_PROVENANCE.md](https://climblab.org/cdrgam/AI_PROVENANCE.md).
+[CONTRIBUTING.md](https://climblab-stanford.github.io/cdrgam/CONTRIBUTING.md)
+for testing, commit attribution, and release requirements. Instructions
+for AI coding agents are in
+[AGENTS.md](https://climblab-stanford.github.io/cdrgam/AGENTS.md), and
+repository-level AI assistance is recorded in
+[AI_PROVENANCE.md](https://climblab-stanford.github.io/cdrgam/AI_PROVENANCE.md).
 
 ## AI-assisted development
 
@@ -255,10 +274,11 @@ code, ran the applicable tests, and accept responsibility for the
 published result.
 
 The tools and models used are recorded in
-[AI_PROVENANCE.md](https://climblab.org/cdrgam/AI_PROVENANCE.md). Where
-available, individual commits also contain `Assisted-by:` trailers.
+[AI_PROVENANCE.md](https://climblab-stanford.github.io/cdrgam/AI_PROVENANCE.md).
+Where available, individual commits also contain `Assisted-by:`
+trailers.
 
 ## License
 
 `cdrgam` is distributed under the MIT License. See
-[LICENSE](https://climblab.org/cdrgam/LICENSE).
+[LICENSE](https://climblab-stanford.github.io/cdrgam/LICENSE).

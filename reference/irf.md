@@ -1,25 +1,28 @@
 # Specify an impulse-response term
 
 Use `irf()` as a top-level additive term inside a
-[`cdrgam()`](https://climblab.org/cdrgam/reference/cdrgam.md) formula.
-Ordinary terms retain their usual R and mgcv meanings. By default each
-predictor enters linearly as a convolution weight. Numeric `k_p` entries
-add smooth predictor marginals and `k_t` adds a response-time marginal.
-Smooth non-lag marginals are centered, so a tensor term represents the
-interaction beyond its lower-order terms. Before constraints, a tensor
-term's coefficient count grows as the product of its axis dimensions.
-Larger bases are supported, but each added axis therefore increases
-preparation, fitting, and inference costs multiplicatively. With
-`group`, the term is expanded into factor-specific deviations with
-shared roughness penalties and an additional full-rank shrinkage
-penalty. Unless explicitly removed with `- irf(1)`, the formula compiler
-inserts an implicit `irf(1)`. An implicit rate term that has zero design
-after the required centering constraint is removed with a warning; the
-same situation is an error when `irf(1)` was explicitly requested.
-Requested axis basis dimensions are upper bounds. The stream compiler
-reduces a dimension when the linked data contain fewer distinct values,
-subject to the marginal basis minimum, and records the change in the
-prepared design.
+[`cdrgam()`](https://climblab-stanford.github.io/cdrgam/reference/cdrgam.md)
+formula. Ordinary terms retain their usual R and mgcv meanings. By
+default each predictor enters linearly as a convolution weight. Numeric
+`k_p` entries add smooth predictor marginals and `k_t` adds a
+response-time marginal. Smooth non-lag marginals are centered, so a
+tensor term represents the interaction beyond its lower-order terms.
+Linear predictors are centered at their training means by default; see
+`center` and the `center_predictors` argument of
+[`cdrgam()`](https://climblab-stanford.github.io/cdrgam/reference/cdrgam.md).
+Before constraints, a tensor term's coefficient count grows as the
+product of its axis dimensions. Larger bases are supported, but each
+added axis therefore increases preparation, fitting, and inference costs
+multiplicatively. With `group`, the term is expanded into
+factor-specific deviations. The `group_penalty` argument selects its
+shared penalty decomposition. Unless explicitly removed with `- irf(1)`,
+the formula compiler inserts an implicit `irf(1)`. An implicit rate term
+that has zero design after the required centering constraint is removed
+with a warning; the same situation is an error when `irf(1)` was
+explicitly requested. Requested axis basis dimensions are upper bounds.
+The stream compiler reduces a dimension when the linked data contain
+fewer distinct values, subject to the marginal basis minimum, and
+records the change in the prepared design.
 
 ## Usage
 
@@ -37,6 +40,8 @@ irf(
   bs_p = "cr",
   by = NULL,
   group = NULL,
+  group_penalty = c("re", "t2", "fs"),
+  center = NULL,
   k = NULL,
   bs = NULL,
   nonlinear = NULL,
@@ -110,6 +115,28 @@ irf(
   Optional unquoted response-stream factor defining grouped IRF
   deviations. Add a corresponding ungrouped `irf()` term for a
   population-plus-group-specific model.
+
+- group_penalty:
+
+  Penalty construction for a grouped IRF. `"re"` uses the marginal
+  smoothness penalties plus one full-rank group shrinkage penalty.
+  `"t2"` matches `mgcv::t2(full = FALSE)`, and `"fs"` matches
+  `mgcv::t2(full = TRUE)` and a univariate factor smooth. The `"t2"` and
+  `"fs"` choices introduce progressively more smoothing parameters as
+  the number of smooth IRF axes increases.
+
+- center:
+
+  Centering of linear predictors. `NULL` inherits the model-level
+  `center_predictors` setting. `TRUE` or `FALSE` centers all or none of
+  this term's linear predictors. For interactions, a logical vector with
+  one entry per predictor, such as `c(FALSE, TRUE)`, or a character
+  vector of predictor names selects the predictors to center. A centered
+  predictor enters as its value minus its mean over the training history
+  links, so the term is zero for an event at that mean. Predictors with
+  a single linked value are not centered. Smooth predictor axes are
+  always centered by their own constraint. `irf(1)` has no predictors to
+  center.
 
 ## Value
 

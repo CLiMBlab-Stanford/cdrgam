@@ -23,4 +23,7 @@ effect_catalog(object, impulses = NULL, responses = NULL)
 ## Value
 
 A data frame with one row per impulse-response term. The `predictors`,
-`axes`, and `axis_summaries` columns are list columns.
+`axes`, `axis_summaries`, and `centers` columns are list columns.
+`centers` gives the source-unit value at which each centered linear
+predictor makes the term zero; it is empty for terms without centered
+linear predictors.

@@ -251,6 +251,13 @@ fit_and_check <- function(response, family) {
             method='REML',
             weights=prior_weights
         ))
+        if (!isTRUE(block$converged)) {
+            stop(
+                'block ', family$family, ' fit did not converge: ',
+                block$optimizer$message, '; log sp ',
+                paste(format(log(block$sp), digits=4), collapse=', ')
+            )
+        }
         stopifnot(
             isTRUE(block$converged),
             max(abs(block$linear.predictors - fit$linear.predictors)) < 3e-3,

@@ -114,7 +114,8 @@ compare_family <- function(response, family, gamma=1) {
     stopifnot(
         isTRUE(sparse$converged),
         identical(sparse$method, 'GCV.Cp'),
-        identical(sparse$sparse$control$gradient, 'exact'),
+        # Automatic selection times both gradients, so either may win.
+        sparse$sparse$control$gradient %in% c('exact', 'finite'),
         identical(sparse$sparse$control$gradient_requested, 'auto'),
         identical(sparse$sparse$control$outer_optimizer, 'lbfgsb'),
         sparse$sparse$control$score_workers >= 1L,
@@ -125,7 +126,10 @@ compare_family <- function(response, family, gamma=1) {
             sparse$sparse$score_plan$workers,
             sparse$sparse$control$score_workers
         ),
-        identical(sparse$sparse$gradient_selection$method, 'exact'),
+        identical(
+            sparse$sparse$gradient_selection$method,
+            sparse$sparse$control$gradient
+        ),
         identical(
             sparse$sparse$control$criterion,
             if (identical(family$family, 'Gamma')) 'GCV' else 'UBRE'

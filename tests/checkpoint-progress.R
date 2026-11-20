@@ -210,12 +210,16 @@ gradient_assessments <- Filter(
 )
 stopifnot(
     length(automatic_assessments) > 0L,
+    # The automatic policy picks gradient differences when the host has too
+    # little memory left for the analytic Hessian.
     all(vapply(
         automatic_assessments,
         `[[`,
         character(1),
         'method'
-    ) == 'analytic'),
+    ) == automatic_assessment$sparse$convergence$hessian_method),
+    automatic_assessment$sparse$convergence$hessian_method %in%
+        c('analytic', 'gradient'),
     !grepl(
         'current limit is 1',
         automatic_assessment$sparse$convergence$message,

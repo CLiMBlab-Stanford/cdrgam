@@ -209,7 +209,9 @@ sparse_gamma <- cdrgam.fit(
     backend='sparse',
     method='GCV.Cp',
     gamma=1.4,
+    # Automatic selection times both gradients, so request the exact one.
     sparse_control=list(
+        gradient='exact',
         hessian='none',
         optimizer_maxit=200,
         restarts=0

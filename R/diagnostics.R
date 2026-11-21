@@ -732,22 +732,27 @@ print.cdrgam_simplification_report <- function(x, ...) {
 
 #' Evaluate fitted impulse-response function terms
 #'
+#' Evaluate each fitted IRF term using its stored marginal basis, fitted
+#' coefficients, and covariance matrix.
+#'
 #' @param object A fitted `cdrgam` model.
 #' @param term Term name or one-based term number. Omit to evaluate every IRF.
-#' @param lag Optional numeric lag grid. By default each term is evaluated over
-#'   its knot range.
+#' @param lag Optional finite numeric lag grid. By default each term is
+#'   evaluated over its knot range.
 #' @param n Number of default grid points.
 #' @param predictor Optional predictor-value grid for nonlinear IRFs.
-#' @param n_predictor Number of default predictor grid points.
+#' @param n_predictor Number of default predictor-value grid points.
 #' @param at Named list of evaluation values for smooth response-time and
 #'   predictor axes. `predictor` remains an alias for the first non-lag axis;
 #'   additional axes default to their fitted-grid medians.
 #' @param group Optional grouping levels for grouped IRF deviations. By default
 #'   all fitted levels are returned.
 #' @param se Include pointwise standard errors when covariance is available.
-#' @param unconditional Include smoothing-parameter uncertainty in standard
-#'   errors when supported by the fitted backend.
-#' @return A data frame with term, lag, estimate, and standard-error columns.
+#' @param unconditional Include the first-order smoothing-parameter
+#'   uncertainty correction in standard errors when supported by the fitted
+#'   backend.
+#' @return A data frame containing term, grouping level, lag, predictor value,
+#'   estimate, and standard error.
 #' @export
 estimate_irf <- function(
         object,
@@ -1019,23 +1024,26 @@ variance_components <- function(object, rescale=TRUE, conf.lev=0.95) {
     )
 }
 
-#' Simulate irregular impulse and response streams from fixed IRFs
+#' Simulate irregular streams from fixed impulse-response functions
 #'
-#' Predictor columns are constructed to be sample-orthogonal and standardized.
+#' Create irregular impulse and response times. Predictor columns are
+#' constructed to be sample-orthogonal and standardized.
 #' Responses are the additive convolution of every supplied IRF plus Gaussian
 #' noise.
 #'
-#' @param irfs Named list of functions. One-argument functions define linear
-#'   lag IRFs; two-argument functions define surfaces over lag and predictor.
+#' @param irfs Named non-empty list of functions. One-argument functions define
+#'   linear lag IRFs; two-argument functions of lag and predictor value define
+#'   nonlinear tensor IRFs.
 #' @param n_impulses Number of impulses.
 #' @param n_responses Number of responses.
 #' @param duration Duration of the simulated series.
 #' @param window Maximum causal lag included in the convolution.
 #' @param intercept Response intercept.
 #' @param noise_sd Gaussian response noise standard deviation.
-#' @param seed Random seed.
-#' @return A list containing impulse and response data, IRFs, and noiseless
-#'   response components.
+#' @param seed Optional random seed. `NULL` leaves the random number generator
+#'   state unchanged.
+#' @return A list containing impulse and response data, IRFs, noiseless
+#'   components, and simulation settings.
 #' @export
 simulate_cdr <- function(
         irfs,

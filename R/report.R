@@ -9,6 +9,8 @@
 #'   parameter names, and default plotting metadata. `fit_report()` adds
 #'   printable summary text, parametric and smooth summary tables, and
 #'   convergence diagnostics.
+#' @name fit_report
+#' @rdname fit_report
 #' @export
 fit_metadata <- function(object) {
     if (!is_cdrgam(object)) stop('object must be a fitted cdrgam model')

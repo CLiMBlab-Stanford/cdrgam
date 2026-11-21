@@ -1,12 +1,13 @@
-#' Fit a prepared CDR-GAM design
-#'
-#' `cdrgam.fit()` fits the reusable design returned by [prepare_cdrgam()]. It
-#' does not parse formulas or compile stream histories.
+#' @description
+#' `cdrgam.fit()` fits an already prepared `cdrgam_design`, such as one returned
+#' by [prepare_cdrgam()], without rebuilding its stream histories. It does not
+#' parse formulas.
 #'
 #' @rdname cdrgam
-#' @param design A `cdrgam_design` returned by [prepare_cdrgam()].
-#' @inheritParams cdrgam
-#' @return A fitted `cdrgam` object.
+#' @param design A reusable `cdrgam_design` returned by [prepare_cdrgam()].
+#' @return The native backend's fit also inherits from its selected \pkg{mgcv}
+#'   fitting class (`"bam"` or `"gam"`); custom backends provide corresponding
+#'   methods.
 #' @export
 cdrgam.fit <- function(
         design,

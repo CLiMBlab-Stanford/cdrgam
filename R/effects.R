@@ -97,8 +97,9 @@
 
 #' List the estimable impulse-response effects in a fitted model
 #'
-#' Returns the term metadata used to validate and construct effect grids. Axis
-#' ranges and summaries are reported in the source units used by callers.
+#' Returns the term and axis metadata used to validate and construct effect
+#' evaluation grids. Axis ranges and summaries are reported in the source units
+#' used by callers.
 #'
 #' @param object A fitted `cdrgam` model.
 #' @param impulses,responses Optional training streams used to recover axis
@@ -592,16 +593,20 @@ effect_catalog <- function(object, impulses=NULL, responses=NULL) {
 #' Evaluate fitted effects on declarative axis grids
 #'
 #' Computes selected impulse-response effects and their pointwise uncertainty as
-#' joint linear functionals of the fitted coefficients. Tensor-product axes may
-#' vary on grids or be fixed at numeric or training-summary values.
+#' joint linear functionals of the fitted coefficients. Axes may vary over
+#' numeric values, quantiles, or the fitted domain, or be fixed at a numeric
+#' value or a training-data mean or median with an optional standard deviation
+#' offset.
 #'
 #' With `composition = "total"`, the selected term is summed with every
 #' ungrouped term in its hierarchy: terms on the same `by` covariate whose
 #' predictors are a subset of the selected term's predictors, with the same
 #' linear or smooth treatment of each shared predictor. For
 #' `irf(x, z, k_p = list(NULL, 3))` this adds `irf(x)`, `irf(z, k_p = 3)`, and
-#' `irf(1)` when they are present. Under `grouping = "conditional"`, the
-#' grouped deviations of those terms at the same level are also added.
+#' `irf(1)` when they are present. A time-invariant term is included below a
+#' time-varying term with the same predictors. Under
+#' `grouping = "conditional"`, the grouped deviations of those terms at the
+#' same level are also added.
 #'
 #' `reference` subtracts the same functional evaluated at reference values of
 #' some axes. Axes not named in `reference` keep their evaluated values. The
@@ -617,10 +622,14 @@ effect_catalog <- function(object, impulses=NULL, responses=NULL) {
 #' For example, with `composition = "total"`, `x` at its mean plus one
 #' standard deviation, and `reference = list(x = list(at = list(summary =
 #' "mean")))`, the result is the effect of a one-SD increase in `x` at each
-#' requested value of `z`.
+#' requested value of `z`. A reference value of `z` gives differences between
+#' the interaction curves.
 #'
 #' @param object A fitted `cdrgam` model.
-#' @param terms Term labels or a selector returned by the visualization schema.
+#' @param terms Term labels, or a selector list with optional fields `names`
+#'   (term labels), `predictors` (predictor names, or `"*"` for any term with
+#'   predictors), `match` (`"contains"`, the default, or `"exact"`), and
+#'   `grouped` (logical). `NULL` selects every impulse-response term.
 #' @param impulses,responses Optional training streams used to recover axis
 #'   summaries from models fitted before summaries were stored.
 #' @param axes Named axis requests. Predictor requests are nested under
@@ -649,8 +658,9 @@ effect_catalog <- function(object, impulses=NULL, responses=NULL) {
 #'   TRUE` and `unconditional = FALSE`.
 #' @param level Confidence level for `lower` and `upper`.
 #' @param n Default number of points for fitted-domain grids.
-#' @return A data frame with evaluation axes, estimates, standard errors, and
-#'   pointwise confidence limits. Each reference axis adds a
+#' @return A `cdrgam_effect_grid` data frame with evaluation axes, estimates,
+#'   standard errors, and pointwise confidence limits on the linear-predictor
+#'   scale. Each reference axis adds a
 #'   `<axis>_reference` column, which is `NA` for a model default.
 #' @seealso [test_effect()] for joint Wald tests of the same functionals.
 #' @export
@@ -698,16 +708,6 @@ estimate_effect <- function(
     result
 }
 
-#' Test fitted effects jointly over declarative axis grids
-#'
-#' Computes a Wald test of the null hypothesis that a functional returned by
-#' [estimate_effect()] is zero at every grid point. The arguments select the
-#' same terms, axes, compositions, groupings, and references. One test is
-#' returned per selected term and grouping level.
-#'
-#' The statistic is \eqn{\hat\beta^\top L^\top (L V L^\top)^{-} L \hat\beta},
-#' where `L` stacks the grid rows of the functional and `V` is the coefficient
-#' covariance. The pseudo-inverse keeps eigenvalues above `tolerance` times the
 #' Simulate fitted effects from the coefficient posterior
 #'
 #' Draws coefficient vectors from the approximate posterior
@@ -790,18 +790,33 @@ simulate_effect <- function(
     list(grid=grid, draws=values)
 }
 
+#' Test fitted effects jointly over declarative axis grids
+#'
+#' Computes a Wald test of the null hypothesis that a functional returned by
+#' [estimate_effect()] is zero at every grid point. The arguments select the
+#' same terms, axes, compositions, groupings, and references. One test is
+#' returned per selected term and grouping level.
+#'
+#' The statistic is \eqn{\hat\beta^\top L^\top (L V L^\top)^{-} L \hat\beta},
+#' where `L` stacks the grid rows of the functional and `V` is the coefficient
+#' covariance. The pseudo-inverse keeps eigenvalues above `tolerance` times the
 #' largest, and the reference distribution is chi-squared with that rank as
 #' its degrees of freedom. Use a grid dense enough to span the functional;
-#' the rank stops growing once it does. Penalized coefficients make this test
+#' the rank stops growing once it does.
+#'
+#' Penalized coefficients make this test
 #' approximate. Wood (2013) reports that such tests can reject too rarely when
 #' the null holds on the boundary of the smoothing-parameter space.
 #'
 #' @inheritParams estimate_effect
 #' @param tolerance Relative eigenvalue threshold for the rank of `L V L'`.
-#' @return A data frame with `term_id`, `term`, `group`, `composition`,
-#'   `grouping`, `statistic`, `df`, `p_value`, and `points`.
+#' @return A `cdrgam_effect_test` data frame with `term_id`, `term`, `group`,
+#'   `composition`, `grouping`, `statistic`, `df`, `p_value`, and `points`.
+#'   `df` is zero and `statistic` and `p_value` are missing when the functional
+#'   is identically zero.
 #' @references Wood, S. N. (2013). On p-values for smooth components of an
 #'   extended generalized additive model. *Biometrika*, 100(1), 221--228.
+#' @seealso [estimate_effect()]
 #' @export
 test_effect <- function(
         object, terms=NULL, axes=list(), impulses=NULL, responses=NULL,

@@ -260,14 +260,19 @@
 #' while holding the response's remaining impulse history and covariates fixed.
 #'
 #' The returned object implements the `marginaleffects` coefficient, covariance,
-#' and prediction extension methods. Each row is one response--impulse
+#' and prediction extension methods. Calls such as `marginaleffects::slopes()`
+#' therefore operate on scalar impulse predictors without treating the fitted
+#' object as an `mgcv` `gam`.
+#'
+#' Each row is one response--impulse
 #' incidence. An ungrouped average over rows is incidence-weighted, so responses
 #' with longer histories receive more weight. Use the internal
 #' `.cdrgam_response` and `.cdrgam_impulse` columns for response- or event-level
 #' aggregation.
 #'
 #' The view stores a response-level linear-predictor matrix for the supplied
-#' streams. Covariance extraction is restricted to coefficients that affect
+#' streams, so its memory use depends on the number of selected responses and
+#' fitted coefficients. Covariance extraction is restricted to coefficients that affect
 #' those responses, including selected sparse covariance solves for the sparse
 #' backend. Distributional models are not yet supported.
 #'
@@ -284,6 +289,10 @@
 #' \dontrun{
 #' view <- marginaleffects_view(fit, impulses, responses)
 #' marginaleffects::slopes(view, variables="surprisal")
+#' marginaleffects::avg_comparisons(
+#'   view,
+#'   variables=list(surprisal=c(-1, 1))
+#' )
 #' }
 #' @export
 marginaleffects_view <- function(
@@ -463,8 +472,9 @@ response_scenarios <- function(object, at=list(), rows=NULL) {
 #' Evaluates predictions, slopes, or comparisons on response-history scenarios
 #' through the `marginaleffects` extension API. This preserves each response's
 #' remaining impulse history and returns point estimates with pointwise
-#' uncertainty in a tidy table. Grouping columns are passed to
-#' `marginaleffects`; use `.cdrgam_scenario` to average each scenario over its
+#' uncertainty in a tidy table.
+#'
+#' Grouping columns are passed to `marginaleffects`. Use `.cdrgam_scenario` to average each scenario over its
 #' reference incidences, and add `.cdrgam_response` or `.cdrgam_impulse` when a
 #' response- or event-weighted result is required.
 #'

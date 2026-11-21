@@ -1,3 +1,10 @@
+# cdrgam 0.4.0
+
+- New `simulate_effect()` draws coefficient vectors from the approximate
+  posterior and evaluates the same functionals as `estimate_effect()` for
+  each draw. Use it for uncertainty in nonlinear summaries of an effect,
+  such as the lag at which a response peaks.
+
 # cdrgam 0.3.0
 
 - Sparse Gaussian REML diagnostics report `newton_step_max`, the largest

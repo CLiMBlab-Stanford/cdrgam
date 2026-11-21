@@ -1067,6 +1067,7 @@ vcov.cdrgam_block <- function(object, unconditional=FALSE, ...) {
     object$Vp
 }
 
+#' @name predict.cdrgam
 #' @rdname predict.cdrgam
 #' @export
 predict.cdrgam_block <- function(object, newdata=NULL, ...) {
@@ -1093,6 +1094,8 @@ print.cdrgam_block <- function(x, ...) {
     invisible(x)
 }
 
+#' @name summary.cdrgam
+#' @rdname summary.cdrgam
 #' @export
 summary.cdrgam_block <- function(
         object,

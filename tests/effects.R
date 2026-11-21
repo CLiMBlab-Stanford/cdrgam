@@ -146,3 +146,35 @@ legacy_linear <- estimate_effect(
 stopifnot(nrow(legacy_linear) == 6L, all(is.finite(legacy_linear$x)))
 
 cat('Effect-grid tests passed\n')
+
+# simulate_effect() draws the estimate_effect() functional from the
+# coefficient posterior: the draw mean and SD approach the estimate and its
+# standard error, and a seed makes draws reproducible without changing the
+# global random-number state.
+request <- list(
+    fit, terms=list(predictors='x'),
+    axes=list(
+        lag=list(grid='fitted', n=11L),
+        predictors=list(x=list(at=list(summary='mean', `offset-sd`=1)))
+    ),
+    reference=list(x=list(at=list(summary='mean'))), composition='total'
+)
+target <- do.call(estimate_effect, request)
+set.seed(3)
+before <- .Random.seed
+simulated <- do.call(simulate_effect, c(request, list(draws=4000L, seed=11)))
+again <- do.call(simulate_effect, c(request, list(draws=4000L, seed=11)))
+stopifnot(
+    identical(.Random.seed, before),
+    identical(simulated, again),
+    is.matrix(simulated$draws),
+    identical(dim(simulated$draws), c(nrow(target), 4000L)),
+    isTRUE(all.equal(simulated$grid$estimate, target$estimate)),
+    identical(simulated$grid$lag, target$lag),
+    max(abs(rowMeans(simulated$draws) - target$estimate) / target$se) < 0.1,
+    max(abs(apply(simulated$draws, 1L, stats::sd) / target$se - 1)) < 0.05
+)
+bad_draws <- tryCatch(
+    do.call(simulate_effect, c(request, list(draws=0L))), error=conditionMessage
+)
+stopifnot(grepl('draws must be a positive integer', bad_draws, fixed=TRUE))

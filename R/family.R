@@ -5,15 +5,17 @@
 #' [cdrgam.fit()]. The native `mgcv` backend supports every combination
 #' returned here. `gaulss` selects mgcv's two-predictor Gaussian
 #' location--scale family. The dense block backend supports a joint
-#' location--scale reference solver plus `gaussian(identity)` and
+#' location--scale reference solver plus `gaussian(identity)`,
 #' `binomial(logit)`, `poisson(log)`, and estimated-dispersion `Gamma(log)`.
 #' The sparse backend supports those single-predictor combinations with
 #' streamed PIRLS and an exact Laplace score, plus joint location--scale LAML
 #' with an exact outer score.
 #'
-#' @param family A supported family name or an existing family object.
+#' @param family A supported family name or an existing family object. The
+#'   default is `"gaussian"`. A family object is returned unchanged.
 #' @param link Optional link name. It may be supplied only when `family` is a
-#'   name.
+#'   name other than `"gaulss"`, whose links are fixed (identity for the
+#'   location and log for the scale).
 #' @return A standard R family object.
 #' @export
 cdrgam_family <- function(

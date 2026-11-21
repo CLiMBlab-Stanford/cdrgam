@@ -4,7 +4,8 @@ if (length(arguments) != 1L) {
 }
 
 git_output <- function(...) {
-    output <- system2('git', c(...), stdout=TRUE, stderr=TRUE)
+    arguments <- vapply(list(...), shQuote, character(1L))
+    output <- system2('git', arguments, stdout=TRUE, stderr=TRUE)
     if (!is.null(attr(output, 'status'))) {
         stop(paste(output, collapse='\n'), call.=FALSE)
     }

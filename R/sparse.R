@@ -7161,6 +7161,7 @@ print.cdrgam_sparse <- function(x, ...) {
     invisible(x)
 }
 
+#' @rdname summary.cdrgam
 #' @export
 summary.cdrgam_sparse <- function(
         object,

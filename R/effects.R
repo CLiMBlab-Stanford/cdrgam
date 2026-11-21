@@ -97,8 +97,9 @@
 
 #' List the estimable impulse-response effects in a fitted model
 #'
-#' Returns the term metadata used to validate and construct effect grids. Axis
-#' ranges and summaries are reported in the source units used by callers.
+#' Returns the term and axis metadata used to validate and construct effect
+#' evaluation grids. Axis ranges and summaries are reported in the source units
+#' used by callers.
 #'
 #' @param object A fitted `cdrgam` model.
 #' @param impulses,responses Optional training streams used to recover axis
@@ -592,16 +593,20 @@ effect_catalog <- function(object, impulses=NULL, responses=NULL) {
 #' Evaluate fitted effects on declarative axis grids
 #'
 #' Computes selected impulse-response effects and their pointwise uncertainty as
-#' joint linear functionals of the fitted coefficients. Tensor-product axes may
-#' vary on grids or be fixed at numeric or training-summary values.
+#' joint linear functionals of the fitted coefficients. Axes may vary over
+#' numeric values, quantiles, or the fitted domain, or be fixed at a numeric
+#' value or a training-data mean or median with an optional standard deviation
+#' offset.
 #'
 #' With `composition = "total"`, the selected term is summed with every
 #' ungrouped term in its hierarchy: terms on the same `by` covariate whose
 #' predictors are a subset of the selected term's predictors, with the same
 #' linear or smooth treatment of each shared predictor. For
 #' `irf(x, z, k_p = list(NULL, 3))` this adds `irf(x)`, `irf(z, k_p = 3)`, and
-#' `irf(1)` when they are present. Under `grouping = "conditional"`, the
-#' grouped deviations of those terms at the same level are also added.
+#' `irf(1)` when they are present. A time-invariant term is included below a
+#' time-varying term with the same predictors. Under
+#' `grouping = "conditional"`, the grouped deviations of those terms at the
+#' same level are also added.
 #'
 #' `reference` subtracts the same functional evaluated at reference values of
 #' some axes. Axes not named in `reference` keep their evaluated values. The
@@ -617,10 +622,14 @@ effect_catalog <- function(object, impulses=NULL, responses=NULL) {
 #' For example, with `composition = "total"`, `x` at its mean plus one
 #' standard deviation, and `reference = list(x = list(at = list(summary =
 #' "mean")))`, the result is the effect of a one-SD increase in `x` at each
-#' requested value of `z`.
+#' requested value of `z`. A reference value of `z` gives differences between
+#' the interaction curves.
 #'
 #' @param object A fitted `cdrgam` model.
-#' @param terms Term labels or a selector returned by the visualization schema.
+#' @param terms Term labels, or a selector list with optional fields `names`
+#'   (term labels), `predictors` (predictor names, or `"*"` for any term with
+#'   predictors), `match` (`"contains"`, the default, or `"exact"`), and
+#'   `grouped` (logical). `NULL` selects every impulse-response term.
 #' @param impulses,responses Optional training streams used to recover axis
 #'   summaries from models fitted before summaries were stored.
 #' @param axes Named axis requests. Predictor requests are nested under
@@ -649,8 +658,9 @@ effect_catalog <- function(object, impulses=NULL, responses=NULL) {
 #'   TRUE` and `unconditional = FALSE`.
 #' @param level Confidence level for `lower` and `upper`.
 #' @param n Default number of points for fitted-domain grids.
-#' @return A data frame with evaluation axes, estimates, standard errors, and
-#'   pointwise confidence limits. Each reference axis adds a
+#' @return A `cdrgam_effect_grid` data frame with evaluation axes, estimates,
+#'   standard errors, and pointwise confidence limits on the linear-predictor
+#'   scale. Each reference axis adds a
 #'   `<axis>_reference` column, which is `NA` for a model default.
 #' @seealso [test_effect()] for joint Wald tests of the same functionals.
 #' @export
@@ -698,6 +708,88 @@ estimate_effect <- function(
     result
 }
 
+#' Simulate fitted effects from the coefficient posterior
+#'
+#' Draws coefficient vectors from the approximate posterior
+#' \eqn{N(\hat\beta, V)} and evaluates the functionals that
+#' [estimate_effect()] would return for each draw. Use the draws for
+#' uncertainty in nonlinear summaries of an effect, such as the lag at which
+#' a response peaks, that pointwise standard errors do not determine. The
+#' arguments select the same terms, axes, compositions, groupings, and
+#' references.
+#'
+#' Draws for each term and grouping level are sampled separately, so draws
+#' are joint across the rows of one functional but not across functionals.
+#' `V` is the conditional Bayesian covariance, or the covariance corrected
+#' for smoothing-parameter uncertainty when `unconditional = TRUE`. Draws are
+#' on the linear-predictor scale. A rank-deficient `V` is handled through its
+#' eigendecomposition, and directions with negative eigenvalues contribute
+#' nothing.
+#'
+#' @inheritParams estimate_effect
+#' @param draws Number of posterior draws.
+#' @param seed Optional integer seed. When given, the global random-number
+#'   state is restored on exit.
+#' @return A list with `grid`, a data frame like the one returned by
+#'   [estimate_effect()] with `estimate` but no interval columns, and
+#'   `draws`, a matrix with one row per row of `grid` and one column per
+#'   draw.
+#' @seealso [estimate_effect()] for pointwise intervals of the same
+#'   functionals.
+#' @export
+simulate_effect <- function(
+        object, terms=NULL, axes=list(), impulses=NULL, responses=NULL,
+        composition=c('term', 'total'),
+        grouping=c('population', 'deviation', 'conditional'), groups=NULL,
+        reference=list(), unconditional=FALSE, draws=1000L, n=200L, seed=NULL,
+        boundary=c('estimate', 'bound')
+) {
+    n <- .cdr_effect_validate(object, axes, reference, 0.95, n)
+    draws <- suppressWarnings(as.integer(draws))
+    if (length(draws) != 1L || is.na(draws) || draws < 1L) {
+        stop('draws must be a positive integer')
+    }
+    if (!is.null(seed)) {
+        if (!is.numeric(seed) || length(seed) != 1L || !is.finite(seed)) {
+            stop('seed must be one finite number')
+        }
+        exists <- exists('.Random.seed', envir=globalenv(), inherits=FALSE)
+        if (exists) state <- get('.Random.seed', envir=globalenv())
+        on.exit(if (exists) {
+            assign('.Random.seed', state, envir=globalenv())
+        } else rm('.Random.seed', envir=globalenv()), add=TRUE)
+        set.seed(as.integer(seed))
+    }
+    object <- .cdr_effect_restore_summaries(object, impulses, responses)
+    object <- .cdr_effect_boundary_object(object, match.arg(boundary), unconditional)
+    composition <- match.arg(composition)
+    grouping <- match.arg(grouping)
+    functionals <- .cdr_effect_all_functionals(
+        object, terms, axes, composition, grouping, groups, reference, n
+    )
+    simulated <- lapply(functionals, function(functional) {
+        coefficients <- stats::coef(object)[functional$index]
+        covariance <- .cdr_effect_covariance(object, functional$index, unconditional)
+        decomposition <- eigen((covariance + t(covariance)) / 2, symmetric=TRUE)
+        root <- decomposition$vectors %*%
+            diag(sqrt(pmax(0, decomposition$values)), length(coefficients))
+        normal <- matrix(stats::rnorm(length(coefficients) * draws),
+            length(coefficients), draws)
+        sample <- coefficients + root %*% normal
+        frame <- .cdr_effect_frame(
+            object, functional$term, functional, composition, grouping
+        )
+        frame$estimate <- drop(functional$design %*% coefficients)
+        list(frame=frame, draws=functional$design %*% sample)
+    })
+    grid <- .cdr_effect_bind(lapply(simulated, `[[`, 'frame'))
+    attr(grid, 'scale') <- 'linear-predictor'
+    attr(grid, 'reference') <- if (length(reference)) names(reference) else NULL
+    values <- do.call(rbind, lapply(simulated, `[[`, 'draws'))
+    dimnames(values) <- NULL
+    list(grid=grid, draws=values)
+}
+
 #' Test fitted effects jointly over declarative axis grids
 #'
 #' Computes a Wald test of the null hypothesis that a functional returned by
@@ -710,16 +802,21 @@ estimate_effect <- function(
 #' covariance. The pseudo-inverse keeps eigenvalues above `tolerance` times the
 #' largest, and the reference distribution is chi-squared with that rank as
 #' its degrees of freedom. Use a grid dense enough to span the functional;
-#' the rank stops growing once it does. Penalized coefficients make this test
+#' the rank stops growing once it does.
+#'
+#' Penalized coefficients make this test
 #' approximate. Wood (2013) reports that such tests can reject too rarely when
 #' the null holds on the boundary of the smoothing-parameter space.
 #'
 #' @inheritParams estimate_effect
 #' @param tolerance Relative eigenvalue threshold for the rank of `L V L'`.
-#' @return A data frame with `term_id`, `term`, `group`, `composition`,
-#'   `grouping`, `statistic`, `df`, `p_value`, and `points`.
+#' @return A `cdrgam_effect_test` data frame with `term_id`, `term`, `group`,
+#'   `composition`, `grouping`, `statistic`, `df`, `p_value`, and `points`.
+#'   `df` is zero and `statistic` and `p_value` are missing when the functional
+#'   is identically zero.
 #' @references Wood, S. N. (2013). On p-values for smooth components of an
 #'   extended generalized additive model. *Biometrika*, 100(1), 221--228.
+#' @seealso [estimate_effect()]
 #' @export
 test_effect <- function(
         object, terms=NULL, axes=list(), impulses=NULL, responses=NULL,

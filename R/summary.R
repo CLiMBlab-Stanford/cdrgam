@@ -475,22 +475,35 @@
 #' coefficients and one row per smooth term instead of expanded smooth and
 #' random-effect coefficients. It prints the raw user formula, the native
 #' `mgcv` export formula, and a direct account of any automatic
-#' simplifications. Use
-#' [formula.cdrgam()] to inspect normalized and effective formulas. Set
-#' `all.coefficients=TRUE` to request the expanded table.
+#' simplifications. Use [formula.cdrgam()] to inspect normalized and effective
+#' formulas.
+#'
+#' Fully penalized random-effect and grouped IRF terms report effective degrees
+#' of freedom and an explicit "not computed" test status. This status does not
+#' indicate fit failure. Distributional Gaussian summaries report deviance,
+#' null deviance, and deviance explained without an adjusted R-squared
+#' statistic. Set `all.coefficients=TRUE` to request the expanded coefficient
+#' table.
 #'
 #' @param object A fitted `cdrgam` model.
 #' @param dispersion Optional known dispersion.
 #' @param freq,re.test Controls passed to [mgcv::summary.gam()] by native fits.
 #'   Custom backends retain these arguments for interface compatibility.
-#' @param all.coefficients Include every expanded coefficient.
-#' @param ... Additional arguments passed to native [mgcv::summary.gam()].
-#' @return A `summary.gam`-style object with CDR formula metadata. Native fits
-#'   retain the complete `summary.gam` result. Custom backends provide its
-#'   commonly used coefficient, smooth-term, fit-statistic, and formula fields.
-#'   The `s.test` field states whether each smooth-term test was computed.
+#' @param all.coefficients Include the expanded smooth and random-effect
+#'   coefficient table. The default is `FALSE`.
+#' @param x A CDR-GAM summary object.
+#' @param ... Additional arguments passed to native [mgcv::summary.gam()] or
+#'   to the print method.
+#' @return A `summary.gam`-style object containing parametric and smooth-term
+#'   tables, the raw and translated `mgcv` formulas, and recorded automatic
+#'   simplifications. Native fits retain the complete `summary.gam` result.
+#'   Custom backends provide its commonly used coefficient, smooth-term,
+#'   fit-statistic, and formula fields. The `s.test` field states whether each
+#'   smooth-term test was computed.
 #' @name summary.cdrgam
+#' @aliases summary.cdrgam_sparse
 NULL
 
+#' @rdname summary.cdrgam
 #' @export
 print.summary.cdrgam <- function(x, ...) .print_summary_cdrgam(x, ...)

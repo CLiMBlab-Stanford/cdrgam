@@ -1,4 +1,4 @@
-# cdrgam (development version)
+# cdrgam 0.4.0
 
 - New `simulate_effect()` draws coefficient vectors from the approximate
   posterior and evaluates the same functionals as `estimate_effect()` for

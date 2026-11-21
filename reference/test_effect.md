@@ -2,8 +2,10 @@
 
 Computes a Wald test of the null hypothesis that a functional returned
 by
-[`estimate_effect`](https://climblab.org/cdrgam/reference/estimate_effect.md)
-is zero at every grid point.
+[`estimate_effect()`](https://climblab.org/cdrgam/reference/estimate_effect.md)
+is zero at every grid point. The arguments select the same terms, axes,
+compositions, groupings, and references. One test is returned per
+selected term and grouping level.
 
 ## Usage
 
@@ -33,13 +35,15 @@ test_effect(
 
 - terms:
 
-  Term labels or a selector with `names`, `predictors`, `match`, and
-  `grouped` fields.
+  Term labels, or a selector list with optional fields `names` (term
+  labels), `predictors` (predictor names, or `"*"` for any term with
+  predictors), `match` (`"contains"`, the default, or `"exact"`), and
+  `grouped` (logical). `NULL` selects every impulse-response term.
 
 - axes:
 
-  Named axis requests, as in
-  [`estimate_effect`](https://climblab.org/cdrgam/reference/estimate_effect.md).
+  Named axis requests. Predictor requests are nested under `predictors`;
+  `"*"` supplies a fallback for every predictor axis.
 
 - impulses, responses:
 
@@ -48,30 +52,31 @@ test_effect(
 
 - composition:
 
-  Whether to test the selected term or its fitted marginal hierarchy.
+  Return the selected term alone or add its hierarchy of fitted marginal
+  terms.
 
 - grouping:
 
-  Whether grouped terms represent population effects, deviations, or
-  their conditional sum.
+  Return population, grouped-deviation, or conditional effects.
 
 - groups:
 
-  Optional grouping levels to test.
+  Optional grouping levels.
 
 - reference:
 
-  Optional named list of reference values for evaluation axes, as in
-  [`estimate_effect`](https://climblab.org/cdrgam/reference/estimate_effect.md).
+  Optional named list of reference values for evaluation axes, using the
+  same request forms as `axes`. Each request must resolve to one value.
+  A predictor may instead be `NA` or `"default"` to leave it at the
+  model default. Names are axis names such as `lag` or a predictor.
 
 - unconditional:
 
-  Whether to include smoothing-parameter uncertainty when the fitted
-  backend supports it. Smoothing parameters classified as on the
-  boundary of their range contribute no uncertainty, because the
-  criterion has no local curvature along them. Sparse fits stop with an
-  error when the outer Hessian is not positive definite after those
-  parameters are excluded.
+  Include smoothing-parameter uncertainty when supported. Smoothing
+  parameters classified as on the boundary of their range contribute no
+  uncertainty, because the criterion has no local curvature along them.
+  Sparse fits stop with an error when the outer Hessian is not positive
+  definite after those parameters are excluded.
 
 - n:
 
@@ -79,7 +84,7 @@ test_effect(
 
 - tolerance:
 
-  Relative eigenvalue threshold for the rank of \\L V L^\top\\.
+  Relative eigenvalue threshold for the rank of `L V L'`.
 
 - boundary:
 
@@ -97,17 +102,17 @@ test_effect(
 
 A `cdrgam_effect_test` data frame with `term_id`, `term`, `group`,
 `composition`, `grouping`, `statistic`, `df`, `p_value`, and `points`.
-One row is returned per selected term and grouping level. `df` is zero
-and `statistic` is missing when the functional is identically zero.
+`df` is zero and `statistic` and `p_value` are missing when the
+functional is identically zero.
 
 ## Details
 
 The statistic is \\\hat\beta^\top L^\top (L V L^\top)^{-} L \hat\beta\\,
-where \\L\\ stacks the grid rows of the functional and \\V\\ is the
+where `L` stacks the grid rows of the functional and `V` is the
 coefficient covariance. The pseudo-inverse keeps eigenvalues above
-`tolerance` times the largest. The reference distribution is chi-squared
-with that rank as its degrees of freedom. Use a grid dense enough to
-span the functional; the rank stops growing once it does.
+`tolerance` times the largest, and the reference distribution is
+chi-squared with that rank as its degrees of freedom. Use a grid dense
+enough to span the functional; the rank stops growing once it does.
 
 Penalized coefficients make this test approximate. Wood (2013) reports
 that such tests can reject too rarely when the null holds on the
@@ -120,4 +125,4 @@ generalized additive model. *Biometrika*, 100(1), 221–228.
 
 ## See also
 
-[`estimate_effect`](https://climblab.org/cdrgam/reference/estimate_effect.md)
+[`estimate_effect()`](https://climblab.org/cdrgam/reference/estimate_effect.md)

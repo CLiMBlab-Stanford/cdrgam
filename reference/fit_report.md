@@ -1,4 +1,4 @@
-# Extract Stable Fit Metadata and Summary Tables
+# Extract stable fit metadata and summary tables
 
 `fit_report()` returns the fitted-model information needed by artifact
 writers and other downstream tools without requiring them to inspect the

@@ -1,14 +1,9 @@
-# Compile untiled streams for CDR-GAM fitting
+# Compile untiled impulse and response streams for CDR-GAM fitting
 
-Validates and aligns untiled streams, selects or applies a history
-layout, and constructs response-level spline designs in bounded-memory
-chunks. Requested axis basis dimensions are reduced when the linked data
-support fewer distinct values and the marginal basis minimum remains.
-Nonlinear IRFs with one or two linked predictor values are represented
-as linear IRFs using their original numeric coding. Optional scaling is
-an upstream data transformation and does not modify the user,
-normalized, or effective model formula. Its training-data divisors and
-exclusions are stored in the returned object's `scaling` component.
+`prepare_cdrgam()` validates and aligns untiled streams, selects or
+applies a history layout, and constructs response-level spline designs
+in bounded-memory chunks. The returned design can be fitted with
+[`cdrgam.fit()`](https://climblab.org/cdrgam/reference/cdrgam.md).
 
 ## Usage
 
@@ -41,9 +36,12 @@ prepare_cdrgam(
 
 - formula:
 
-  Extended formula containing ordinary terms and optional
+  Extended model formula containing ordinary `mgcv` terms and optional
   [`irf()`](https://climblab.org/cdrgam/reference/irf.md) terms. An
-  implicit `irf(1)` is added unless suppressed.
+  implicit `irf(1)` is added unless suppressed. For `family="gaulss"`,
+  this may instead be a named list with `location` and `scale` formulas.
+  The location formula supplies the response; the scale formula may be
+  one-sided.
 
 - impulses:
 
@@ -55,9 +53,9 @@ prepare_cdrgam(
 
 - window:
 
-  Default inclusive lag window inherited by each
+  Default inclusive lag window inherited by every
   [`irf()`](https://climblab.org/cdrgam/reference/irf.md) term that does
-  not supply its own window. `NULL` retains the term-level default
+  not define its own `window`. `NULL` retains the term-level default
   `c(0, Inf)`. Every impulse in the applicable series and window is
   included in the response-level design.
 
@@ -65,7 +63,7 @@ prepare_cdrgam(
 
   Optional model-level default for
   [`irf()`](https://climblab.org/cdrgam/reference/irf.md) lag-basis
-  construction points. A term-level value, including `NULL`, takes
+  construction points. Term-level `knots_l`, including `NULL`, takes
   precedence.
 
 - k_l, k_t, k_p:
@@ -83,7 +81,7 @@ prepare_cdrgam(
 
 - series:
 
-  Character vector naming independent-series columns.
+  Character vector of columns identifying independent series.
 
 - impulse_time:
 
@@ -99,46 +97,63 @@ prepare_cdrgam(
 
 - chunk_size:
 
-  Maximum responses or links transformed in a chunk.
+  Maximum history links transformed at once in ragged mode, or responses
+  transformed at once in dense mode.
 
 - rescale_predictors:
 
-  If `TRUE`, the default, divide continuous numeric predictors by their
-  training-data standard deviations without centering. Binary, constant,
-  categorical, grouping, and series variables are unchanged. Lag and
-  explicit time predictors share the standard deviation of the untiled
-  impulse-time column, after history links have been constructed in
-  native time units.
+  Divide continuous numeric predictors and internal lag coordinates by
+  training-data standard deviations. Scaling is enabled by default; set
+  `FALSE` to fit in native units. Binary, constant, categorical,
+  grouping, and series variables are not changed. Lag and explicit time
+  coordinates share one divisor, the standard deviation of the untiled
+  impulse-time column, applied after history links are built in native
+  time units.
 
 - center_predictors:
 
-  If `TRUE`, the default, center linear IRF predictors, including binary
-  ones, at their means over the training history links. Every term is
-  then defined relative to an average event: removing `irf(1)` removes
-  the response to an average event, and omitting a lower-order term of
-  an interaction removes that effect at the other predictors' means. The
-  prepared design's `centering` table records each predictor's center.
-  `irf(1)` is then the response to an event whose linear predictors are
-  at those means, each linear term is the deviation from that response,
-  and lower-order terms of a linear interaction are effects with the
-  other predictors at their means. Effects and predictions still take
-  source predictor values. `FALSE` leaves linear predictors uncentered,
-  so `irf(1)` is the response at zero. Terms can override the setting
-  with `irf(center = )`. Response-aligned `by` covariates are never
-  centered.
+  Center linear IRF predictors, including binary ones, at their means
+  over the training history links. Every term is then defined relative
+  to an average event: removing `irf(1)` removes the response to an
+  average event, and omitting a lower-order term of an interaction
+  removes that effect at the other predictors' means. The prepared
+  design's `centering` table records each predictor's center. With
+  centering, `irf(1)` is the response to an event whose linear
+  predictors are at those means, and each linear term is the deviation
+  from that response. Lower- order terms of a linear interaction are
+  effects with the other predictors at their means. Effects and
+  predictions still use source predictor values. `FALSE` restores
+  uncentered predictors, where `irf(1)` is the response at zero.
+  Individual terms can override this with `irf(center=)`.
+  Response-aligned `by` covariates are never centered.
+
+- quiet:
+
+  Suppress the preparation plan message.
 
 - drop.unused.levels:
 
   Drop factor levels without training observations. The default matches
   [`mgcv::gam()`](https://rdrr.io/pkg/mgcv/man/gam.html). Retained
-  levels remain part of the fitted factor vocabulary.
-
-- quiet:
-
-  Suppress preparation-plan messages.
+  levels remain part of the fitted factor vocabulary. For
+  [`cdrgam.fit()`](https://climblab.org/cdrgam/reference/cdrgam.md), use
+  `NULL` to inherit the choice already compiled into `design`; a
+  supplied value must match it.
 
 ## Value
 
 A reusable `cdrgam_design` object. Its `simplifications` data frame
-records automatic axis-basis reductions and lower-dimensional
-representations of discrete predictor axes.
+records automatic reductions of axis basis dimensions and
+lower-dimensional representations of discrete predictor axes.
+
+## Details
+
+Requested axis basis dimensions are reduced when the linked data support
+fewer distinct values and the marginal basis minimum remains. Nonlinear
+IRFs with one or two linked predictor values are represented as linear
+IRFs using their original numeric coding.
+
+Optional scaling is an upstream data transformation and does not modify
+the raw, normalized, or effective model formula. Its training-data
+divisors and exclusions are stored in the returned object's `scaling`
+component.

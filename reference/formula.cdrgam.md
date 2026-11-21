@@ -8,18 +8,10 @@ native mgcv export formula.
 
 ``` r
 # S3 method for class 'cdrgam_design'
-formula(
-  x,
-  type = c("raw", "normalized", "effective", "mgcv"),
-  ...
-)
+formula(x, type = c("raw", "normalized", "effective", "mgcv"), ...)
 
 # S3 method for class 'cdrgam'
-formula(
-  x,
-  type = c("raw", "normalized", "effective", "mgcv"),
-  ...
-)
+formula(x, type = c("raw", "normalized", "effective", "mgcv"), ...)
 ```
 
 ## Arguments
@@ -30,10 +22,13 @@ formula(
 
 - type:
 
-  Formula representation to return. The `"mgcv"` export formula uses
-  named matrix terms whose penalties are supplied by the remaining
-  components returned by
+  Formula representation: the raw formula supplied by the user, the
+  normalized CDR formula including structural defaults, or the effective
+  CDR formula after automatic simplification, or `"mgcv"`, the native
+  formula exported by
   [`as_mgcv_spec()`](https://climblab.org/cdrgam/reference/as_mgcv_spec.md).
+  Its named matrix terms receive their penalties through the rest of
+  that specification.
 
 - ...:
 
@@ -41,5 +36,4 @@ formula(
 
 ## Value
 
-The selected formula, or a parameter-named formula list for a
-distributional model.
+A formula, or a parameter-named formula list for a distributional model.

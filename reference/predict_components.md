@@ -1,4 +1,4 @@
-# Predict Response and Link Components
+# Predict response and link components
 
 `predict_components()` returns a stable representation of response- and
 link-scale predictions for artifact writers and other downstream tools.

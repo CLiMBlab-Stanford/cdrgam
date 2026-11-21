@@ -1,7 +1,8 @@
-# List estimable impulse-response effects
+# List the estimable impulse-response effects in a fitted model
 
-Returns the term and source-scale axis metadata needed to construct
-effect evaluation grids.
+Returns the term and axis metadata used to validate and construct effect
+evaluation grids. Axis ranges and summaries are reported in the source
+units used by callers.
 
 ## Usage
 
@@ -22,8 +23,8 @@ effect_catalog(object, impulses = NULL, responses = NULL)
 
 ## Value
 
-A data frame with one row per impulse-response term. The `predictors`,
-`axes`, `axis_summaries`, and `centers` columns are list columns.
-`centers` gives the source-unit value at which each centered linear
-predictor makes the term zero; it is empty for terms without centered
-linear predictors.
+A data frame with one row per impulse-response term. `predictors`,
+`axes`, `axis_summaries`, and `centers` are list columns. `centers`
+gives the source-unit value at which each centered linear predictor
+makes the term zero; it is empty for terms without centered linear
+predictors.

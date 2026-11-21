@@ -1,5 +1,15 @@
 # Changelog
 
+## cdrgam (development version)
+
+- New
+  [`simulate_effect()`](https://climblab.org/cdrgam/reference/simulate_effect.md)
+  draws coefficient vectors from the approximate posterior and evaluates
+  the same functionals as
+  [`estimate_effect()`](https://climblab.org/cdrgam/reference/estimate_effect.md)
+  for each draw. Use it for uncertainty in nonlinear summaries of an
+  effect, such as the lag at which a response peaks.
+
 ## cdrgam 0.3.0
 
 - Sparse Gaussian REML diagnostics report `newton_step_max`, the largest

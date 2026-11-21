@@ -1,6 +1,6 @@
 # Evaluate fitted impulse-response function terms
 
-Evaluates each fitted IRF term using its stored marginal basis, fitted
+Evaluate each fitted IRF term using its stored marginal basis, fitted
 coefficients, and covariance matrix.
 
 ## Usage
@@ -28,11 +28,12 @@ estimate_irf(
 
 - term:
 
-  Term name or one-based term number; omit for every IRF.
+  Term name or one-based term number. Omit to evaluate every IRF.
 
 - lag:
 
-  Optional finite numeric lag grid.
+  Optional finite numeric lag grid. By default each term is evaluated
+  over its knot range.
 
 - n:
 
@@ -63,8 +64,8 @@ estimate_irf(
 
 - unconditional:
 
-  Include the first-order smoothing-parameter uncertainty correction
-  when supported by the fitted backend.
+  Include the first-order smoothing-parameter uncertainty correction in
+  standard errors when supported by the fitted backend.
 
 ## Value
 

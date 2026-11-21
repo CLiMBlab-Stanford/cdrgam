@@ -33,6 +33,10 @@
     </div>
 
     <div class="section level2">
+<h2 class="pkg-version" data-toc-text="development version" id="cdrgam-development-version">cdrgam (development version)<a class="anchor" aria-label="anchor" href="#cdrgam-development-version"></a></h2>
+<ul><li>New <code><a href="../reference/simulate_effect.html">simulate_effect()</a></code> draws coefficient vectors from the approximate posterior and evaluates the same functionals as <code><a href="../reference/estimate_effect.html">estimate_effect()</a></code> for each draw. Use it for uncertainty in nonlinear summaries of an effect, such as the lag at which a response peaks.</li>
+</ul></div>
+    <div class="section level2">
 <h2 class="pkg-version" data-toc-text="0.3.0" id="cdrgam-030">cdrgam 0.3.0<a class="anchor" aria-label="anchor" href="#cdrgam-030"></a></h2>
 <ul><li><p>Sparse Gaussian REML diagnostics report <code>newton_step_max</code>, the largest coordinate of the Newton step on the log smoothing-parameter scale, and <code>predicted_decrease_floor</code>, the smallest criterion change the practical convergence test treats as resolvable. In a reading-time model the largest gradient component was 0.033 against a tolerance of 1e-4, while the predicted decrease was 1.2e-5 against a floor of 3.6e-3.</p></li>
 <li><p>Boundary reduction treats a smoothing parameter that the outer Hessian classifies as an upper or lower boundary like one at the optimizer’s box limit: only a score favoring less smoothing, at an upper boundary, blocks reduction. Such a parameter is flat along its own direction, so the optimizer can stop short of the limit with a score that still points past it. In a reading-time model, one penalty of a by-subject interaction IRF stopped at log smoothing parameter 24.04 with a score of -3.3e-4, three times the gradient tolerance; the fit ended without converging, and autosimplification removed the whole term instead of the one inactive subspace.</p></li>

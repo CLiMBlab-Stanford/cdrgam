@@ -1,28 +1,12 @@
 # Specify an impulse-response term
 
-Use `irf()` as a top-level additive term inside a
+`irf()` is used inside a
 [`cdrgam()`](https://climblab.org/cdrgam/reference/cdrgam.md) formula.
-Ordinary terms retain their usual R and mgcv meanings. By default each
-predictor enters linearly as a convolution weight. Numeric `k_p` entries
-add smooth predictor marginals and `k_t` adds a response-time marginal.
-Smooth non-lag marginals are centered, so a tensor term represents the
-interaction beyond its lower-order terms. Linear predictors are centered
-at their training means by default; see `center` and the
-`center_predictors` argument of
-[`cdrgam()`](https://climblab.org/cdrgam/reference/cdrgam.md). Before
-constraints, a tensor term's coefficient count grows as the product of
-its axis dimensions. Larger bases are supported, but each added axis
-therefore increases preparation, fitting, and inference costs
-multiplicatively. With `group`, the term is expanded into
-factor-specific deviations. The `group_penalty` argument selects its
-shared penalty decomposition. Unless explicitly removed with `- irf(1)`,
-the formula compiler inserts an implicit `irf(1)`. An implicit rate term
-that has zero design after the required centering constraint is removed
-with a warning; the same situation is an error when `irf(1)` was
-explicitly requested. Requested axis basis dimensions are upper bounds.
-The stream compiler reduces a dimension when the linked data contain
-fewer distinct values, subject to the marginal basis minimum, and
-records the change in the prepared design.
+Its predictor arguments name numeric columns in the impulse stream, or
+the sole predictor is literal `1` for the deconvolutional intercept.
+Ordinary formula terms retain their usual `mgcv` meaning and are
+evaluated against the response stream. Use `irf()` only as a top-level
+additive term.
 
 ## Usage
 
@@ -66,13 +50,15 @@ irf(
   Inclusive lag window as `c(minimum, maximum)`, where lag is response
   time minus impulse time. Negative lags include impulses after the
   response time. `NULL` inherits the model-level `window`; without
-  either, the default is `c(0, Inf)`.
+  either, the default is `c(0, Inf)`. The minimum must be finite; the
+  maximum may be infinite.
 
 - knots_l:
 
   Optional strictly increasing lag-basis construction points in the
   original lag units. Supply exactly `k_l` values spanning the linked
-  training lags. This control is unavailable for `bs_l = "ps"`.
+  training lags. This control is unavailable for `bs_l="ps"`, whose knot
+  contract differs from the other supported numeric marginals.
 
 - k_l:
 
@@ -81,29 +67,24 @@ irf(
 - k_t:
 
   Optional response-time basis dimension. `NULL` makes the IRF
-  stationary; a number models nonstationarity against the configured
-  response time.
+  stationary; a number models nonstationarity against `response_time`.
 
 - k_p:
 
   Predictor-axis dimensions. Supply one value to recycle it or one entry
-  per predictor. `NULL` means linear and a number gives a smooth
-  marginal. Use a list such as `list(NULL, 4)` for mixed axes because R
-  reduces `c(NULL, 4)` to `4`.
+  per predictor. `NULL` means that predictor enters linearly, while a
+  number gives a smooth marginal. Use a list, such as `list(NULL, 4)`,
+  when mixing linear and smooth predictors because base R reduces
+  `c(NULL, 4)` to `4`.
 
 - bs_l, bs_t:
 
-  Lag and response-time marginal basis names accepted by mgcv.
+  Lag and response-time marginal basis names accepted by `mgcv`.
 
 - bs_p:
 
-  Predictor marginal basis names; one value is recycled or supply one
-  per predictor.
-
-- k, bs, nonlinear, varying:
-
-  Compatibility controls for the original single-predictor API. They
-  cannot be mixed with explicitly supplied axis-specific controls.
+  Predictor marginal basis names. Supply one value to recycle it or one
+  entry per predictor.
 
 - by:
 
@@ -118,11 +99,12 @@ irf(
 
 - group_penalty:
 
-  Penalty construction for a grouped IRF. `"re"` uses the marginal
-  smoothness penalties plus one full-rank group shrinkage penalty.
-  `"t2"` matches `mgcv::t2(full = FALSE)`, and `"fs"` matches
-  `mgcv::t2(full = TRUE)` and a univariate factor smooth. The `"t2"` and
-  `"fs"` choices introduce progressively more smoothing parameters as
+  Penalty construction for a grouped IRF. `"re"` keeps the parsimonious
+  tensor marginal penalties plus one full-rank group shrinkage penalty.
+  `"t2"` uses the grouped-null-space construction from
+  `mgcv::t2(full=FALSE)`. `"fs"` separates every null-space component as
+  in `mgcv::t2(full=TRUE)` and a univariate `bs="fs"` factor smooth.
+  `"t2"` and `"fs"` introduce progressively more smoothing parameters as
   the number of smooth IRF axes increases.
 
 - center:
@@ -135,9 +117,43 @@ irf(
   predictor enters as its value minus its mean over the training history
   links, so the term is zero for an event at that mean. Predictors with
   a single linked value are not centered. Smooth predictor axes are
-  always centered by their own constraint. `irf(1)` has no predictors to
-  center.
+  always centered by their own constraint and are unaffected. `irf(1)`
+  has no predictors to center.
+
+- k, bs, nonlinear, varying:
+
+  Compatibility controls for the original single-predictor API. They
+  cannot be mixed with explicitly supplied axis-specific controls.
 
 ## Value
 
-An internal `cdrgam_irf_spec` used by the formula compiler.
+An internal `cdrgam_irf_spec` when evaluated by the formula compiler.
+Before constraints, a tensor term's coefficient count is the product of
+its axis dimensions.
+
+## Details
+
+By default each predictor enters linearly as a convolution weight.
+Numeric `k_p` entries add smooth predictor marginals, and `k_t` adds a
+response-time marginal. Smooth non-lag marginals are centered, so a
+tensor term represents the interaction beyond its lower-order terms.
+Linear predictors are centered at their training means by default; see
+`center` and the `center_predictors` argument of
+[`cdrgam()`](https://climblab.org/cdrgam/reference/cdrgam.md).
+
+Before constraints, a tensor term's coefficient count is the product of
+its axis dimensions. Each added axis therefore multiplies preparation,
+fitting, and inference costs.
+
+With `group`, the term is expanded into factor-specific deviations, and
+`group_penalty` selects their shared penalty decomposition.
+
+Unless removed with `- irf(1)`, the formula compiler inserts an implicit
+`irf(1)`. An implicit rate term whose design is zero after the required
+centering constraint is removed with a warning. The same condition is an
+error when `irf(1)` was requested explicitly.
+
+Requested axis basis dimensions are upper bounds. When the linked data
+contain fewer distinct values, preparation reduces the dimension,
+subject to the marginal basis minimum, and records the change in the
+prepared design.

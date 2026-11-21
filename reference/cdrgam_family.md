@@ -25,11 +25,14 @@ cdrgam_family(
 
 - family:
 
-  A supported family name or an existing family object.
+  A supported family name or an existing family object. The default is
+  `"gaussian"`. A family object is returned unchanged.
 
 - link:
 
-  Optional link name. It may be supplied only when `family` is a name.
+  Optional link name. It may be supplied only when `family` is a name
+  other than `"gaulss"`, whose links are fixed (identity for the
+  location and log for the scale).
 
 ## Value
 

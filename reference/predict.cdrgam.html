@@ -103,6 +103,25 @@ frames, or a response-side data frame for a native <code>mgcv</code> fit.</p></d
 <dd><p>Prediction controls, including <code>type</code>, <code>se.fit</code>, <code>chunk_size</code>,
 and <code>unconditional</code>.</p></dd>
 
+
+<dt id="arg-type">type<a class="anchor" aria-label="anchor" href="#arg-type"></a></dt>
+<dd><p>Prediction scale: <code>"response"</code>, <code>"link"</code>, or <code>"lpmatrix"</code> for
+the linear-predictor matrices. Distributional fits return one matrix per
+distribution parameter.</p></dd>
+
+
+<dt id="arg-se-fit">se.fit<a class="anchor" aria-label="anchor" href="#arg-se-fit"></a></dt>
+<dd><p>Return standard errors with the predictions.</p></dd>
+
+
+<dt id="arg-chunk-size">chunk_size<a class="anchor" aria-label="anchor" href="#arg-chunk-size"></a></dt>
+<dd><p>Number of response rows evaluated at a time.</p></dd>
+
+
+<dt id="arg-unconditional">unconditional<a class="anchor" aria-label="anchor" href="#arg-unconditional"></a></dt>
+<dd><p>Use the covariance corrected for smoothing-parameter
+uncertainty. Distributional fits do not provide it and stop.</p></dd>
+
 </dl></div>
     <div class="section level2">
     <h2 id="value">Value<a class="anchor" aria-label="anchor" href="#value"></a></h2>

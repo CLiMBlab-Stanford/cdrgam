@@ -59,6 +59,25 @@ predict(object, newdata = NULL, ...)
   Prediction controls, including `type`, `se.fit`, `chunk_size`, and
   `unconditional`.
 
+- type:
+
+  Prediction scale: `"response"`, `"link"`, or `"lpmatrix"` for the
+  linear-predictor matrices. Distributional fits return one matrix per
+  distribution parameter.
+
+- se.fit:
+
+  Return standard errors with the predictions.
+
+- chunk_size:
+
+  Number of response rows evaluated at a time.
+
+- unconditional:
+
+  Use the covariance corrected for smoothing-parameter uncertainty.
+  Distributional fits do not provide it and stop.
+
 ## Value
 
 A prediction vector, linear-predictor matrix, or list containing `fit`

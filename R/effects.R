@@ -708,6 +708,88 @@ estimate_effect <- function(
 #' The statistic is \eqn{\hat\beta^\top L^\top (L V L^\top)^{-} L \hat\beta},
 #' where `L` stacks the grid rows of the functional and `V` is the coefficient
 #' covariance. The pseudo-inverse keeps eigenvalues above `tolerance` times the
+#' Simulate fitted effects from the coefficient posterior
+#'
+#' Draws coefficient vectors from the approximate posterior
+#' \eqn{N(\hat\beta, V)} and evaluates the functionals that
+#' [estimate_effect()] would return for each draw. Use the draws for
+#' uncertainty in nonlinear summaries of an effect, such as the lag at which
+#' a response peaks, that pointwise standard errors do not determine. The
+#' arguments select the same terms, axes, compositions, groupings, and
+#' references.
+#'
+#' Draws for each term and grouping level are sampled separately, so draws
+#' are joint across the rows of one functional but not across functionals.
+#' `V` is the conditional Bayesian covariance, or the covariance corrected
+#' for smoothing-parameter uncertainty when `unconditional = TRUE`. Draws are
+#' on the linear-predictor scale. A rank-deficient `V` is handled through its
+#' eigendecomposition, and directions with negative eigenvalues contribute
+#' nothing.
+#'
+#' @inheritParams estimate_effect
+#' @param draws Number of posterior draws.
+#' @param seed Optional integer seed. When given, the global random-number
+#'   state is restored on exit.
+#' @return A list with `grid`, a data frame like the one returned by
+#'   [estimate_effect()] with `estimate` but no interval columns, and
+#'   `draws`, a matrix with one row per row of `grid` and one column per
+#'   draw.
+#' @seealso [estimate_effect()] for pointwise intervals of the same
+#'   functionals.
+#' @export
+simulate_effect <- function(
+        object, terms=NULL, axes=list(), impulses=NULL, responses=NULL,
+        composition=c('term', 'total'),
+        grouping=c('population', 'deviation', 'conditional'), groups=NULL,
+        reference=list(), unconditional=FALSE, draws=1000L, n=200L, seed=NULL,
+        boundary=c('estimate', 'bound')
+) {
+    n <- .cdr_effect_validate(object, axes, reference, 0.95, n)
+    draws <- suppressWarnings(as.integer(draws))
+    if (length(draws) != 1L || is.na(draws) || draws < 1L) {
+        stop('draws must be a positive integer')
+    }
+    if (!is.null(seed)) {
+        if (!is.numeric(seed) || length(seed) != 1L || !is.finite(seed)) {
+            stop('seed must be one finite number')
+        }
+        exists <- exists('.Random.seed', envir=globalenv(), inherits=FALSE)
+        if (exists) state <- get('.Random.seed', envir=globalenv())
+        on.exit(if (exists) {
+            assign('.Random.seed', state, envir=globalenv())
+        } else rm('.Random.seed', envir=globalenv()), add=TRUE)
+        set.seed(as.integer(seed))
+    }
+    object <- .cdr_effect_restore_summaries(object, impulses, responses)
+    object <- .cdr_effect_boundary_object(object, match.arg(boundary), unconditional)
+    composition <- match.arg(composition)
+    grouping <- match.arg(grouping)
+    functionals <- .cdr_effect_all_functionals(
+        object, terms, axes, composition, grouping, groups, reference, n
+    )
+    simulated <- lapply(functionals, function(functional) {
+        coefficients <- stats::coef(object)[functional$index]
+        covariance <- .cdr_effect_covariance(object, functional$index, unconditional)
+        decomposition <- eigen((covariance + t(covariance)) / 2, symmetric=TRUE)
+        root <- decomposition$vectors %*%
+            diag(sqrt(pmax(0, decomposition$values)), length(coefficients))
+        normal <- matrix(stats::rnorm(length(coefficients) * draws),
+            length(coefficients), draws)
+        sample <- coefficients + root %*% normal
+        frame <- .cdr_effect_frame(
+            object, functional$term, functional, composition, grouping
+        )
+        frame$estimate <- drop(functional$design %*% coefficients)
+        list(frame=frame, draws=functional$design %*% sample)
+    })
+    grid <- .cdr_effect_bind(lapply(simulated, `[[`, 'frame'))
+    attr(grid, 'scale') <- 'linear-predictor'
+    attr(grid, 'reference') <- if (length(reference)) names(reference) else NULL
+    values <- do.call(rbind, lapply(simulated, `[[`, 'draws'))
+    dimnames(values) <- NULL
+    list(grid=grid, draws=values)
+}
+
 #' largest, and the reference distribution is chi-squared with that rank as
 #' its degrees of freedom. Use a grid dense enough to span the functional;
 #' the rank stops growing once it does. Penalized coefficients make this test

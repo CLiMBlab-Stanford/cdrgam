@@ -611,6 +611,13 @@ summary.cdrgam <- function(
 #' @param object A fitted `cdrgam` model.
 #' @param newdata A named list containing `impulses` and `responses` data
 #'   frames, or a response-side data frame for a native `mgcv` fit.
+#' @param type Prediction scale: `"response"`, `"link"`, or `"lpmatrix"` for
+#'   the linear-predictor matrices. Distributional fits return one matrix per
+#'   distribution parameter.
+#' @param se.fit Return standard errors with the predictions.
+#' @param chunk_size Number of response rows evaluated at a time.
+#' @param unconditional Use the covariance corrected for smoothing-parameter
+#'   uncertainty. Distributional fits do not provide it and stop.
 #' @param ... Prediction controls, including `type`, `se.fit`, `chunk_size`,
 #'   and `unconditional`.
 #' @return A prediction vector, linear-predictor matrix, or list containing

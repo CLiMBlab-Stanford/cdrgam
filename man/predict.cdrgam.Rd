@@ -43,6 +43,17 @@ frames, or a response-side data frame for a native \code{mgcv} fit.}
 
 \item{...}{Prediction controls, including \code{type}, \code{se.fit}, \code{chunk_size},
 and \code{unconditional}.}
+
+\item{type}{Prediction scale: \code{"response"}, \code{"link"}, or \code{"lpmatrix"} for
+the linear-predictor matrices. Distributional fits return one matrix per
+distribution parameter.}
+
+\item{se.fit}{Return standard errors with the predictions.}
+
+\item{chunk_size}{Number of response rows evaluated at a time.}
+
+\item{unconditional}{Use the covariance corrected for smoothing-parameter
+uncertainty. Distributional fits do not provide it and stop.}
 }
 \value{
 A prediction vector, linear-predictor matrix, or list containing

@@ -11,13 +11,13 @@ Source:
 [`DESCRIPTION`](https://github.com/CLiMBlab-Stanford/cdrgam/blob/dev/DESCRIPTION)
 
 Shain C (2026). *cdrgam: Continuous-Time Deconvolution Using Generalized
-Additive Models*. R package version 0.3.0,
+Additive Models*. R package version 0.4.0,
 <https://climblab-stanford.github.io/cdrgam/>.
 
     @Manual{,
       title = {cdrgam: Continuous-Time Deconvolution Using Generalized Additive Models},
       author = {Cory Shain},
       year = {2026},
-      note = {R package version 0.3.0},
+      note = {R package version 0.4.0},
       url = {https://climblab-stanford.github.io/cdrgam/},
     }

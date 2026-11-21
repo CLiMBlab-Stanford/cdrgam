@@ -1,6 +1,6 @@
 # Changelog
 
-## cdrgam (development version)
+## cdrgam 0.4.0
 
 - New
   [`simulate_effect()`](https://climblab.org/cdrgam/reference/simulate_effect.md)

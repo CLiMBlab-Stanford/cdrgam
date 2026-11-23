@@ -26,7 +26,8 @@ simulate_effect(
   n = 200L,
   seed = NULL,
   boundary = c("estimate", "bound"),
-  points = NULL
+  points = NULL,
+  coefficients = NULL
 )
 ```
 
@@ -114,6 +115,14 @@ simulate_effect(
   that is not a column takes its value from `axes`, and that request
   must resolve to one value. Use it to evaluate along a path through the
   axes, such as each predictor value at its own lag.
+
+- coefficients:
+
+  Optional coefficient draws from
+  [`sample_effect_coefficients()`](https://climblab.org/cdrgam/reference/sample_effect_coefficients.md).
+  When given, every functional is evaluated on those draws, so draws are
+  joint across functionals and across calls that share them; `draws`,
+  `seed`, and `unconditional` are then taken from the sample.
 
 ## Value
 

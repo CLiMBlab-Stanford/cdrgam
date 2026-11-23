@@ -2,6 +2,11 @@
 
 ## cdrgam (development version)
 
+- [`sample_effect_coefficients()`](https://climblab.org/cdrgam/reference/sample_effect_coefficients.md)
+  draws coefficients once for selected terms, and
+  `simulate_effect(coefficients=)` evaluates on those draws, so
+  simulations from separate calls are joint.
+
 - [`estimate_effect()`](https://climblab.org/cdrgam/reference/estimate_effect.md),
   [`simulate_effect()`](https://climblab.org/cdrgam/reference/simulate_effect.md),
   and

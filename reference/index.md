@@ -46,6 +46,8 @@
   : Compile untiled impulse and response streams for CDR-GAM fitting
 - [`response_scenarios()`](https://climblab.org/cdrgam/reference/response_scenarios.md)
   : Construct response-history scenarios
+- [`sample_effect_coefficients()`](https://climblab.org/cdrgam/reference/sample_effect_coefficients.md)
+  : Sample coefficients shared by several effect simulations
 - [`save_cdrgam_plots()`](https://climblab.org/cdrgam/reference/save_cdrgam_plots.md)
   : Save CDR plots to PDF or raster images
 - [`simulate_cdr()`](https://climblab.org/cdrgam/reference/simulate_cdr.md)

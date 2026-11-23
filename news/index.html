@@ -34,8 +34,8 @@
 
     <div class="section level2">
 <h2 class="pkg-version" data-toc-text="development version" id="cdrgam-development-version">cdrgam (development version)<a class="anchor" aria-label="anchor" href="#cdrgam-development-version"></a></h2>
-<ul><li>
-<code><a href="../reference/estimate_effect.html">estimate_effect()</a></code>, <code><a href="../reference/simulate_effect.html">simulate_effect()</a></code>, and <code><a href="../reference/test_effect.html">test_effect()</a></code> accept <code>points</code>, a data frame of evaluation points whose columns pair values of the axes they name, one result row per point. Use it to evaluate along a path through the axes, such as each predictor value at its own peak lag, without evaluating the crossed grid.</li>
+<ul><li><p><code><a href="../reference/sample_effect_coefficients.html">sample_effect_coefficients()</a></code> draws coefficients once for selected terms, and <code>simulate_effect(coefficients=)</code> evaluates on those draws, so simulations from separate calls are joint.</p></li>
+<li><p><code><a href="../reference/estimate_effect.html">estimate_effect()</a></code>, <code><a href="../reference/simulate_effect.html">simulate_effect()</a></code>, and <code><a href="../reference/test_effect.html">test_effect()</a></code> accept <code>points</code>, a data frame of evaluation points whose columns pair values of the axes they name, one result row per point. Use it to evaluate along a path through the axes, such as each predictor value at its own peak lag, without evaluating the crossed grid.</p></li>
 </ul></div>
     <div class="section level2">
 <h2 class="pkg-version" data-toc-text="0.4.0" id="cdrgam-040">cdrgam 0.4.0<a class="anchor" aria-label="anchor" href="#cdrgam-040"></a></h2>

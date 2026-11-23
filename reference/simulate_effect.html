@@ -72,7 +72,8 @@ references.</p>
 <span>  n <span class="op">=</span> <span class="fl">200L</span>,</span>
 <span>  seed <span class="op">=</span> <span class="cn">NULL</span>,</span>
 <span>  boundary <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/c.html" class="external-link">c</a></span><span class="op">(</span><span class="st">"estimate"</span>, <span class="st">"bound"</span><span class="op">)</span>,</span>
-<span>  points <span class="op">=</span> <span class="cn">NULL</span></span>
+<span>  points <span class="op">=</span> <span class="cn">NULL</span>,</span>
+<span>  coefficients <span class="op">=</span> <span class="cn">NULL</span></span>
 <span><span class="op">)</span></span></code></pre></div>
     </div>
 
@@ -159,6 +160,14 @@ paired rather than crossed, so the result has one row per point. Each
 axis that is not a column takes its value from <code>axes</code>, and that request
 must resolve to one value. Use it to evaluate along a path through the
 axes, such as each predictor value at its own lag.</p></dd>
+
+
+<dt id="arg-coefficients">coefficients<a class="anchor" aria-label="anchor" href="#arg-coefficients"></a></dt>
+<dd><p>Optional coefficient draws from
+<code><a href="sample_effect_coefficients.html">sample_effect_coefficients()</a></code>. When given, every functional is
+evaluated on those draws, so draws are joint across functionals and
+across calls that share them; <code>draws</code>, <code>seed</code>, and <code>unconditional</code> are
+then taken from the sample.</p></dd>
 
 </dl></div>
     <div class="section level2">

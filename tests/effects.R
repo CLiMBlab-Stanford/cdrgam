@@ -178,3 +178,63 @@ bad_draws <- tryCatch(
     do.call(simulate_effect, c(request, list(draws=0L))), error=conditionMessage
 )
 stopifnot(grepl('draws must be a positive integer', bad_draws, fixed=TRUE))
+
+# points evaluates paired axis values, one row per point, and matches the
+# same rows of the crossed grid, with references and posterior draws.
+grid <- estimate_effect(
+    fit, terms=list(predictors='x'), composition='total',
+    axes=list(lag=list(values=c(0, 0.5, 1)), predictors=list(x=list(values=c(-1, 1)))),
+    reference=list(x=list(at=0))
+)
+path <- data.frame(lag=c(1, 0, 0.5), x=c(-1, 1, 1))
+paired <- estimate_effect(
+    fit, terms=list(predictors='x'), composition='total', points=path,
+    reference=list(x=list(at=0))
+)
+rows <- match(paste(path$lag, path$x), paste(grid$lag, grid$x))
+stopifnot(
+    nrow(paired) == 3L,
+    isTRUE(all.equal(paired$lag, path$lag)), isTRUE(all.equal(paired$x, path$x)),
+    isTRUE(all.equal(paired$estimate, grid$estimate[rows])),
+    isTRUE(all.equal(paired$se, grid$se[rows])),
+    all(paired$x_reference == 0)
+)
+# Axes that are not columns take one value from axes.
+held <- estimate_effect(
+    fit, terms=list(predictors='x'), points=data.frame(lag=c(0, 1)),
+    axes=list(predictors=list(x=list(at=1)))
+)
+crossed <- estimate_effect(
+    fit, terms=list(predictors='x'),
+    axes=list(lag=list(values=c(0, 1)), predictors=list(x=list(at=1)))
+)
+stopifnot(isTRUE(all.equal(held$estimate, crossed$estimate)))
+drawn <- simulate_effect(
+    fit, terms=list(predictors='x'), points=path, draws=50L, seed=3
+)
+stopifnot(identical(dim(drawn$draws), c(3L, 50L)), nrow(drawn$grid) == 3L)
+tested <- test_effect(fit, terms=list(predictors='x'), points=path)
+stopifnot(tested$points == 3L)
+expect_error_text <- function(expression, pattern) {
+    message <- tryCatch({
+        force(expression)
+        ''
+    }, error=conditionMessage)
+    stopifnot(grepl(pattern, message, fixed=TRUE))
+}
+expect_error_text(
+    estimate_effect(fit, terms=list(predictors='x'), points=data.frame(x=1)),
+    'Axis lag is not a points column, so it must resolve to one value'
+)
+expect_error_text(
+    estimate_effect(fit, terms=list(predictors='x'), points=data.frame(lag=0, y=1)),
+    'points columns are not evaluation axes of the term: y'
+)
+expect_error_text(
+    estimate_effect(fit, terms=list(predictors='x'), points=data.frame(lag=NA_real_)),
+    'points column lag must contain finite numbers'
+)
+expect_error_text(
+    estimate_effect(fit, points=data.frame()),
+    'points must be a data frame with at least one row'
+)

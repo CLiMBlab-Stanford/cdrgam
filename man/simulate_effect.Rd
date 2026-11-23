@@ -18,7 +18,8 @@ simulate_effect(
   draws = 1000L,
   n = 200L,
   seed = NULL,
-  boundary = c("estimate", "bound")
+  boundary = c("estimate", "bound"),
+  points = NULL
 )
 }
 \arguments{
@@ -67,6 +68,13 @@ component the data still support, while the other smoothing parameters
 stay at their estimates. Compare the two to check whether conclusions
 depend on treating those variance components as zero. \code{"bound"} requires
 a sparse Gaussian REML fit with \code{sparse_control$boundary_sensitivity = TRUE} and \code{unconditional = FALSE}.}
+
+\item{points}{Optional data frame of evaluation points, one per row, with
+columns named by axis, such as \code{lag} or a predictor. Its columns are
+paired rather than crossed, so the result has one row per point. Each
+axis that is not a column takes its value from \code{axes}, and that request
+must resolve to one value. Use it to evaluate along a path through the
+axes, such as each predictor value at its own lag.}
 }
 \value{
 A list with \code{grid}, a data frame like the one returned by

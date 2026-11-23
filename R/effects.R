@@ -249,7 +249,9 @@ effect_catalog <- function(object, impulses=NULL, responses=NULL) {
     } else stop('Axis request must define at, values, quantiles, or grid=fitted')
 }
 
-.cdr_effect_grid <- function(info, axes, n) {
+# With `points`, its columns give paired values of the axes they name, one
+# evaluation point per row, and every other axis must resolve to one value.
+.cdr_effect_grid <- function(info, axes, n, points=NULL) {
     metadata <- .cdr_effect_axes(info)
     linear <- unique(c(
         names(info$linear_predictor_summaries), info$linear_predictors
@@ -268,16 +270,40 @@ effect_catalog <- function(object, impulses=NULL, responses=NULL) {
             )
         }))
     }
-    values <- lapply(metadata, function(axis) {
+    axis_names <- vapply(metadata, .cdr_effect_axis_name, character(1))
+    if (!is.null(points)) {
+        unknown <- setdiff(names(points), axis_names)
+        if (length(unknown)) stop(
+            'points columns are not evaluation axes of the term: ',
+            paste(unknown, collapse=', ')
+        )
+    }
+    values <- lapply(seq_along(metadata), function(index) {
+        name <- axis_names[[index]]
+        if (name %in% names(points)) {
+            value <- points[[name]]
+            if (!is.numeric(value) || any(!is.finite(value))) {
+                stop('points column ', name, ' must contain finite numbers')
+            }
+            return(as.numeric(value))
+        }
         value <- .cdr_effect_axis_values(
-            axis, .cdr_effect_axis_request(axes, axis), n
+            metadata[[index]], .cdr_effect_axis_request(axes, metadata[[index]]), n
         )
         if (!length(value) || any(!is.finite(value))) {
             stop('Effect axes must contain finite values')
         }
+        if (!is.null(points) && length(value) != 1L) stop(
+            'Axis ', name, ' is not a points column, so it must resolve to one value'
+        )
         value
     })
-    names(values) <- vapply(metadata, .cdr_effect_axis_name, character(1))
+    names(values) <- axis_names
+    if (!is.null(points)) {
+        return(data.frame(
+            lapply(values, rep_len, length.out=nrow(points)), check.names=FALSE
+        ))
+    }
     do.call(expand.grid, c(
         values, list(KEEP.OUT.ATTRS=FALSE, stringsAsFactors=FALSE)
     ))
@@ -488,10 +514,11 @@ effect_catalog <- function(object, impulses=NULL, responses=NULL) {
 # holds the evaluation grid, the reference grid, and the design matrix over
 # the coefficient indices it uses.
 .cdr_effect_functionals <- function(
-        object, index, axes, composition, grouping, groups, reference, n
+        object, index, axes, composition, grouping, groups, reference, n,
+        points=NULL
 ) {
     info <- object$cdrgam$terms[[index]]
-    grid <- .cdr_effect_grid(info, axes, n)
+    grid <- .cdr_effect_grid(info, axes, n, points)
     reference_grid <- .cdr_effect_reference_grid(info, grid, reference, n)
     grouped <- length(info$group_levels) > 0L
     if (!grouped && !identical(grouping, 'population')) stop(
@@ -545,9 +572,14 @@ effect_catalog <- function(object, impulses=NULL, responses=NULL) {
     output
 }
 
-.cdr_effect_validate <- function(object, axes, reference, level, n) {
+.cdr_effect_validate <- function(object, axes, reference, level, n, points=NULL) {
     if (!is_cdrgam(object)) stop('object must be a fitted cdrgam model')
     if (!is.list(axes)) stop('axes must be a list')
+    if (!is.null(points) && (!is.data.frame(points) || !nrow(points) ||
+            !ncol(points) || is.null(names(points)) || any(!nzchar(names(points))) ||
+            anyDuplicated(names(points)))) {
+        stop('points must be a data frame with at least one row and uniquely named columns')
+    }
     if (!is.list(reference) || (length(reference) && (is.null(names(reference)) ||
             any(!nzchar(names(reference))) || anyDuplicated(names(reference))))) {
         stop('reference must be a uniquely named list')
@@ -560,13 +592,15 @@ effect_catalog <- function(object, impulses=NULL, responses=NULL) {
 }
 
 .cdr_effect_all_functionals <- function(
-        object, terms, axes, composition, grouping, groups, reference, n
+        object, terms, axes, composition, grouping, groups, reference, n,
+        points=NULL
 ) {
     indices <- .cdr_effect_select(object, terms)
     output <- list()
     for (index in indices) {
         functionals <- .cdr_effect_functionals(
-            object, index, axes, composition, grouping, groups, reference, n
+            object, index, axes, composition, grouping, groups, reference, n,
+            points
         )
         for (functional in functionals) {
             if (!is.null(functional$reference)) {
@@ -634,6 +668,12 @@ effect_catalog <- function(object, impulses=NULL, responses=NULL) {
 #'   summaries from models fitted before summaries were stored.
 #' @param axes Named axis requests. Predictor requests are nested under
 #'   `predictors`; `"*"` supplies a fallback for every predictor axis.
+#' @param points Optional data frame of evaluation points, one per row, with
+#'   columns named by axis, such as `lag` or a predictor. Its columns are
+#'   paired rather than crossed, so the result has one row per point. Each
+#'   axis that is not a column takes its value from `axes`, and that request
+#'   must resolve to one value. Use it to evaluate along a path through the
+#'   axes, such as each predictor value at its own lag.
 #' @param composition Return the selected term alone or add its hierarchy of
 #'   fitted marginal terms.
 #' @param grouping Return population, grouped-deviation, or conditional effects.
@@ -669,15 +709,15 @@ estimate_effect <- function(
         composition=c('term', 'total'),
         grouping=c('population', 'deviation', 'conditional'), groups=NULL,
         reference=list(), se=TRUE, unconditional=FALSE, level=0.95, n=200L,
-        boundary=c('estimate', 'bound')
+        boundary=c('estimate', 'bound'), points=NULL
 ) {
-    n <- .cdr_effect_validate(object, axes, reference, level, n)
+    n <- .cdr_effect_validate(object, axes, reference, level, n, points)
     object <- .cdr_effect_restore_summaries(object, impulses, responses)
     object <- .cdr_effect_boundary_object(object, match.arg(boundary), unconditional)
     composition <- match.arg(composition)
     grouping <- match.arg(grouping)
     functionals <- .cdr_effect_all_functionals(
-        object, terms, axes, composition, grouping, groups, reference, n
+        object, terms, axes, composition, grouping, groups, reference, n, points
     )
     multiplier <- stats::qnorm((1 + level) / 2)
     frames <- lapply(functionals, function(functional) {
@@ -742,9 +782,9 @@ simulate_effect <- function(
         composition=c('term', 'total'),
         grouping=c('population', 'deviation', 'conditional'), groups=NULL,
         reference=list(), unconditional=FALSE, draws=1000L, n=200L, seed=NULL,
-        boundary=c('estimate', 'bound')
+        boundary=c('estimate', 'bound'), points=NULL
 ) {
-    n <- .cdr_effect_validate(object, axes, reference, 0.95, n)
+    n <- .cdr_effect_validate(object, axes, reference, 0.95, n, points)
     draws <- suppressWarnings(as.integer(draws))
     if (length(draws) != 1L || is.na(draws) || draws < 1L) {
         stop('draws must be a positive integer')
@@ -765,7 +805,7 @@ simulate_effect <- function(
     composition <- match.arg(composition)
     grouping <- match.arg(grouping)
     functionals <- .cdr_effect_all_functionals(
-        object, terms, axes, composition, grouping, groups, reference, n
+        object, terms, axes, composition, grouping, groups, reference, n, points
     )
     simulated <- lapply(functionals, function(functional) {
         coefficients <- stats::coef(object)[functional$index]
@@ -823,9 +863,9 @@ test_effect <- function(
         composition=c('term', 'total'),
         grouping=c('population', 'deviation', 'conditional'), groups=NULL,
         reference=list(), unconditional=FALSE, n=50L, tolerance=1e-8,
-        boundary=c('estimate', 'bound')
+        boundary=c('estimate', 'bound'), points=NULL
 ) {
-    n <- .cdr_effect_validate(object, axes, reference, 0.95, n)
+    n <- .cdr_effect_validate(object, axes, reference, 0.95, n, points)
     if (!is.numeric(tolerance) || length(tolerance) != 1L ||
             !is.finite(tolerance) || tolerance <= 0 || tolerance >= 1) {
         stop('tolerance must lie strictly between zero and one')
@@ -835,7 +875,7 @@ test_effect <- function(
     composition <- match.arg(composition)
     grouping <- match.arg(grouping)
     functionals <- .cdr_effect_all_functionals(
-        object, terms, axes, composition, grouping, groups, reference, n
+        object, terms, axes, composition, grouping, groups, reference, n, points
     )
     rows <- lapply(functionals, function(functional) {
         estimate <- drop(functional$design %*% stats::coef(object)[functional$index])

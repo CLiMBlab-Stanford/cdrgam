@@ -1,3 +1,11 @@
+# cdrgam (development version)
+
+- `estimate_effect()`, `simulate_effect()`, and `test_effect()` accept
+  `points`, a data frame of evaluation points whose columns pair values of
+  the axes they name, one result row per point. Use it to evaluate along a
+  path through the axes, such as each predictor value at its own peak lag,
+  without evaluating the crossed grid.
+
 # cdrgam 0.4.0
 
 - New `simulate_effect()` draws coefficient vectors from the approximate

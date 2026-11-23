@@ -748,6 +748,73 @@ estimate_effect <- function(
     result
 }
 
+# Draws of the coefficients at `indices` from N(beta-hat, V), one column per
+# draw, through the eigendecomposition of V.
+.cdr_effect_sample <- function(object, indices, unconditional, draws) {
+    coefficients <- stats::coef(object)[indices]
+    covariance <- .cdr_effect_covariance(object, indices, unconditional)
+    decomposition <- eigen((covariance + t(covariance)) / 2, symmetric=TRUE)
+    root <- decomposition$vectors %*%
+        diag(sqrt(pmax(0, decomposition$values)), length(coefficients))
+    normal <- matrix(stats::rnorm(length(coefficients) * draws),
+        length(coefficients), draws)
+    coefficients + root %*% normal
+}
+
+#' Sample coefficients shared by several effect simulations
+#'
+#' Draws once from the approximate coefficient posterior
+#' \eqn{N(\hat\beta, V)}, restricted to the coefficients that the selected
+#' terms use under `composition` and `grouping`. Passing the result to
+#' [simulate_effect()] as `coefficients` evaluates every call on the same
+#' draws, so summaries computed from different calls are joint: for
+#' example, the lag at which one contrast peaks in each draw and another
+#' effect at that lag in the same draw.
+#'
+#' @inheritParams simulate_effect
+#' @return An object of class `cdrgam_coefficient_draws`: a list with
+#'   `index`, the coefficient positions; `draws`, a matrix with one row per
+#'   coefficient in `index` and one column per draw; `unconditional`; and
+#'   `boundary`.
+#' @seealso [simulate_effect()].
+#' @export
+sample_effect_coefficients <- function(
+        object, terms=NULL, impulses=NULL, responses=NULL,
+        composition=c('term', 'total'),
+        grouping=c('population', 'deviation', 'conditional'), groups=NULL,
+        unconditional=FALSE, draws=1000L, seed=NULL,
+        boundary=c('estimate', 'bound')
+) {
+    .cdr_effect_validate(object, list(), list(), 0.95, 2L, NULL)
+    draws <- suppressWarnings(as.integer(draws))
+    if (length(draws) != 1L || is.na(draws) || draws < 1L) {
+        stop('draws must be a positive integer')
+    }
+    if (!is.null(seed)) {
+        if (!is.numeric(seed) || length(seed) != 1L || !is.finite(seed)) {
+            stop('seed must be one finite number')
+        }
+        exists <- exists('.Random.seed', envir=globalenv(), inherits=FALSE)
+        if (exists) state <- get('.Random.seed', envir=globalenv())
+        on.exit(if (exists) {
+            assign('.Random.seed', state, envir=globalenv())
+        } else rm('.Random.seed', envir=globalenv()), add=TRUE)
+        set.seed(as.integer(seed))
+    }
+    boundary <- match.arg(boundary)
+    object <- .cdr_effect_restore_summaries(object, impulses, responses)
+    object <- .cdr_effect_boundary_object(object, boundary, unconditional)
+    functionals <- .cdr_effect_all_functionals(
+        object, terms, list(), match.arg(composition), match.arg(grouping), groups,
+        list(), 2L
+    )
+    index <- sort(unique(unlist(lapply(functionals, `[[`, 'index'))))
+    structure(list(
+        index=index, draws=.cdr_effect_sample(object, index, unconditional, draws),
+        unconditional=isTRUE(unconditional), boundary=boundary
+    ), class='cdrgam_coefficient_draws')
+}
+
 #' Simulate fitted effects from the coefficient posterior
 #'
 #' Draws coefficient vectors from the approximate posterior
@@ -770,6 +837,11 @@ estimate_effect <- function(
 #' @param draws Number of posterior draws.
 #' @param seed Optional integer seed. When given, the global random-number
 #'   state is restored on exit.
+#' @param coefficients Optional coefficient draws from
+#'   [sample_effect_coefficients()]. When given, every functional is
+#'   evaluated on those draws, so draws are joint across functionals and
+#'   across calls that share them; `draws`, `seed`, and `unconditional` are
+#'   then taken from the sample.
 #' @return A list with `grid`, a data frame like the one returned by
 #'   [estimate_effect()] with `estimate` but no interval columns, and
 #'   `draws`, a matrix with one row per row of `grid` and one column per
@@ -782,9 +854,21 @@ simulate_effect <- function(
         composition=c('term', 'total'),
         grouping=c('population', 'deviation', 'conditional'), groups=NULL,
         reference=list(), unconditional=FALSE, draws=1000L, n=200L, seed=NULL,
-        boundary=c('estimate', 'bound'), points=NULL
+        boundary=c('estimate', 'bound'), points=NULL, coefficients=NULL
 ) {
     n <- .cdr_effect_validate(object, axes, reference, 0.95, n, points)
+    boundary <- match.arg(boundary)
+    if (!is.null(coefficients)) {
+        if (!inherits(coefficients, 'cdrgam_coefficient_draws')) {
+            stop('coefficients must come from sample_effect_coefficients()')
+        }
+        if (!identical(coefficients$boundary, boundary)) stop(
+            'coefficients were sampled with boundary = "', coefficients$boundary, '"'
+        )
+        unconditional <- coefficients$unconditional
+        draws <- ncol(coefficients$draws)
+        seed <- NULL
+    }
     draws <- suppressWarnings(as.integer(draws))
     if (length(draws) != 1L || is.na(draws) || draws < 1L) {
         stop('draws must be a positive integer')
@@ -801,21 +885,25 @@ simulate_effect <- function(
         set.seed(as.integer(seed))
     }
     object <- .cdr_effect_restore_summaries(object, impulses, responses)
-    object <- .cdr_effect_boundary_object(object, match.arg(boundary), unconditional)
+    object <- .cdr_effect_boundary_object(object, boundary, unconditional)
     composition <- match.arg(composition)
     grouping <- match.arg(grouping)
     functionals <- .cdr_effect_all_functionals(
         object, terms, axes, composition, grouping, groups, reference, n, points
     )
+    shared <- coefficients
     simulated <- lapply(functionals, function(functional) {
         coefficients <- stats::coef(object)[functional$index]
-        covariance <- .cdr_effect_covariance(object, functional$index, unconditional)
-        decomposition <- eigen((covariance + t(covariance)) / 2, symmetric=TRUE)
-        root <- decomposition$vectors %*%
-            diag(sqrt(pmax(0, decomposition$values)), length(coefficients))
-        normal <- matrix(stats::rnorm(length(coefficients) * draws),
-            length(coefficients), draws)
-        sample <- coefficients + root %*% normal
+        sample <- if (is.null(shared)) {
+            .cdr_effect_sample(object, functional$index, unconditional, draws)
+        } else {
+            rows <- match(functional$index, shared$index)
+            if (anyNA(rows)) stop(
+                'coefficients do not cover term ', functional$term,
+                '; sample them for every term this call evaluates'
+            )
+            shared$draws[rows, , drop=FALSE]
+        }
         frame <- .cdr_effect_frame(
             object, functional$term, functional, composition, grouping
         )

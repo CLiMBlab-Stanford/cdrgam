@@ -19,7 +19,8 @@ simulate_effect(
   n = 200L,
   seed = NULL,
   boundary = c("estimate", "bound"),
-  points = NULL
+  points = NULL,
+  coefficients = NULL
 )
 }
 \arguments{
@@ -75,6 +76,12 @@ paired rather than crossed, so the result has one row per point. Each
 axis that is not a column takes its value from \code{axes}, and that request
 must resolve to one value. Use it to evaluate along a path through the
 axes, such as each predictor value at its own lag.}
+
+\item{coefficients}{Optional coefficient draws from
+\code{\link[=sample_effect_coefficients]{sample_effect_coefficients()}}. When given, every functional is
+evaluated on those draws, so draws are joint across functionals and
+across calls that share them; \code{draws}, \code{seed}, and \code{unconditional} are
+then taken from the sample.}
 }
 \value{
 A list with \code{grid}, a data frame like the one returned by

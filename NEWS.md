@@ -1,5 +1,9 @@
 # cdrgam (development version)
 
+- `sample_effect_coefficients()` draws coefficients once for selected terms,
+  and `simulate_effect(coefficients=)` evaluates on those draws, so
+  simulations from separate calls are joint.
+
 - `estimate_effect()`, `simulate_effect()`, and `test_effect()` accept
   `points`, a data frame of evaluation points whose columns pair values of
   the axes they name, one result row per point. Use it to evaluate along a

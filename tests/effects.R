@@ -179,6 +179,37 @@ bad_draws <- tryCatch(
 )
 stopifnot(grepl('draws must be a positive integer', bad_draws, fixed=TRUE))
 
+# Shared coefficient draws make separate simulations joint: the same draw
+# of one functional, evaluated by two calls over overlapping rows, agrees.
+# Their moments match the functional's, and a term the sample does not cover
+# is an error.
+shared <- sample_effect_coefficients(
+    fit, terms=list(predictors='x'), composition='total', draws=4000L, seed=5
+)
+first <- do.call(simulate_effect, c(request, list(coefficients=shared)))
+lagged <- simulate_effect(
+    fit, terms=list(predictors='x'), composition='total', coefficients=shared,
+    reference=request$reference,
+    axes=list(lag=list(values=target$lag[2:3]), predictors=request$axes$predictors)
+)
+stopifnot(
+    inherits(shared, 'cdrgam_coefficient_draws'),
+    identical(dim(first$draws), c(nrow(target), 4000L)),
+    isTRUE(all.equal(lagged$draws, first$draws[2:3, ])),
+    max(abs(rowMeans(first$draws) - target$estimate) / target$se) < 0.1,
+    max(abs(apply(first$draws, 1L, stats::sd) / target$se - 1)) < 0.05
+)
+narrow <- sample_effect_coefficients(
+    fit, terms=list(predictors='x'), composition='term', draws=10L, seed=5
+)
+if (length(narrow$index) < length(shared$index)) {
+    uncovered <- tryCatch(
+        do.call(simulate_effect, c(request, list(coefficients=narrow))),
+        error=conditionMessage
+    )
+    stopifnot(grepl('coefficients do not cover term', uncovered, fixed=TRUE))
+}
+
 # points evaluates paired axis values, one row per point, and matches the
 # same rows of the crossed grid, with references and posterior draws.
 grid <- estimate_effect(

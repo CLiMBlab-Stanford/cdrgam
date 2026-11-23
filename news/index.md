@@ -1,5 +1,16 @@
 # Changelog
 
+## cdrgam (development version)
+
+- [`estimate_effect()`](https://climblab.org/cdrgam/reference/estimate_effect.md),
+  [`simulate_effect()`](https://climblab.org/cdrgam/reference/simulate_effect.md),
+  and
+  [`test_effect()`](https://climblab.org/cdrgam/reference/test_effect.md)
+  accept `points`, a data frame of evaluation points whose columns pair
+  values of the axes they name, one result row per point. Use it to
+  evaluate along a path through the axes, such as each predictor value
+  at its own peak lag, without evaluating the crossed grid.
+
 ## cdrgam 0.4.0
 
 - New

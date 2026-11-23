@@ -23,7 +23,8 @@ estimate_effect(
   unconditional = FALSE,
   level = 0.95,
   n = 200L,
-  boundary = c("estimate", "bound")
+  boundary = c("estimate", "bound"),
+  points = NULL
 )
 ```
 
@@ -101,6 +102,15 @@ estimate_effect(
   sparse Gaussian REML fit with
   `sparse_control$boundary_sensitivity = TRUE` and
   `unconditional = FALSE`.
+
+- points:
+
+  Optional data frame of evaluation points, one per row, with columns
+  named by axis, such as `lag` or a predictor. Its columns are paired
+  rather than crossed, so the result has one row per point. Each axis
+  that is not a column takes its value from `axes`, and that request
+  must resolve to one value. Use it to evaluate along a path through the
+  axes, such as each predictor value at its own lag.
 
 ## Value
 

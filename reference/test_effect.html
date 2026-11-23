@@ -35,7 +35,7 @@ returned per selected term and grouping level."></head><body>
   <main id="main" class="col-md-9"><div class="page-header">
 
       <h1>Test fitted effects jointly over declarative axis grids</h1>
-      <small class="dont-index">Source: <a href="https://github.com/CLiMBlab-Stanford/cdrgam/blob/main/R/effects.R" class="external-link"><code>R/effects.R</code></a></small>
+      <small class="dont-index">Source: <a href="https://github.com/CLiMBlab-Stanford/cdrgam/blob/dev/R/effects.R" class="external-link"><code>R/effects.R</code></a></small>
       <div class="d-none name"><code>test_effect.Rd</code></div>
     </div>
 
@@ -61,7 +61,8 @@ returned per selected term and grouping level.</p>
 <span>  unconditional <span class="op">=</span> <span class="cn">FALSE</span>,</span>
 <span>  n <span class="op">=</span> <span class="fl">50L</span>,</span>
 <span>  tolerance <span class="op">=</span> <span class="fl">1e-08</span>,</span>
-<span>  boundary <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/c.html" class="external-link">c</a></span><span class="op">(</span><span class="st">"estimate"</span>, <span class="st">"bound"</span><span class="op">)</span></span>
+<span>  boundary <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/c.html" class="external-link">c</a></span><span class="op">(</span><span class="st">"estimate"</span>, <span class="st">"bound"</span><span class="op">)</span>,</span>
+<span>  points <span class="op">=</span> <span class="cn">NULL</span></span>
 <span><span class="op">)</span></span></code></pre></div>
     </div>
 
@@ -134,6 +135,15 @@ component the data still support, while the other smoothing parameters
 stay at their estimates. Compare the two to check whether conclusions
 depend on treating those variance components as zero. <code>"bound"</code> requires
 a sparse Gaussian REML fit with <code>sparse_control$boundary_sensitivity = TRUE</code> and <code>unconditional = FALSE</code>.</p></dd>
+
+
+<dt id="arg-points">points<a class="anchor" aria-label="anchor" href="#arg-points"></a></dt>
+<dd><p>Optional data frame of evaluation points, one per row, with
+columns named by axis, such as <code>lag</code> or a predictor. Its columns are
+paired rather than crossed, so the result has one row per point. Each
+axis that is not a column takes its value from <code>axes</code>, and that request
+must resolve to one value. Use it to evaluate along a path through the
+axes, such as each predictor value at its own lag.</p></dd>
 
 </dl></div>
     <div class="section level2">

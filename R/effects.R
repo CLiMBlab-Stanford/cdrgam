@@ -22,6 +22,42 @@
     if (identical(axis$role, 'lag')) 'lag' else axis$variable
 }
 
+# The term specifications aligned with the fitted terms, or NULL when they
+# cannot be aligned. Boundary reduction can remove whole terms after the
+# specifications were recorded; fits from before the specifications were
+# subset with them hold one specification per original term. Those are
+# aligned in order by predictors and grouping factor, since the fitted terms
+# keep their original relative order.
+.cdr_effect_specifications <- function(object) {
+    specifications <- object$cdrgam$preparation$specification
+    terms <- object$cdrgam$terms
+    if (is.null(specifications)) return(NULL)
+    if (length(specifications) == length(terms)) return(specifications)
+    if (length(specifications) < length(terms)) return(NULL)
+    key <- function(predictors, group) paste(
+        paste(sort(unique(as.character(predictors))), collapse='\034'),
+        if (is.null(group)) '' else as.character(group), sep='\035'
+    )
+    keys <- vapply(specifications, function(specification) {
+        key(.cdr_effect_spec_predictors(specification), specification$group)
+    }, character(1))
+    aligned <- vector('list', length(terms))
+    position <- 0L
+    for (index in seq_along(terms)) {
+        info <- terms[[index]]
+        target <- key(unique(c(
+            info$linear_predictors,
+            vapply(Filter(function(axis) identical(axis$role, 'predictor'),
+                .cdr_effect_axes(info)), `[[`, character(1), 'variable')
+        )), info$group)
+        found <- which(keys[seq_along(keys) > position] == target)
+        if (!length(found)) return(NULL)
+        position <- position + found[[1L]]
+        aligned[[index]] <- specifications[[position]]
+    }
+    aligned
+}
+
 .cdr_effect_spec_predictors <- function(specification) {
     if (is.null(specification)) return(character())
     if (!is.null(specification$predictors)) {
@@ -65,7 +101,7 @@
     if (!is.null(responses) && !is.data.frame(responses)) {
         stop('responses must be a data frame')
     }
-    specifications <- object$cdrgam$preparation$specification
+    specifications <- .cdr_effect_specifications(object)
     for (index in seq_along(object$cdrgam$terms)) {
         info <- object$cdrgam$terms[[index]]
         specification <- specifications[[index]]
@@ -114,11 +150,11 @@ effect_catalog <- function(object, impulses=NULL, responses=NULL) {
     object <- .cdr_effect_restore_summaries(object, impulses, responses)
     terms <- object$cdrgam$terms
     labels <- object$cdrgam$term_labels
-    specifications <- object$cdrgam$preparation$specification
+    specifications <- .cdr_effect_specifications(object)
     if (!length(terms) || length(terms) != length(labels)) {
         stop('The fitted model does not contain stored IRF metadata')
     }
-    if (is.null(specifications) || length(specifications) != length(terms)) {
+    if (is.null(specifications)) {
         specifications <- rep.int(list(NULL), length(terms))
     }
     rows <- lapply(seq_along(terms), function(index) {
@@ -341,11 +377,8 @@ effect_catalog <- function(object, impulses=NULL, responses=NULL) {
 # with matching smooth or linear treatment. A time-invariant term is included
 # below a time-varying one; the reverse is not.
 .cdr_effect_hierarchy <- function(object, index) {
-    specifications <- object$cdrgam$preparation$specification
-    if (is.null(specifications) ||
-            length(specifications) != length(object$cdrgam$terms)) {
-        return(integer())
-    }
+    specifications <- .cdr_effect_specifications(object)
+    if (is.null(specifications)) return(integer())
     selected <- specifications[[index]]
     predictors <- .cdr_effect_spec_predictors(selected)
     flags <- .cdr_effect_smooth_flags(selected)
@@ -371,9 +404,8 @@ effect_catalog <- function(object, impulses=NULL, responses=NULL) {
 }
 
 .cdr_effect_term_predictors <- function(object, index) {
-    specifications <- object$cdrgam$preparation$specification
-    if (is.null(specifications) ||
-            length(specifications) != length(object$cdrgam$terms)) {
+    specifications <- .cdr_effect_specifications(object)
+    if (is.null(specifications)) {
         info <- object$cdrgam$terms[[index]]
         return(unique(c(
             info$linear_predictors,

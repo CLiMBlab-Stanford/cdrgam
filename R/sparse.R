@@ -2690,6 +2690,10 @@
     }
     keep <- setdiff(seq_along(source_terms), unique(removed))
     design$terms <- source_terms[keep]
+    # Effect hierarchies pair specifications with terms by position.
+    if (length(design$specification) == length(source_terms)) {
+        design$specification <- design$specification[keep]
+    }
     if (!is.null(source_constraints)) {
         design$identifiability$constraints <- source_constraints[keep]
     }

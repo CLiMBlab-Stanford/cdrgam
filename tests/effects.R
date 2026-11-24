@@ -43,6 +43,26 @@ stopifnot(
     all(curve$lower <= curve$estimate & curve$estimate <= curve$upper)
 )
 
+# A term that boundary reduction removed leaves an extra specification in
+# fits saved before the specifications were subset with the terms. Total
+# composition still finds the hierarchy instead of falling back to the term.
+removed <- fit
+specifications <- removed$cdrgam$preparation$specification
+removed$cdrgam$preparation$specification <- c(
+    specifications[1L],
+    list(utils::modifyList(specifications[[length(specifications)]], list(group='subject'))),
+    specifications[-1L]
+)
+stopifnot(isTRUE(all.equal(
+    estimate_effect(
+        removed, terms=list(predictors='x'),
+        axes=list(lag=list(grid='fitted', n=21L),
+            predictors=list(x=list(at=list(summary='mean', `offset-sd`=1)))),
+        composition='total'
+    )$estimate,
+    curve$estimate
+)))
+
 surface <- estimate_effect(
     fit,
     terms=list(predictors='x'),

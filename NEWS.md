@@ -1,5 +1,12 @@
 # cdrgam (development version)
 
+- `composition = "total"` again adds a term's hierarchy in fits where
+  boundary reduction removed whole terms, such as zero-variance by-subject
+  deviations. Their term specifications were no longer aligned with the
+  fitted terms, so totals silently equaled the term alone. Fits now drop the
+  removed terms' specifications, and fits saved earlier are aligned by
+  predictors and grouping factor when effects are computed.
+
 - `sample_effect_coefficients()` draws coefficients once for selected terms,
   and `simulate_effect(coefficients=)` evaluates on those draws, so
   simulations from separate calls are joint.

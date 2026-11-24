@@ -66,7 +66,8 @@ offset.</p>
 <span>  level <span class="op">=</span> <span class="fl">0.95</span>,</span>
 <span>  n <span class="op">=</span> <span class="fl">200L</span>,</span>
 <span>  boundary <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/c.html" class="external-link">c</a></span><span class="op">(</span><span class="st">"estimate"</span>, <span class="st">"bound"</span><span class="op">)</span>,</span>
-<span>  points <span class="op">=</span> <span class="cn">NULL</span></span>
+<span>  points <span class="op">=</span> <span class="cn">NULL</span>,</span>
+<span>  covariance <span class="op">=</span> <span class="cn">FALSE</span></span>
 <span><span class="op">)</span></span></code></pre></div>
     </div>
 
@@ -153,13 +154,25 @@ axis that is not a column takes its value from <code>axes</code>, and that reque
 must resolve to one value. Use it to evaluate along a path through the
 axes, such as each predictor value at its own lag.</p></dd>
 
+
+<dt id="arg-covariance">covariance<a class="anchor" aria-label="anchor" href="#arg-covariance"></a></dt>
+<dd><p>Also return the joint covariance of every row's estimate,
+as the matrix attribute <code>covariance</code>, with one row and column per result
+row in the same order. Rows from different terms or groups are covariant
+when they share coefficients. The matrix has as many rows and columns as
+the result, so request it for small grids, such as the points a
+simultaneous band is computed over. It requires <code>se = TRUE</code>.</p></dd>
+
 </dl></div>
     <div class="section level2">
     <h2 id="value">Value<a class="anchor" aria-label="anchor" href="#value"></a></h2>
     <p>A <code>cdrgam_effect_grid</code> data frame with evaluation axes, estimates,
 standard errors, and pointwise confidence limits on the linear-predictor
 scale. Each reference axis adds a
-<code>&lt;axis&gt;_reference</code> column, which is <code>NA</code> for a model default.</p>
+<code>&lt;axis&gt;_reference</code> column, which is <code>NA</code> for a model default. With
+<code>covariance = TRUE</code>, attribute <code>covariance</code> holds the rows' joint
+covariance \(D V D^\top\), where <code>D</code> is the rows' linear map of the
+coefficients and <code>V</code> their covariance.</p>
     </div>
     <div class="section level2">
     <h2 id="details">Details<a class="anchor" aria-label="anchor" href="#details"></a></h2>

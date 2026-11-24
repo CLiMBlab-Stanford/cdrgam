@@ -9,6 +9,14 @@ used by a direct `mgcv` linear-functional fit.
 The package is an experimental rewrite. Its API and numerical backends
 may change while validation continues.
 
+## Documentation
+
+The reference manual and articles are at
+[climblab-stanford.github.io/cdrgam](https://climblab-stanford.github.io/cdrgam/).
+To define, run, and visualize CDR-GAM analyses as projects, with
+dependency tracking and Slurm scheduling, use the command-line harness
+[cdrgam.cli](https://github.com/CLiMBlab-Stanford/cdrgam.cli).
+
 ## Model interface
 
 A model combines ordinary response-aligned GAM terms with

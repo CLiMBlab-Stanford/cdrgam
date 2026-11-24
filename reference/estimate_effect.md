@@ -24,7 +24,8 @@ estimate_effect(
   level = 0.95,
   n = 200L,
   boundary = c("estimate", "bound"),
-  points = NULL
+  points = NULL,
+  covariance = FALSE
 )
 ```
 
@@ -112,12 +113,23 @@ estimate_effect(
   must resolve to one value. Use it to evaluate along a path through the
   axes, such as each predictor value at its own lag.
 
+- covariance:
+
+  Also return the joint covariance of every row's estimate, as the
+  matrix attribute `covariance`, with one row and column per result row
+  in the same order. Rows from different terms or groups are covariant
+  when they share coefficients. The matrix has as many rows and columns
+  as the result, so request it for small grids, such as the points a
+  simultaneous band is computed over. It requires `se = TRUE`.
+
 ## Value
 
 A `cdrgam_effect_grid` data frame with evaluation axes, estimates,
 standard errors, and pointwise confidence limits on the linear-predictor
 scale. Each reference axis adds a `<axis>_reference` column, which is
-`NA` for a model default.
+`NA` for a model default. With `covariance = TRUE`, attribute
+`covariance` holds the rows' joint covariance \\D V D^\top\\, where `D`
+is the rows' linear map of the coefficients and `V` their covariance.
 
 ## Details
 

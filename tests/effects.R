@@ -43,6 +43,51 @@ stopifnot(
     all(curve$lower <= curve$estimate & curve$estimate <= curve$upper)
 )
 
+# covariance = TRUE returns the rows' joint covariance: its diagonal is the
+# squared standard errors, and a reference contrast's variance is
+# C[i, i] + C[j, j] - 2 C[i, j].
+joint <- estimate_effect(
+    fit, terms=list(predictors='x'),
+    axes=list(lag=list(grid='fitted', n=11L),
+        predictors=list(x=list(at=list(summary='mean', `offset-sd`=1)))),
+    composition='total', covariance=TRUE
+)
+joint_covariance <- attr(joint, 'covariance')
+contrast <- estimate_effect(
+    fit, terms=list(predictors='x'),
+    axes=list(lag=list(values=joint$lag),
+        predictors=list(x=list(at=list(summary='mean', `offset-sd`=1)))),
+    reference=list(lag=joint$lag[[4L]]), composition='total'
+)
+stopifnot(
+    is.matrix(joint_covariance), identical(dim(joint_covariance), c(11L, 11L)),
+    isTRUE(all.equal(sqrt(diag(joint_covariance)), joint$se)),
+    isTRUE(all.equal(
+        contrast$se^2,
+        diag(joint_covariance) + joint_covariance[4L, 4L] - 2 * joint_covariance[, 4L]
+    )),
+    is.null(attr(curve, 'covariance'))
+)
+every <- estimate_effect(fit, axes=list(lag=list(grid='fitted', n=5L)), covariance=TRUE)
+stopifnot(
+    identical(dim(attr(every, 'covariance')), rep(nrow(every), 2L)),
+    isTRUE(all.equal(sqrt(diag(attr(every, 'covariance'))), every$se)),
+    grepl('requires se', tryCatch(estimate_effect(
+        fit, axes=list(lag=list(grid='fitted', n=5L)), se=FALSE, covariance=TRUE
+    ), error=conditionMessage))
+)
+
+# The sparse backend's selected covariance gives the same joint covariance.
+sparse_fit <- cdrgam.fit(design, backend='sparse')
+sparse_joint <- estimate_effect(
+    sparse_fit, axes=list(lag=list(grid='fitted', n=7L)), covariance=TRUE
+)
+stopifnot(
+    is.matrix(attr(sparse_joint, 'covariance')),
+    identical(dim(attr(sparse_joint, 'covariance')), rep(nrow(sparse_joint), 2L)),
+    isTRUE(all.equal(sqrt(diag(attr(sparse_joint, 'covariance'))), sparse_joint$se))
+)
+
 # A term that boundary reduction removed leaves an extra specification in
 # fits saved before the specifications were subset with the terms. Total
 # composition still finds the hierarchy instead of falling back to the term.

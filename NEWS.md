@@ -1,5 +1,11 @@
 # cdrgam (development version)
 
+- `estimate_effect(covariance = TRUE)` returns the joint covariance of the
+  result's rows as attribute `covariance`, one row and column per result
+  row. Rows of different terms or groups are covariant when they share
+  coefficients. Simultaneous bands and other joint inferences can use it
+  instead of one evaluation per point.
+
 - `composition = "total"` again adds a term's hierarchy in fits where
   boundary reduction removed whole terms, such as zero-variance by-subject
   deviations. Their term specifications were no longer aligned with the

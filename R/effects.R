@@ -486,6 +486,23 @@ effect_catalog <- function(object, impulses=NULL, responses=NULL) {
     .sparse_boundary_bound_object(object)
 }
 
+# The joint covariance of the rows of `functionals`, bound in order: their
+# designs placed in the columns of the union of their coefficients, times
+# the covariance of those coefficients, times the transpose.
+.cdr_effect_joint_covariance <- function(object, functionals, unconditional) {
+    indices <- sort(unique(unlist(lapply(functionals, `[[`, 'index'))))
+    design <- do.call(rbind, lapply(functionals, function(functional) {
+        rows <- matrix(0, nrow(functional$design), length(indices))
+        rows[, match(functional$index, indices)] <- as.matrix(functional$design)
+        rows
+    }))
+    covariance <- .cdr_effect_covariance(object, indices, unconditional)
+    value <- design %*% as.matrix(covariance) %*% t(design)
+    value <- (value + t(value)) / 2
+    dimnames(value) <- NULL
+    value
+}
+
 .cdr_effect_covariance <- function(object, indices, unconditional) {
     if (inherits(object, 'cdrgam_sparse')) {
         return(.sparse_selected_vcov(object, indices, unconditional=unconditional))
@@ -715,6 +732,12 @@ effect_catalog <- function(object, impulses=NULL, responses=NULL) {
 #'   to one value. A predictor may instead be `NA` or `"default"` to leave it
 #'   at the model default. Names are axis names such as `lag` or a predictor.
 #' @param se Include pointwise standard errors.
+#' @param covariance Also return the joint covariance of every row's estimate,
+#'   as the matrix attribute `covariance`, with one row and column per result
+#'   row in the same order. Rows from different terms or groups are covariant
+#'   when they share coefficients. The matrix has as many rows and columns as
+#'   the result, so request it for small grids, such as the points a
+#'   simultaneous band is computed over. It requires `se = TRUE`.
 #' @param unconditional Include smoothing-parameter uncertainty when supported.
 #'   Smoothing parameters classified as on the boundary of their range
 #'   contribute no uncertainty, because the criterion has no local curvature
@@ -733,7 +756,10 @@ effect_catalog <- function(object, impulses=NULL, responses=NULL) {
 #' @return A `cdrgam_effect_grid` data frame with evaluation axes, estimates,
 #'   standard errors, and pointwise confidence limits on the linear-predictor
 #'   scale. Each reference axis adds a
-#'   `<axis>_reference` column, which is `NA` for a model default.
+#'   `<axis>_reference` column, which is `NA` for a model default. With
+#'   `covariance = TRUE`, attribute `covariance` holds the rows' joint
+#'   covariance \eqn{D V D^\top}, where `D` is the rows' linear map of the
+#'   coefficients and `V` their covariance.
 #' @seealso [test_effect()] for joint Wald tests of the same functionals.
 #' @export
 estimate_effect <- function(
@@ -741,8 +767,12 @@ estimate_effect <- function(
         composition=c('term', 'total'),
         grouping=c('population', 'deviation', 'conditional'), groups=NULL,
         reference=list(), se=TRUE, unconditional=FALSE, level=0.95, n=200L,
-        boundary=c('estimate', 'bound'), points=NULL
+        boundary=c('estimate', 'bound'), points=NULL, covariance=FALSE
 ) {
+    if (!is.logical(covariance) || length(covariance) != 1L || is.na(covariance)) {
+        stop('covariance must be TRUE or FALSE')
+    }
+    if (covariance && !isTRUE(se)) stop('covariance = TRUE requires se = TRUE')
     n <- .cdr_effect_validate(object, axes, reference, level, n, points)
     object <- .cdr_effect_restore_summaries(object, impulses, responses)
     object <- .cdr_effect_boundary_object(object, match.arg(boundary), unconditional)
@@ -774,6 +804,11 @@ estimate_effect <- function(
     })
     result <- .cdr_effect_bind(frames)
     class(result) <- c('cdrgam_effect_grid', class(result))
+    if (covariance) {
+        attr(result, 'covariance') <- .cdr_effect_joint_covariance(
+            object, functionals, unconditional
+        )
+    }
     attr(result, 'level') <- level
     attr(result, 'scale') <- 'linear-predictor'
     attr(result, 'reference') <- if (length(reference)) names(reference) else NULL

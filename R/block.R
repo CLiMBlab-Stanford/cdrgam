@@ -1111,7 +1111,8 @@ summary.cdrgam_block <- function(
         smooth_edf=.cdrgam_block_smooth_edf(object),
         dispersion=dispersion,
         all.coefficients=all.coefficients,
-        all_variances=function() diag(object$Vp)
+        all_variances=function() diag(object$Vp),
+        test_structure=.cdrgam_block_test_structure(object)
     )
     class(out) <- c('summary.cdrgam_block', 'summary.cdrgam', 'summary.gam')
     out

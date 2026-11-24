@@ -201,8 +201,175 @@
     }, numeric(1))
 }
 
+# The structure Wood's test needs for a block fit: X'WX from the stored
+# design and working weights, and each smooth's edf1 from the influence
+# matrix.
+.cdrgam_block_test_structure <- function(object) {
+    source_weights <- if (is.null(object$working.weights)) {
+        object$prior.weights
+    } else object$working.weights
+    information <- crossprod(object$X * sqrt(source_weights))
+    influence_covariance <- if (is.null(object$working.weights)) {
+        object$Vp / object$scale
+    } else object$Vp
+    edf1 <- .cdrgam_edf1(influence_covariance %*% information)
+    list(
+        gram=function(indices) information[indices, indices, drop=FALSE],
+        edf1=vapply(object$smooth, function(smooth) {
+            sum(edf1[smooth$first.para:smooth$last.para])
+        }, numeric(1))
+    )
+}
+
+# The structure Wood's test needs for a sparse fit, whose factor holds
+# H = X'WX + S(lambda). X'WX is recovered as H - S from a CHOLMOD factor.
+# Each smooth's edf1 uses F = I - H^{-1} S, whose rows and columns for the
+# smooth's coefficients need one solve per coefficient. Schur factors do not
+# expose H, so their fits return NULL and keep the full-rank Wald test.
+.cdrgam_sparse_test_structure <- function(object) {
+    factor <- object$sparse$factor
+    if (!inherits(factor, 'CHMfactor')) return(NULL)
+    dimension <- object$sparse$dimension
+    penalty <- Matrix::Matrix(0, dimension, dimension, sparse=TRUE)
+    for (i in seq_along(object$sparse$penalty_components)) {
+        penalty <- penalty + object$sp[[i]] * object$sparse$penalty_components[[i]]
+    }
+    penalty <- as.matrix(penalty)
+    expanded <- Matrix::expand(factor)
+    system_columns <- function(indices) {
+        selector <- Matrix::sparseMatrix(
+            i=indices, j=seq_along(indices), x=1,
+            dims=c(dimension, length(indices))
+        )
+        as.matrix(Matrix::t(expanded$P) %*% (expanded$L %*%
+            (Matrix::t(expanded$L) %*% (expanded$P %*% selector))))
+    }
+    edf1 <- vapply(object$smooth, function(smooth) {
+        indices <- smooth$first.para:smooth$last.para
+        identity <- diag(dimension)
+        # F[, indices] and t(F)[, indices] = (I - S H^{-1})[, indices].
+        columns <- identity[, indices, drop=FALSE] - as.matrix(
+            .cdr_factor_solve(factor, penalty[, indices, drop=FALSE])
+        )
+        rows <- identity[, indices, drop=FALSE] - penalty %*% as.matrix(
+            .cdr_factor_solve(factor, identity[, indices, drop=FALSE])
+        )
+        sum(2 * diag(columns[indices, , drop=FALSE]) - colSums(columns * rows))
+    }, numeric(1))
+    list(
+        gram=function(indices) {
+            system_columns(indices)[indices, , drop=FALSE] -
+                penalty[indices, indices, drop=FALSE]
+        },
+        edf1=edf1
+    )
+}
+
+# Wood's (2013) test that a smooth term is zero, as computed by mgcv's
+# summary.gam(). `gram` is the term's block of X'WX, `covariance` its
+# coefficient covariance, and `rank` the reference rank, usually the term's
+# alternative effective degrees of freedom edf1 capped at its dimension. A
+# fractional rank uses Wood's modified pseudo-inverse, whose statistic is
+# referred to a weighted sum of chi-squared variables. A positive
+# `residual_df` gives the F-type reference for an estimated scale. The
+# statistic depends on X only through X'WX, so any square root R with
+# R'R = gram gives mgcv's value.
+.cdrgam_wood_test <- function(coefficients, gram, covariance, rank,
+        residual_df=-1) {
+    gram <- (gram + t(gram)) / 2
+    root <- eigen(gram, symmetric=TRUE)
+    root <- sqrt(pmax(root$values, 0)) * t(root$vectors)
+    projected <- root %*% covariance %*% t(root)
+    decomposition <- eigen((projected + t(projected)) / 2, symmetric=TRUE)
+    signs <- sign(decomposition$vectors[1L, ])
+    signs[signs == 0] <- 1
+    vectors <- sweep(decomposition$vectors, 2L, signs, '*')
+    values <- decomposition$values
+    whole <- max(0, floor(rank))
+    fraction <- abs(rank - whole)
+    upper <- if (fraction > 0) whole + 1L else whole
+    estimated <- sum(values > max(values) * .Machine$double.eps^0.9)
+    if (estimated < upper) {
+        upper <- whole <- estimated
+        fraction <- 0
+        rank <- estimated
+    }
+    if (upper < ncol(vectors)) vectors <- vectors[, seq_len(upper), drop=FALSE]
+    if (fraction > 0 && whole > 0) {
+        if (whole > 1L) {
+            leading <- seq_len(whole - 1L)
+            vectors[, leading] <- t(t(vectors[, leading]) / sqrt(values[leading]))
+        }
+        tail <- whole:upper
+        mixing <- sqrt(max(0, 0.5 * fraction * (1 - fraction)))
+        scaling <- diag(values[tail]^-0.5, nrow=length(tail))
+        mixed <- scaling %*% matrix(c(1, mixing, mixing, fraction), 2L, 2L) %*%
+            scaling
+        mixed <- eigen(mixed, symmetric=TRUE)
+        mixed <- mixed$vectors %*% diag(sqrt(mixed$values)) %*% t(mixed$vectors)
+        alternative <- vectors
+        alternative[, tail] <- t(mixed %*% diag(c(-1, 1)) %*% t(vectors[, tail]))
+        vectors[, tail] <- t(mixed %*% t(vectors[, tail]))
+    } else {
+        vectors <- if (whole == 0) {
+            t(t(vectors) * sqrt(1 / values[[1L]]))
+        } else t(t(vectors) / sqrt(values[seq_len(whole)]))
+        alternative <- vectors
+        if (whole == 1) rank <- 1
+    }
+    scores <- root %*% coefficients
+    statistic <- sum(crossprod(vectors, scores)^2)
+    alternative_statistic <- sum(crossprod(alternative, scores)^2)
+    reference_rank <- rank
+    p_value <- 2
+    if (fraction > 0) {
+        if (upper == 1L) {
+            reference_rank <- weights <- 1
+        } else {
+            weights <- rep.int(1, upper)
+            shifted <- fraction + 1
+            weights[[whole]] <- (shifted + sqrt(shifted * (2 - shifted))) / 2
+            weights[[upper]] <- shifted - weights[[whole]]
+        }
+        p_value <- if (residual_df <= 0) {
+            (mgcv::psum.chisq(statistic, weights) +
+                mgcv::psum.chisq(alternative_statistic, weights)) / 2
+        } else {
+            denominator <- max(1, round(residual_df))
+            degrees <- c(rep.int(1, length(weights)), denominator)
+            (mgcv::psum.chisq(0, c(weights, -statistic / denominator), df=degrees) +
+                mgcv::psum.chisq(
+                    0, c(weights, -alternative_statistic / denominator), df=degrees
+                )) / 2
+        }
+    }
+    if (p_value > 1) {
+        p_value <- if (residual_df <= 0) {
+            (stats::pchisq(statistic, reference_rank, lower.tail=FALSE) +
+                stats::pchisq(alternative_statistic, reference_rank,
+                    lower.tail=FALSE)) / 2
+        } else {
+            (stats::pf(statistic / reference_rank, reference_rank, residual_df,
+                lower.tail=FALSE) +
+                stats::pf(alternative_statistic / reference_rank, reference_rank,
+                    residual_df, lower.tail=FALSE)) / 2
+        }
+    }
+    list(statistic=statistic, p_value=min(1, p_value), rank=rank)
+}
+
+# Per-coefficient alternative effective degrees of freedom 2 tr(F) - tr(FF),
+# where F = V X'WX / scale is the influence matrix in coefficient space.
+.cdrgam_edf1 <- function(influence) {
+    2 * diag(influence) - rowSums(influence * t(influence))
+}
+
+# `structure`, when given, supplies Wood's test: `gram(indices)` returns the
+# X'WX block of those coefficients and `edf1` the per-smooth alternative
+# effective degrees of freedom. Without it, smooths get a full-rank Wald
+# statistic referred to their edf.
 .cdrgam_smooth_table <- function(
-        object, edf, covariance, residual_df, chi_square=FALSE
+        object, edf, covariance, residual_df, chi_square=FALSE, structure=NULL
 ) {
     count <- length(object$smooth)
     if (!count) return(NULL)
@@ -228,6 +395,20 @@
         if (is.null(smooth$null.space.dim)) next
         indices <- smooth$first.para:smooth$last.para
         selected <- covariance(indices)
+        statistic_column <- if (chi_square) 'Chi.sq' else 'F'
+        if (!is.null(structure)) {
+            test <- .cdrgam_wood_test(
+                object$coefficients[indices], structure$gram(indices), selected,
+                min(length(indices), structure$edf1[[i]]),
+                if (chi_square) -1 else residual_df
+            )
+            table[i, 'Ref.df'] <- test$rank
+            table[i, statistic_column] <- if (chi_square) test$statistic else
+                test$statistic / test$rank
+            table[i, 'p-value'] <- test$p_value
+            test_status[[i]] <- 'Wood (2013)'
+            next
+        }
         decomposition <- eigen(selected, symmetric=TRUE)
         values <- decomposition$values
         tolerance <- max(values) * sqrt(.Machine$double.eps)
@@ -244,7 +425,6 @@
         statistic <- drop(crossprod(coefficients, precision %*% coefficients))
         reference_df <- max(edf[[i]], 1)
         table[i, 'Ref.df'] <- reference_df
-        statistic_column <- if (chi_square) 'Chi.sq' else 'F'
         table[i, statistic_column] <- if (chi_square) {
             statistic
         } else statistic / reference_df
@@ -270,7 +450,8 @@
         smooth_edf,
         dispersion=NULL,
         all.coefficients=FALSE,
-        all_variances=NULL
+        all_variances=NULL,
+        test_structure=NULL
 ) {
     scale <- if (is.null(dispersion)) object$scale else dispersion
     scale_ratio <- scale / object$scale
@@ -296,7 +477,8 @@
         smooth_edf,
         covariance_at_scale,
         residual_df,
-        chi_square=fixed_dispersion
+        chi_square=fixed_dispersion,
+        structure=test_structure
     )
     weights <- object$prior.weights
     mean_response <- sum(weights * object$y) / sum(weights)

@@ -7183,7 +7183,8 @@ summary.cdrgam_sparse <- function(
         smooth_edf=.cdrgam_sparse_smooth_edf(object),
         dispersion=dispersion,
         all.coefficients=all.coefficients,
-        all_variances=function() .sparse_vcov_diagonal(object)
+        all_variances=function() .sparse_vcov_diagonal(object),
+        test_structure=.cdrgam_sparse_test_structure(object)
     )
     out$convergence <- object$sparse$convergence
     out$boundary_reductions <- object$cdrgam$boundary_reductions

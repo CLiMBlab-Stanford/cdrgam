@@ -1,5 +1,12 @@
 # cdrgam (development version)
 
+- `summary()` of block and sparse fits tests each smooth term with Wood's
+  (2013) statistic and edf1 as its reference rank, as `mgcv::summary.gam()`
+  does. Block fits now reproduce the native `mgcv` smooth table. These tests
+  previously used a full-rank Wald statistic referred to the edf, which tends
+  to give smaller p-values. Sparse fits factored with the Schur layout keep the
+  previous test and report it as `"approximate"` in `s.test`.
+
 - `estimate_effect(covariance = TRUE)` returns the joint covariance of the
   result's rows as attribute `covariance`, one row and column per result
   row. Rows of different terms or groups are covariant when they share

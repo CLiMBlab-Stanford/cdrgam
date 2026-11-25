@@ -1,5 +1,18 @@
 # cdrgam (development version)
 
+- `test_effect(method = "wood")` tests whole functionals as `summary()`
+  tests smooth terms. It uses Wood's (2013) statistic over every coefficient
+  the functional uses, with their summed edf1 as the reference rank, so a
+  `composition = "total"` effect or a conditional group effect is tested as
+  one function. A grouped deviation is tested over all levels with the
+  random-effect test. A test of a single term reproduces its row of the
+  smooth table on native, block, and sparse fits. Requests the test cannot
+  serve, such as one level of a fully penalized term, fail instead of
+  falling back. It is the default; the grid Wald test is used when
+  `method = "wald"` is given or when `axes`, `reference`, or `points` define
+  a grid without a method. Results gain `method`,
+  `residual_df`, and `coefficients` columns.
+
 - `summary()` of block, sparse, and distributional fits tests each smooth
   term with Wood's (2013) statistic and edf1 as its reference rank, as
   `mgcv::summary.gam()` does. Fully penalized terms, such as random effects

@@ -985,76 +985,204 @@ simulate_effect <- function(
     list(grid=grid, draws=values)
 }
 
-#' Test fitted effects jointly over declarative axis grids
+# The reference distribution of Wood's tests, as summary() uses it: F with
+# the residual degrees of freedom when the scale is estimated, else
+# chi-squared, signalled by -1.
+.cdr_effect_residual_df <- function(object) {
+    if (inherits(object, c('cdrgam_distributional_block',
+            'cdrgam_distributional_sparse'))) return(-1)
+    if (!inherits(object, c('cdrgam_block', 'cdrgam_sparse'))) {
+        return(if (isTRUE(object$scale.estimated)) object$df.residual else -1)
+    }
+    if (object$family$family %in% c('binomial', 'poisson')) return(-1)
+    total <- if (inherits(object, 'cdrgam_sparse')) {
+        .sparse_effective_df(object)
+    } else sum(object$edf)
+    length(object$y) - total
+}
+
+# Wood's whole-functional test that every coefficient a functional uses is
+# zero. A functional whose coefficients are exactly one fully penalized
+# smooth gets the random-effect test that summary() reports for it; any
+# other set gets Wood's (2013) statistic with the summed edf1 as its rank.
+.cdr_effect_wood_test <- function(
+        object, indices, structure, residual_df, unconditional, random_smooths
+) {
+    if (!is.null(structure$unavailable)) stop(structure$unavailable)
+    ranges <- lapply(object$smooth, function(smooth) smooth$first.para:smooth$last.para)
+    fully_penalized <- vapply(object$smooth, function(smooth) {
+        identical(as.integer(smooth$null.space.dim), 0L)
+    }, logical(1))
+    whole <- which(vapply(ranges, function(range) {
+        length(range) == length(indices) && all(range == indices)
+    }, logical(1)))
+    if (length(whole) == 1L && fully_penalized[[whole]]) {
+        if (is.character(structure$random)) stop(structure$random)
+        if (isTRUE(unconditional)) stop(
+            'The random-effect test uses the conditional covariance; ',
+            'use unconditional = FALSE'
+        )
+        test <- .cdrgam_random_effect_test(
+            object, structure$random, whole, residual_df, random_smooths
+        )
+        test$method <- 'Wood (2013b) random effect'
+        return(test)
+    }
+    penalized_only <- unlist(ranges[fully_penalized])
+    if (length(indices) && all(indices %in% penalized_only)) stop(
+        'Wood tests of part of a fully penalized term are not supported; ',
+        'test the whole term or use method = "wald"'
+    )
+    covariance <- as.matrix(.cdr_effect_covariance(object, indices, unconditional))
+    test <- .cdrgam_wood_test(
+        stats::coef(object)[indices], as.matrix(structure$gram(indices)),
+        covariance, min(length(indices), sum(structure$edf1_coefficients(indices))),
+        residual_df
+    )
+    test$method <- 'Wood (2013)'
+    test
+}
+
+#' Test fitted effects
 #'
-#' Computes a Wald test of the null hypothesis that a functional returned by
-#' [estimate_effect()] is zero at every grid point. The arguments select the
-#' same terms, axes, compositions, groupings, and references. One test is
-#' returned per selected term and grouping level.
+#' Tests the null hypothesis that a functional returned by
+#' [estimate_effect()] is zero. The arguments select the same terms,
+#' compositions, groupings, and groups. One test is returned per selected
+#' term and grouping level.
 #'
-#' The statistic is \eqn{\hat\beta^\top L^\top (L V L^\top)^{-} L \hat\beta},
-#' where `L` stacks the grid rows of the functional and `V` is the coefficient
-#' covariance. The pseudo-inverse keeps eigenvalues above `tolerance` times the
-#' largest, and the reference distribution is chi-squared with that rank as
-#' its degrees of freedom. Use a grid dense enough to span the functional;
-#' the rank stops growing once it does.
+#' `method = "wood"` tests the whole functional, as `summary()` tests smooth
+#' terms. The null is that every coefficient the functional uses is zero, so
+#' a total composition is tested over the union of its terms' coefficients.
+#' The statistic is Wood's (2013), with the summed alternative effective
+#' degrees of freedom of those coefficients as its reference rank. A
+#' functional made of exactly one fully penalized term, such as a grouped
+#' deviation, gets Wood's (2013b) random-effect test, with other random
+#' effects integrated out. Grouped deviations are therefore tested over all
+#' levels at once, and `groups` must be `NULL`. The test does not use an
+#' evaluation grid, so `axes`, `reference`, and `points` must be empty. When
+#' the scale is estimated, `statistic` is the F statistic `T / df` on `df`
+#' and `residual_df` degrees of freedom, as in `summary()`; otherwise it is
+#' `T` on a chi-squared reference.
 #'
-#' Penalized coefficients make this test
-#' approximate. Wood (2013) reports that such tests can reject too rarely when
-#' the null holds on the boundary of the smoothing-parameter space.
+#' `method = "wald"` tests the functional at every point of an evaluation
+#' grid. The statistic is \eqn{\hat\beta^\top L^\top (L V L^\top)^{-} L
+#' \hat\beta}, where `L` stacks the grid rows of the functional and `V` is
+#' the coefficient covariance. The pseudo-inverse keeps eigenvalues above
+#' `tolerance` times the largest, and the reference distribution is
+#' chi-squared with that rank as its degrees of freedom. Use a grid dense
+#' enough to span the functional; the rank stops growing once it does. This
+#' test can reject too rarely when the null holds on the boundary of the
+#' smoothing-parameter space (Wood 2013).
 #'
 #' @inheritParams estimate_effect
-#' @param tolerance Relative eigenvalue threshold for the rank of `L V L'`.
+#' @param method `"wood"` for Wood's whole-functional test or `"wald"` for a
+#'   grid Wald test. When omitted, it is `"wald"` if `axes`, `reference`, or
+#'   `points` define a grid and `"wood"` otherwise.
+#' @param tolerance Relative eigenvalue threshold for the rank of `L V L'`
+#'   under `method = "wald"`.
 #' @return A `cdrgam_effect_test` data frame with `term_id`, `term`, `group`,
-#'   `composition`, `grouping`, `statistic`, `df`, `p_value`, and `points`.
-#'   `df` is zero and `statistic` and `p_value` are missing when the functional
-#'   is identically zero.
+#'   `composition`, `grouping`, `method`, `statistic`, `df`, `residual_df`,
+#'   `p_value`, `points`, and `coefficients`. `residual_df` is missing for
+#'   chi-squared references, and `points` for Wood tests. Under
+#'   `method = "wald"`, `df` is zero and `statistic` and `p_value` are
+#'   missing when the functional is identically zero.
 #' @references Wood, S. N. (2013). On p-values for smooth components of an
 #'   extended generalized additive model. *Biometrika*, 100(1), 221--228.
-#' @seealso [estimate_effect()]
+#'
+#'   Wood, S. N. (2013b). A simple test for random effects in regression
+#'   models. *Biometrika*, 100(4), 1005--1010.
+#' @seealso [estimate_effect()], [summary.cdrgam()]
 #' @export
 test_effect <- function(
         object, terms=NULL, axes=list(), impulses=NULL, responses=NULL,
         composition=c('term', 'total'),
         grouping=c('population', 'deviation', 'conditional'), groups=NULL,
         reference=list(), unconditional=FALSE, n=50L, tolerance=1e-8,
-        boundary=c('estimate', 'bound'), points=NULL
+        boundary=c('estimate', 'bound'), points=NULL, method=c('wood', 'wald')
 ) {
     n <- .cdr_effect_validate(object, axes, reference, 0.95, n, points)
     if (!is.numeric(tolerance) || length(tolerance) != 1L ||
             !is.finite(tolerance) || tolerance <= 0 || tolerance >= 1) {
         stop('tolerance must lie strictly between zero and one')
     }
-    object <- .cdr_effect_restore_summaries(object, impulses, responses)
-    object <- .cdr_effect_boundary_object(object, match.arg(boundary), unconditional)
+    grid <- length(axes) || length(reference) || !is.null(points)
+    method <- if (missing(method)) {
+        if (grid) 'wald' else 'wood'
+    } else match.arg(method)
     composition <- match.arg(composition)
     grouping <- match.arg(grouping)
+    if (identical(method, 'wood')) {
+        if (grid) stop(
+            'method = "wood" tests the whole functional; ',
+            'axes, reference, and points must be empty'
+        )
+        if (identical(grouping, 'deviation') && !is.null(groups)) stop(
+            'method = "wood" tests a grouped deviation over all levels; ',
+            'groups must be NULL'
+        )
+    }
+    object <- .cdr_effect_restore_summaries(object, impulses, responses)
+    object <- .cdr_effect_boundary_object(object, match.arg(boundary), unconditional)
     functionals <- .cdr_effect_all_functionals(
         object, terms, axes, composition, grouping, groups, reference, n, points
     )
+    if (identical(method, 'wood') && identical(grouping, 'deviation')) {
+        functionals <- lapply(split(functionals, vapply(functionals, `[[`,
+                integer(1), 'term')), function(levels) {
+            merged <- levels[[1L]]
+            merged$index <- sort(unique(unlist(lapply(levels, `[[`, 'index'))))
+            merged$group <- NA_character_
+            merged
+        })
+    }
+    if (identical(method, 'wood')) {
+        structure <- .cdrgam_test_structure(object)
+        residual_df <- .cdr_effect_residual_df(object)
+        random_smooths <- .cdrgam_random_smooths(object)
+    }
     rows <- lapply(functionals, function(functional) {
-        estimate <- drop(functional$design %*% stats::coef(object)[functional$index])
-        covariance <- .cdr_effect_covariance(object, functional$index, unconditional)
-        projected <- functional$design %*% covariance %*% t(functional$design)
-        decomposition <- eigen((projected + t(projected)) / 2, symmetric=TRUE)
-        values <- decomposition$values
-        keep <- values > tolerance * max(c(values, 0))
-        rank <- sum(keep)
-        statistic <- if (rank) {
-            scores <- crossprod(decomposition$vectors[, keep, drop=FALSE], estimate)
-            sum(scores^2 / values[keep])
-        } else NA_real_
+        if (identical(method, 'wood')) {
+            test <- .cdr_effect_wood_test(
+                object, functional$index, structure, residual_df, unconditional,
+                random_smooths
+            )
+            f_reference <- residual_df > 0
+            statistic <- if (f_reference) test$statistic / test$rank else test$statistic
+            p_value <- test$p_value
+            rank <- test$rank
+            label <- test$method
+            count <- NA_integer_
+        } else {
+            estimate <- drop(functional$design %*% stats::coef(object)[functional$index])
+            covariance <- .cdr_effect_covariance(object, functional$index, unconditional)
+            projected <- functional$design %*% covariance %*% t(functional$design)
+            decomposition <- eigen((projected + t(projected)) / 2, symmetric=TRUE)
+            values <- decomposition$values
+            keep <- values > tolerance * max(c(values, 0))
+            rank <- sum(keep)
+            statistic <- if (rank) {
+                scores <- crossprod(decomposition$vectors[, keep, drop=FALSE], estimate)
+                sum(scores^2 / values[keep])
+            } else NA_real_
+            p_value <- if (rank) stats::pchisq(statistic, rank, lower.tail=FALSE) else
+                NA_real_
+            f_reference <- FALSE
+            label <- 'Wald'
+            count <- length(estimate)
+        }
         data.frame(
             term_id=paste0('irf-', functional$term),
             term=object$cdrgam$term_labels[[functional$term]],
             group=if (is.na(functional$group)) NA_character_ else functional$group,
             composition=composition,
             grouping=grouping,
+            method=label,
             statistic=statistic,
             df=rank,
-            p_value=if (rank) stats::pchisq(statistic, rank, lower.tail=FALSE) else
-                NA_real_,
-            points=length(estimate),
+            residual_df=if (f_reference) residual_df else NA_real_,
+            p_value=p_value,
+            points=count,
+            coefficients=length(functional$index),
             stringsAsFactors=FALSE
         )
     })

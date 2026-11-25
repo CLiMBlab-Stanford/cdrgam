@@ -243,7 +243,14 @@
     influence_covariance <- if (is.null(object$working.weights)) {
         object$Vp / object$scale
     } else object$Vp
-    edf1 <- .cdrgam_edf1(influence_covariance %*% information)
+    .cdrgam_dense_test_structure(
+        object, information, .cdrgam_edf1(influence_covariance %*% information)
+    )
+}
+
+# The structure for fits whose X'WX is held densely: `information` is X'WX
+# and `edf1` the per-coefficient alternative effective degrees of freedom.
+.cdrgam_dense_test_structure <- function(object, information, edf1) {
     sp <- if (is.null(object$full.sp)) object$sp else object$full.sp
     dimension <- ncol(information)
     penalties <- list()
@@ -265,6 +272,7 @@
         edf1=vapply(object$smooth, function(smooth) {
             sum(edf1[smooth$first.para:smooth$last.para])
         }, numeric(1)),
+        edf1_coefficients=function(indices) edf1[indices],
         random=list(
             gram=information,
             penalties=penalties,
@@ -272,6 +280,32 @@
             sig2=object$sig2
         )
     )
+}
+
+# The structure for a native mgcv fit, whose R factor satisfies
+# R'R = X'WX and whose edf1 is stored per coefficient, as summary.gam() uses.
+.cdrgam_native_test_structure <- function(object) {
+    if (is.null(object$R) || is.null(object$edf1)) {
+        return(list(unavailable='not computed: the fit lacks its R factor or edf1'))
+    }
+    .cdrgam_dense_test_structure(object, crossprod(object$R), object$edf1)
+}
+
+# The test structure for any fitted cdrgam model.
+.cdrgam_test_structure <- function(object) {
+    if (inherits(object, 'cdrgam_distributional_sparse')) {
+        dimension <- length(object$coefficients)
+        object$Vp <- as.matrix(.cdr_factor_solve(
+            object$sparse$factor, Matrix::Diagonal(dimension)
+        ))
+        return(.cdrgam_distributional_test_structure(object))
+    }
+    if (inherits(object, 'cdrgam_distributional_block')) {
+        return(.cdrgam_distributional_test_structure(object))
+    }
+    if (inherits(object, 'cdrgam_sparse')) return(.cdrgam_sparse_test_structure(object))
+    if (inherits(object, 'cdrgam_block')) return(.cdrgam_block_test_structure(object))
+    .cdrgam_native_test_structure(object)
 }
 
 # The structure Wood's test needs for a sparse fit, whose factor holds
@@ -292,15 +326,18 @@
     unit <- function(indices) as.matrix(Matrix::sparseMatrix(
         i=indices, j=seq_along(indices), x=1, dims=c(dimension, length(indices))
     ))
-    edf1 <- vapply(object$smooth, function(smooth) {
-        indices <- smooth$first.para:smooth$last.para
+    # Per-coefficient edf1 for `indices`: F[, indices] and
+    # t(F)[, indices] = (I - S H^{-1})[, indices] need one solve per column.
+    edf1_coefficients <- function(indices) {
         identity <- unit(indices)
-        # F[, indices] and t(F)[, indices] = (I - S H^{-1})[, indices].
         columns <- identity - as.matrix(.cdr_factor_solve(
             factor, as.matrix(penalty[, indices, drop=FALSE])
         ))
         rows <- identity - as.matrix(penalty %*% .cdr_factor_solve(factor, identity))
-        sum(2 * diag(columns[indices, , drop=FALSE]) - colSums(columns * rows))
+        2 * diag(columns[indices, , drop=FALSE]) - colSums(columns * rows)
+    }
+    edf1 <- vapply(object$smooth, function(smooth) {
+        sum(edf1_coefficients(smooth$first.para:smooth$last.para))
     }, numeric(1))
     supports <- .sparse_penalty_supports(components)
     owners <- vapply(supports, function(support) {
@@ -330,6 +367,7 @@
                 as.matrix(penalty[indices, indices, drop=FALSE])
         },
         edf1=edf1,
+        edf1_coefficients=edf1_coefficients,
         random=random
     )
 }
@@ -351,6 +389,7 @@
         edf1=vapply(object$smooth, function(smooth) {
             sum(edf1[smooth$first.para:smooth$last.para])
         }, numeric(1)),
+        edf1_coefficients=function(indices) edf1[indices],
         random=paste(
             'not computed: random-effect tests are not implemented for',
             'distributional fits'

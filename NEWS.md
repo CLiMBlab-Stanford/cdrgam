@@ -1,11 +1,19 @@
 # cdrgam (development version)
 
-- `summary()` of block and sparse fits tests each smooth term with Wood's
-  (2013) statistic and edf1 as its reference rank, as `mgcv::summary.gam()`
-  does. Block fits now reproduce the native `mgcv` smooth table. These tests
-  previously used a full-rank Wald statistic referred to the edf, which tends
-  to give smaller p-values. Sparse fits factored with the Schur layout keep the
-  previous test and report it as `"approximate"` in `s.test`.
+- `summary()` of block, sparse, and distributional fits tests each smooth
+  term with Wood's (2013) statistic and edf1 as its reference rank, as
+  `mgcv::summary.gam()` does. Fully penalized terms, such as random effects
+  and grouped IRF deviations, get mgcv's random-effect test (Wood 2013b)
+  instead of being left untested, with other random effects integrated out.
+  Block and sparse fits reproduce the native `mgcv` smooth table. The
+  random-effect test uses sparse factorizations and solves only for the
+  tested coefficients, so it does not form dense whole-model matrices.
+  These tests previously used a full-rank Wald statistic referred to the
+  edf, which tends to give smaller p-values; that fallback is removed.
+  When a test cannot be computed, its `s.test` entry gives the reason: for
+  example, distributional fits do not yet test fully penalized terms, and
+  distributional fits saved without the stored likelihood Hessian must
+  be refitted.
 
 - `estimate_effect(covariance = TRUE)` returns the joint covariance of the
   result's rows as attribute `covariance`, one row and column per result

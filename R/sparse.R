@@ -288,6 +288,130 @@
     )
 }
 
+# The Schur transfer T = H_cb H_bb^{-1}, one column per block coefficient.
+# Factors saved before the transfer was stored hold H_cb as `cross`.
+.cdr_schur_transfer <- function(factor) {
+    if (!is.null(factor$transfer)) return(factor$transfer)
+    if (is.null(factor$cross)) return(NULL)
+    do.call(cbind, Map(function(cross, cholesky) {
+        cholesky <- as.matrix(cholesky)
+        cholesky[lower.tri(cholesky)] <- 0
+        as.matrix(cross) %*% chol2inv(cholesky)
+    }, factor$cross, factor$block_cholesky))
+}
+
+# Columns `indices` of the factored system H, as a dense matrix with one row
+# per coefficient. A CHOLMOD factor gives H = P' L L' P. A Schur factor
+# stores, for each block b, the upper Cholesky factor R_b of H_bb and the
+# transfer T_b = H_cb H_bb^{-1}, and the Cholesky factor U of the core's
+# Schur complement, so H_cb = T_b R_b' R_b and
+# H_cc = U'U + sum_b T_b H_bb T_b'.
+.cdr_factor_system_columns <- function(factor, indices) {
+    if (!inherits(factor, 'cdrgam_schur_factor')) {
+        dimension <- nrow(factor)
+        selector <- Matrix::sparseMatrix(
+            i=indices, j=seq_along(indices), x=1,
+            dims=c(dimension, length(indices))
+        )
+        expanded <- Matrix::expand(factor)
+        return(as.matrix(Matrix::t(expanded$P) %*% (expanded$L %*%
+            (Matrix::t(expanded$L) %*% (expanded$P %*% selector)))))
+    }
+    transfer_all <- .cdr_schur_transfer(factor)
+    upper <- function(cholesky) {
+        cholesky <- as.matrix(cholesky)
+        cholesky[lower.tri(cholesky)] <- 0
+        cholesky
+    }
+    core <- factor$core
+    output <- matrix(0, factor$dimension, length(indices))
+    core_columns <- match(indices, core)
+    core_root <- upper(factor$core_cholesky)
+    core_system <- crossprod(core_root)
+    offset <- 0L
+    blocks <- vector('list', length(factor$blocks))
+    for (b in seq_along(factor$blocks)) {
+        block <- factor$blocks[[b]]
+        root <- upper(factor$block_cholesky[[b]])
+        system <- crossprod(root)
+        transfer <- transfer_all[, offset + seq_along(block), drop=FALSE]
+        offset <- offset + length(block)
+        between <- transfer %*% system
+        core_system <- core_system + between %*% t(transfer)
+        blocks[[b]] <- list(index=block, system=system, between=between)
+    }
+    in_core <- !is.na(core_columns)
+    if (any(in_core)) {
+        output[core, in_core] <- core_system[, core_columns[in_core], drop=FALSE]
+    }
+    for (block in blocks) {
+        if (any(in_core)) {
+            output[block$index, in_core] <- t(block$between[
+                core_columns[in_core], , drop=FALSE
+            ])
+        }
+        local <- match(indices, block$index)
+        here <- !is.na(local)
+        if (any(here)) {
+            output[block$index, here] <- block$system[, local[here], drop=FALSE]
+            output[core, here] <- block$between[, local[here], drop=FALSE]
+        }
+    }
+    output
+}
+
+# The factored system H as a sparse matrix, by the same identities as
+# .cdr_factor_system_columns().
+.cdr_factor_system <- function(factor) {
+    if (!inherits(factor, 'cdrgam_schur_factor')) {
+        expanded <- Matrix::expand(factor)
+        lower <- Matrix::t(expanded$P) %*% expanded$L
+        return(methods::as(Matrix::tcrossprod(lower), 'generalMatrix'))
+    }
+    transfer_all <- .cdr_schur_transfer(factor)
+    upper <- function(cholesky) {
+        cholesky <- as.matrix(cholesky)
+        cholesky[lower.tri(cholesky)] <- 0
+        cholesky
+    }
+    triplets <- function(value) Matrix::summary(methods::as(
+        Matrix::Matrix(value, sparse=TRUE), 'generalMatrix'
+    ))
+    core <- factor$core
+    core_system <- crossprod(upper(factor$core_cholesky))
+    rows <- list()
+    offset <- 0L
+    for (b in seq_along(factor$blocks)) {
+        block <- factor$blocks[[b]]
+        system <- crossprod(upper(factor$block_cholesky[[b]]))
+        transfer <- transfer_all[, offset + seq_along(block), drop=FALSE]
+        offset <- offset + length(block)
+        between <- transfer %*% system
+        core_system <- core_system + between %*% t(transfer)
+        rows[[length(rows) + 1L]] <- triplets(system)
+        rows[[length(rows)]]$i <- block[rows[[length(rows)]]$i]
+        rows[[length(rows)]]$j <- block[rows[[length(rows)]]$j]
+        coupling <- triplets(between)
+        rows[[length(rows) + 1L]] <- data.frame(
+            i=core[coupling$i], j=block[coupling$j], x=coupling$x
+        )
+        rows[[length(rows) + 1L]] <- data.frame(
+            i=block[coupling$j], j=core[coupling$i], x=coupling$x
+        )
+    }
+    entries <- triplets(core_system)
+    rows[[length(rows) + 1L]] <- data.frame(
+        i=core[entries$i], j=core[entries$j], x=entries$x
+    )
+    entries <- do.call(rbind, lapply(rows, function(value) {
+        data.frame(i=value$i, j=value$j, x=value$x)
+    }))
+    Matrix::sparseMatrix(
+        i=entries$i, j=entries$j, x=entries$x,
+        dims=c(factor$dimension, factor$dimension)
+    )
+}
+
 .cdr_factor_logdet <- function(factor) {
     if (!inherits(factor, 'cdrgam_schur_factor')) {
         return(as.numeric(Matrix::determinant(
@@ -3186,7 +3310,8 @@
             null.space.dim=0L,
             first.para=indices[[1L]],
             last.para=indices[[length(indices)]],
-            id=NULL
+            id=NULL,
+            random=TRUE
         )
         random_prediction[[length(random_prediction) + 1L]] <- list(
             kind='random_effect',

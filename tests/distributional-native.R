@@ -279,8 +279,17 @@ stopifnot(
     abs(sparse_summary$null.deviance - fit$null.deviance) < 1e-3,
     abs(block_summary$dev.expl - fit_summary$dev.expl) < 1e-4,
     abs(sparse_summary$dev.expl - fit_summary$dev.expl) < 1e-4,
-    all(block_summary$s.test == 'approximate'),
-    all(sparse_summary$s.test == 'approximate'),
+    all(block_summary$s.test == 'Wood (2013)'),
+    all(sparse_summary$s.test == 'Wood (2013)'),
+    max(abs(block_summary$s.table[, 'p-value'] -
+        fit_summary$s.table[, 'p-value'])) < 1e-3,
+    max(abs(block_summary$s.table[, 'Ref.df'] -
+        fit_summary$s.table[, 'Ref.df'])) < 1e-2,
+    grepl('likelihood Hessian', summary(local({
+        legacy <- block
+        legacy$distributional$likelihood_hessian <- NULL
+        legacy
+    }))$s.test[[1L]], fixed=TRUE),
     identical(rownames(sparse_summary$s.table), rownames(fit_summary$s.table)),
     identical(
         names(fit_summary$formula_strings$raw),

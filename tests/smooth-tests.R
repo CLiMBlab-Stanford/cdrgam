@@ -84,3 +84,123 @@ stopifnot(
     max(abs(poisson_block[, 'Ref.df'] - poisson_native[, 'Ref.df'])) < 1e-2,
     max(abs(poisson_block[, 'p-value'] - poisson_native[, 'p-value'])) < 1e-3
 )
+
+# Columns of the factored system H are recovered from both factor types.
+system <- Matrix::forceSymmetric(Matrix::Matrix(matrix(c(
+    7.0, 0.5, 0.8, 0.1, 0.3, 0.0,
+    0.5, 6.0, 0.2, 0.6, 0.0, 0.4,
+    0.8, 0.2, 4.0, 0.3, 0.0, 0.0,
+    0.1, 0.6, 0.3, 3.5, 0.0, 0.0,
+    0.3, 0.0, 0.0, 0.0, 3.0, 0.2,
+    0.0, 0.4, 0.0, 0.0, 0.2, 2.5
+), nrow=6, byrow=TRUE), sparse=TRUE), uplo='U')
+schur <- cdrgam:::.factor_schur_system(
+    system, list(core=1:2, blocks=list(3:4, 5:6)), supernodal=FALSE
+)
+cholmod <- Matrix::Cholesky(system, LDL=FALSE)
+for (columns in list(1:6, c(5L, 1L, 4L))) {
+    stopifnot(
+        max(abs(cdrgam:::.cdr_factor_system_columns(schur, columns) -
+            as.matrix(system)[, columns])) < 1e-12,
+        max(abs(cdrgam:::.cdr_factor_system_columns(cholmod, columns) -
+            as.matrix(system)[, columns])) < 1e-12
+    )
+}
+
+# Fully penalized terms get Wood's (2013b) random-effect test, with other
+# random effects integrated out, as in mgcv's reTest(). Block fits and
+# sparse fits with either factorization reproduce the native table.
+grouped_impulses <- list()
+grouped_responses <- list()
+for (i in 1:4) {
+    amplitude <- c(-0.5, -0.2, 0.2, 0.5)[[i]]
+    grouped <- simulate_cdr(
+        list(x=function(lag) {
+            0.9 * exp(-1.7 * lag) + amplitude * exp(-((lag - 0.65) / 0.3)^2)
+        }),
+        n_impulses=120, n_responses=150, duration=30, window=2,
+        intercept=75 + i / 2, noise_sd=0.45, seed=6600 + i
+    )
+    grouped$impulses$subject <- grouped$responses$subject <- paste0('s', i)
+    grouped_impulses[[i]] <- grouped$impulses
+    grouped_responses[[i]] <- grouped$responses
+}
+grouped_responses <- do.call(rbind, grouped_responses)
+grouped_responses$subject <- factor(grouped_responses$subject)
+grouped_design <- prepare_cdrgam(
+    response ~ s(subject, bs='re') + irf(x, window=c(0, 2), k=6) +
+        irf(x, window=c(0, 2), k=6, group=subject) - irf(1),
+    do.call(rbind, grouped_impulses), grouped_responses,
+    series='subject', history='auto', quiet=TRUE
+)
+grouped_native <- summary(cdrgam.fit(
+    grouped_design, backend='mgcv', method='REML'
+))$s.table
+grouped_tables <- list(
+    block=summary(cdrgam.fit(grouped_design, backend='block', method='REML')),
+    sparse=summary(cdrgam.fit(grouped_design, backend='sparse', method='REML')),
+    schur=summary(cdrgam.fit(
+        grouped_design, backend='sparse', method='REML',
+        sparse_control=list(schur='always')
+    ))
+)
+for (grouped_summary in grouped_tables) {
+    table <- grouped_summary$s.table
+    stopifnot(
+        identical(unname(attr(table, 'test.status')),
+            c('Wood (2013b) random effect', 'Wood (2013)',
+                'Wood (2013b) random effect')),
+        max(abs(table[, 'Ref.df'] - grouped_native[, 'Ref.df'])) < 1e-3,
+        max(abs(table[, 'F'] - grouped_native[, 'F']) / grouped_native[, 'F']) < 1e-3
+    )
+}
+
+# The random-effect port gives mgcv's p-value when it is not negligible:
+# refitting with a weak subject effect keeps the statistic moderate.
+weak <- grouped_responses
+weak$response <- weak$response - (as.integer(weak$subject) / 2) +
+    stats::rnorm(4L, sd=0.02)[as.integer(weak$subject)]
+weak_design <- prepare_cdrgam(
+    response ~ s(subject, bs='re') + irf(x, window=c(0, 2), k=6),
+    do.call(rbind, grouped_impulses), weak,
+    series='subject', history='auto', quiet=TRUE
+)
+weak_native <- summary(cdrgam.fit(weak_design, backend='mgcv', method='REML'))$s.table
+weak_block <- summary(cdrgam.fit(weak_design, backend='block', method='REML'))$s.table
+stopifnot(abs(weak_block[1L, 'p-value'] - weak_native[1L, 'p-value']) < 1e-3)
+
+# The whole factored system is also recovered as a sparse matrix.
+stopifnot(
+    max(abs(as.matrix(cdrgam:::.cdr_factor_system(schur)) - as.matrix(system))) < 1e-12,
+    max(abs(as.matrix(cdrgam:::.cdr_factor_system(cholmod)) - as.matrix(system))) < 1e-12
+)
+
+# Schur factors saved before the transfer was stored hold H_cb as `cross`,
+# from which the same tests are computed.
+legacy <- cdrgam.fit(
+    grouped_design, backend='sparse', method='REML',
+    sparse_control=list(schur='always')
+)
+legacy_system <- cdrgam:::.cdr_factor_system(legacy$sparse$factor)
+legacy$sparse$factor$cross <- lapply(legacy$sparse$factor$blocks, function(indices) {
+    as.matrix(legacy_system[legacy$sparse$factor$core, indices, drop=FALSE])
+})
+legacy$sparse$factor$transfer <- NULL
+stopifnot(max(abs(
+    summary(legacy)$s.table[, 'F'] - grouped_tables$schur$s.table[, 'F']
+)) < 1e-6)
+
+# Sparse fits saved before smooths carried a random flag are recognized
+# from their random-effect prediction entries.
+unflagged <- cdrgam.fit(grouped_design, backend='sparse', method='REML')
+flags <- cdrgam:::.cdrgam_random_smooths(unflagged)
+unflagged$smooth <- lapply(unflagged$smooth, function(smooth) {
+    smooth$random <- NULL
+    smooth
+})
+stopifnot(
+    identical(flags, c(TRUE, FALSE, FALSE)),
+    identical(cdrgam:::.cdrgam_random_smooths(unflagged), flags),
+    max(abs(summary(unflagged)$s.table[, 'F'] - grouped_tables$sparse$s.table[, 'F'])) <
+        1e-8
+)

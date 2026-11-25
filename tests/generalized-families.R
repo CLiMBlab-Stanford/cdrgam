@@ -433,15 +433,15 @@ stopifnot(
     )) < 3e-3,
     abs(deviance(random_sparse) - deviance(random_native)) < 2e-2
 )
+# Fully penalized terms get mgcv's random-effect test.
 random_summary <- summary(random_sparse)
-untested <- random_summary$s.test ==
-    'not computed: fully penalized term'
+random_native_table <- summary(random_native)$s.table
+random_terms <- random_summary$s.test == 'Wood (2013b) random effect'
 stopifnot(
-    any(untested),
-    all(is.na(random_summary$s.table[untested, 'p-value'])),
-    any(grepl(
-        'does not indicate fit failure',
-        utils::capture.output(print(random_summary)),
-        fixed=TRUE
-    ))
+    any(random_terms),
+    all(is.finite(random_summary$s.table[random_terms, 'p-value'])),
+    max(abs(random_summary$s.table[random_terms, 'Ref.df'] -
+        random_native_table[random_terms, 'Ref.df'])) < 1e-6,
+    max(abs(random_summary$s.table[random_terms, 'p-value'] -
+        random_native_table[random_terms, 'p-value'])) < 1e-2
 )

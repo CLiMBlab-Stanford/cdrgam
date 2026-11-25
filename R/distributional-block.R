@@ -647,7 +647,8 @@ summary.cdrgam_distributional_block <- function(
         smooth_edf,
         covariance,
         residual_df,
-        chi_square=TRUE
+        chi_square=TRUE,
+        structure=.cdrgam_distributional_test_structure(object)
     )
     weights <- object$prior.weights
     mean_response <- sum(weights * object$y) / sum(weights)

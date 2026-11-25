@@ -201,9 +201,40 @@
     }, numeric(1))
 }
 
+# Which smooths are random effects, whose coefficients mgcv's random-effect
+# test integrates out when testing another term. Smooths carry a `random`
+# flag. Sparse fits saved before the flag existed are recognized by their
+# random-effect prediction entries, which record the coefficients they own.
+.cdrgam_random_smooths <- function(object) {
+    entries <- Filter(function(entry) identical(entry$kind, 'random_effect'),
+        object$cdrgam$prediction$random_effects)
+    vapply(object$smooth, function(smooth) {
+        if (isTRUE(smooth$random)) return(TRUE)
+        if (!is.null(smooth$random)) return(FALSE)
+        any(vapply(entries, function(entry) {
+            identical(as.numeric(range(entry$coefficient_index)),
+                as.numeric(c(smooth$first.para, smooth$last.para)))
+        }, logical(1)))
+    }, logical(1))
+}
+
+# Solves M x = rhs for a symmetric positive definite M, sparse or dense.
+# Returns NULL when M is not numerically positive definite.
+.cdrgam_spd_solve <- function(system, rhs) {
+    tryCatch({
+        if (methods::is(system, 'sparseMatrix')) {
+            factor <- Matrix::Cholesky(Matrix::forceSymmetric(system), LDL=FALSE)
+            as.matrix(Matrix::solve(factor, rhs))
+        } else {
+            root <- chol(as.matrix(system))
+            backsolve(root, forwardsolve(t(root), as.matrix(rhs)))
+        }
+    }, error=function(error) NULL)
+}
+
 # The structure Wood's test needs for a block fit: X'WX from the stored
-# design and working weights, and each smooth's edf1 from the influence
-# matrix.
+# design and working weights, each smooth's edf1 from the influence matrix,
+# and the penalties and covariance for random-effect tests.
 .cdrgam_block_test_structure <- function(object) {
     source_weights <- if (is.null(object$working.weights)) {
         object$prior.weights
@@ -213,55 +244,117 @@
         object$Vp / object$scale
     } else object$Vp
     edf1 <- .cdrgam_edf1(influence_covariance %*% information)
+    sp <- if (is.null(object$full.sp)) object$sp else object$full.sp
+    dimension <- ncol(information)
+    penalties <- list()
+    k <- 1L
+    for (i in seq_along(object$smooth)) {
+        smooth <- object$smooth[[i]]
+        for (penalty in smooth$S) {
+            columns <- smooth$first.para + seq_len(ncol(penalty)) - 1L
+            placed <- Matrix::sparseMatrix(
+                i=integer(), j=integer(), x=numeric(), dims=c(dimension, dimension)
+            )
+            placed[columns, columns] <- sp[[k]] * as.matrix(penalty)
+            penalties[[length(penalties) + 1L]] <- list(smooth=i, matrix=placed)
+            k <- k + 1L
+        }
+    }
     list(
         gram=function(indices) information[indices, indices, drop=FALSE],
         edf1=vapply(object$smooth, function(smooth) {
             sum(edf1[smooth$first.para:smooth$last.para])
-        }, numeric(1))
+        }, numeric(1)),
+        random=list(
+            gram=information,
+            penalties=penalties,
+            covariance_columns=function(indices) object$Vp[, indices, drop=FALSE],
+            sig2=object$sig2
+        )
     )
 }
 
 # The structure Wood's test needs for a sparse fit, whose factor holds
-# H = X'WX + S(lambda). X'WX is recovered as H - S from a CHOLMOD factor.
-# Each smooth's edf1 uses F = I - H^{-1} S, whose rows and columns for the
-# smooth's coefficients need one solve per coefficient. Schur factors do not
-# expose H, so their fits return NULL and keep the full-rank Wald test.
+# H = X'WX + S(lambda). X'WX is recovered as H - S. Each smooth's edf1 uses
+# F = I - H^{-1} S, whose rows and columns for the smooth's coefficients
+# need one solve per coefficient. Everything stays sparse except blocks
+# with one column per tested coefficient.
 .cdrgam_sparse_test_structure <- function(object) {
     factor <- object$sparse$factor
-    if (!inherits(factor, 'CHMfactor')) return(NULL)
     dimension <- object$sparse$dimension
-    penalty <- Matrix::Matrix(0, dimension, dimension, sparse=TRUE)
-    for (i in seq_along(object$sparse$penalty_components)) {
-        penalty <- penalty + object$sp[[i]] * object$sparse$penalty_components[[i]]
+    components <- object$sparse$penalty_components
+    penalty <- Matrix::sparseMatrix(
+        i=integer(), j=integer(), x=numeric(), dims=c(dimension, dimension)
+    )
+    for (i in seq_along(components)) {
+        penalty <- penalty + object$sp[[i]] * methods::as(components[[i]], 'generalMatrix')
     }
-    penalty <- as.matrix(penalty)
-    expanded <- Matrix::expand(factor)
-    system_columns <- function(indices) {
-        selector <- Matrix::sparseMatrix(
-            i=indices, j=seq_along(indices), x=1,
-            dims=c(dimension, length(indices))
-        )
-        as.matrix(Matrix::t(expanded$P) %*% (expanded$L %*%
-            (Matrix::t(expanded$L) %*% (expanded$P %*% selector))))
-    }
+    unit <- function(indices) as.matrix(Matrix::sparseMatrix(
+        i=indices, j=seq_along(indices), x=1, dims=c(dimension, length(indices))
+    ))
     edf1 <- vapply(object$smooth, function(smooth) {
         indices <- smooth$first.para:smooth$last.para
-        identity <- diag(dimension)
+        identity <- unit(indices)
         # F[, indices] and t(F)[, indices] = (I - S H^{-1})[, indices].
-        columns <- identity[, indices, drop=FALSE] - as.matrix(
-            .cdr_factor_solve(factor, penalty[, indices, drop=FALSE])
-        )
-        rows <- identity[, indices, drop=FALSE] - penalty %*% as.matrix(
-            .cdr_factor_solve(factor, identity[, indices, drop=FALSE])
-        )
+        columns <- identity - as.matrix(.cdr_factor_solve(
+            factor, as.matrix(penalty[, indices, drop=FALSE])
+        ))
+        rows <- identity - as.matrix(penalty %*% .cdr_factor_solve(factor, identity))
         sum(2 * diag(columns[indices, , drop=FALSE]) - colSums(columns * rows))
     }, numeric(1))
+    supports <- .sparse_penalty_supports(components)
+    owners <- vapply(supports, function(support) {
+        owner <- which(vapply(object$smooth, function(smooth) {
+            length(support) && all(support >= smooth$first.para) &&
+                all(support <= smooth$last.para)
+        }, logical(1)))
+        if (length(owner) == 1L) owner else NA_integer_
+    }, integer(1))
+    random <- if (anyNA(owners)) {
+        'not computed: a penalty spans several terms'
+    } else list(
+        gram=.cdr_factor_system(factor) - penalty,
+        penalties=lapply(seq_along(owners), function(i) list(
+            smooth=owners[[i]],
+            matrix=object$sp[[i]] * methods::as(components[[i]], 'generalMatrix')
+        )),
+        covariance_columns=function(indices) {
+            as.matrix(.cdr_factor_solve(factor, unit(indices))) * object$scale
+        },
+        solve_penalized=function(rhs) as.matrix(.cdr_factor_solve(factor, rhs)),
+        sig2=object$sig2
+    )
     list(
         gram=function(indices) {
-            system_columns(indices)[indices, , drop=FALSE] -
-                penalty[indices, indices, drop=FALSE]
+            .cdr_factor_system_columns(factor, indices)[indices, , drop=FALSE] -
+                as.matrix(penalty[indices, indices, drop=FALSE])
         },
-        edf1=edf1
+        edf1=edf1,
+        random=random
+    )
+}
+
+# The structure Wood's test needs for a distributional fit: the stored
+# likelihood Hessian plays the role of X'WX, and Vp is at unit scale.
+.cdrgam_distributional_test_structure <- function(object) {
+    information <- object$distributional$likelihood_hessian
+    if (is.null(information)) {
+        return(list(unavailable=paste(
+            'not computed: the fit predates the stored likelihood Hessian;',
+            'refit to test'
+        )))
+    }
+    information <- as.matrix(information)
+    edf1 <- .cdrgam_edf1(object$Vp %*% information)
+    list(
+        gram=function(indices) information[indices, indices, drop=FALSE],
+        edf1=vapply(object$smooth, function(smooth) {
+            sum(edf1[smooth$first.para:smooth$last.para])
+        }, numeric(1)),
+        random=paste(
+            'not computed: random-effect tests are not implemented for',
+            'distributional fits'
+        )
     )
 }
 
@@ -358,16 +451,118 @@
     list(statistic=statistic, p_value=min(1, p_value), rank=rank)
 }
 
+# Wood's (2013b) test that a fully penalized term is zero, giving the values
+# of mgcv's reTest() and recov(). `random` supplies the whole-model X'WX as
+# `gram`, the penalties as a list of `smooth` index and `matrix` (smoothing
+# parameter times penalty, in full coefficient coordinates),
+# `covariance_columns(indices)` returning those columns of Vp, `sig2`, and
+# optionally `solve_penalized(rhs)` solving (X'WX + S) x = rhs. A positive
+# `residual_df` gives the F-type reference for an estimated scale.
+#
+# Other random-effect terms I are integrated out of the null distribution.
+# mgcv forms the triangular factor Rm of the tested columns T from a QR of
+# the whole model. Rm only enters through Rm'Rm, which equals the inverse of
+# the T block of M_K^{-1}, where K are the columns not integrated out and
+#   M_K = G_KK + G_KI S_I^+ G_IK + S_KK
+# for G = X'WX, S_I the penalty of the integrated terms, and S_KK the other
+# penalties. With nothing integrated out, M is the penalized Hessian. The
+# frequentist covariance needs only its T block,
+#   Ve_TT = Vp_T. (G + G_.I S_I^+ G_I.) Vp_.T / sig2.
+# Each test therefore costs one sparse Cholesky factorization and one solve
+# per tested coefficient.
+.cdrgam_random_effect_test <- function(object, random, m, residual_df,
+        random_smooths=.cdrgam_random_smooths(object)) {
+    gram <- random$gram
+    dimension <- ncol(gram)
+    others <- setdiff(which(random_smooths), m)
+    integrated <- rep.int(FALSE, dimension)
+    for (i in others) {
+        integrated[object$smooth[[i]]$first.para:object$smooth[[i]]$last.para] <- TRUE
+    }
+    zero <- Matrix::sparseMatrix(
+        i=integer(), j=integer(), x=numeric(), dims=c(dimension, dimension)
+    )
+    fixed_penalty <- zero
+    random_penalty <- zero
+    for (penalty in random$penalties) {
+        if (penalty$smooth %in% others) {
+            random_penalty <- random_penalty + penalty$matrix
+        } else fixed_penalty <- fixed_penalty + penalty$matrix
+    }
+    target <- object$smooth[[m]]$first.para:object$smooth[[m]]$last.para
+    covariance <- random$covariance_columns(target)
+    unit <- function(indices, size) as.matrix(Matrix::sparseMatrix(
+        i=indices, j=seq_along(indices), x=1, dims=c(size, length(indices))
+    ))
+    if (!any(integrated)) {
+        solved <- if (is.null(random$solve_penalized)) {
+            .cdrgam_spd_solve(gram + fixed_penalty, unit(target, dimension))
+        } else random$solve_penalized(unit(target, dimension))
+        block <- solved[target, , drop=FALSE]
+        frequentist <- crossprod(covariance, as.matrix(gram %*% covariance))
+    } else {
+        kept <- which(!integrated)
+        removed <- which(integrated)
+        penalty2 <- as.matrix(random_penalty[removed, removed, drop=FALSE])
+        if (max(abs(penalty2 - diag(diag(penalty2), nrow(penalty2)))) == 0) {
+            values <- diag(penalty2)
+            positive <- values > max(values) * .Machine$double.eps^0.8
+            inverse <- Matrix::Diagonal(x=ifelse(positive, 1 / values, 0))
+        } else {
+            decomposition <- eigen((penalty2 + t(penalty2)) / 2, symmetric=TRUE)
+            positive <- decomposition$values >
+                max(decomposition$values) * .Machine$double.eps^0.8
+            inverse <- decomposition$vectors %*%
+                (ifelse(positive, 1 / decomposition$values, 0) *
+                    t(decomposition$vectors))
+        }
+        coupling <- gram[, removed, drop=FALSE]
+        marginal <- gram[kept, kept, drop=FALSE] +
+            coupling[kept, , drop=FALSE] %*% inverse %*%
+                Matrix::t(coupling[kept, , drop=FALSE]) +
+            fixed_penalty[kept, kept, drop=FALSE]
+        local <- match(target, kept)
+        solved <- .cdrgam_spd_solve(marginal, unit(local, length(kept)))
+        block <- if (is.null(solved)) NULL else solved[local, , drop=FALSE]
+        projected <- as.matrix(Matrix::crossprod(coupling, covariance))
+        frequentist <- crossprod(covariance, as.matrix(gram %*% covariance)) +
+            crossprod(projected, as.matrix(inverse %*% projected))
+    }
+    if (is.null(block)) {
+        stop('the penalized system for the random-effect test is not positive definite')
+    }
+    frequentist <- frequentist / random$sig2
+    frequentist <- (frequentist + t(frequentist)) / 2
+    precision <- solve((block + t(block)) / 2)
+    coefficients <- object$coefficients[target]
+    statistic <- drop(crossprod(coefficients, precision %*% coefficients)) /
+        random$sig2
+    covariance_root <- mgcv::mroot(frequentist)
+    values <- eigen(crossprod(covariance_root, precision %*% covariance_root) /
+        random$sig2, symmetric=TRUE, only.values=TRUE)$values
+    values[values < 0] <- 0
+    rank <- sum(values > max(values) * .Machine$double.eps^0.8)
+    p_value <- if (residual_df > 0) {
+        denominator <- max(1, round(residual_df))
+        mgcv::psum.chisq(0, c(values, -statistic / denominator),
+            df=c(rep.int(1, length(values)), denominator))
+    } else mgcv::psum.chisq(statistic, values)
+    list(statistic=statistic, p_value=min(1, max(0, p_value)), rank=rank)
+}
+
 # Per-coefficient alternative effective degrees of freedom 2 tr(F) - tr(FF),
 # where F = V X'WX / scale is the influence matrix in coefficient space.
 .cdrgam_edf1 <- function(influence) {
     2 * diag(influence) - rowSums(influence * t(influence))
 }
 
-# `structure`, when given, supplies Wood's test: `gram(indices)` returns the
-# X'WX block of those coefficients and `edf1` the per-smooth alternative
-# effective degrees of freedom. Without it, smooths get a full-rank Wald
-# statistic referred to their edf.
+# Tests every smooth with Wood's (2013) statistic, or fully penalized terms
+# with Wood's (2013b) random-effect test. `structure` supplies
+# `gram(indices)`, the X'WX block of those coefficients; `edf1`, the
+# per-smooth alternative effective degrees of freedom; and `random`, the
+# inputs to .cdrgam_random_effect_test() or a string giving why that test is
+# unavailable. A structure with `unavailable` instead leaves every test
+# uncomputed with that reason as its status.
 .cdrgam_smooth_table <- function(
         object, edf, covariance, residual_df, chi_square=FALSE, structure=NULL
 ) {
@@ -382,63 +577,54 @@
     )
     table[, 'edf'] <- edf
     table[, 'Ref.df'] <- edf
+    unavailable <- if (is.null(structure)) {
+        'not computed: test structure unavailable'
+    } else structure$unavailable
     test_status <- stats::setNames(
-        rep.int('not computed: test structure unavailable', count),
+        rep.int(if (is.null(unavailable)) '' else unavailable, count),
         rownames(table)
     )
+    if (!is.null(unavailable)) {
+        attr(table, 'test.status') <- test_status
+        return(table)
+    }
+    statistic_column <- if (chi_square) 'Chi.sq' else 'F'
+    reference_df <- if (chi_square) -1 else residual_df
+    random_smooths <- NULL
     for (i in seq_len(count)) {
         smooth <- object$smooth[[i]]
-        if (!is.null(smooth$null.space.dim) && smooth$null.space.dim <= 0L) {
-            test_status[[i]] <- 'not computed: fully penalized term'
+        if (is.null(smooth$null.space.dim)) {
+            test_status[[i]] <- 'not computed: test structure unavailable'
             next
         }
-        if (is.null(smooth$null.space.dim)) next
-        indices <- smooth$first.para:smooth$last.para
-        selected <- covariance(indices)
-        statistic_column <- if (chi_square) 'Chi.sq' else 'F'
-        if (!is.null(structure)) {
-            test <- .cdrgam_wood_test(
-                object$coefficients[indices], structure$gram(indices), selected,
-                min(length(indices), structure$edf1[[i]]),
-                if (chi_square) -1 else residual_df
+        if (smooth$null.space.dim <= 0L) {
+            if (is.character(structure$random) || is.null(structure$random)) {
+                test_status[[i]] <- if (is.character(structure$random)) {
+                    structure$random
+                } else 'not computed: fully penalized term'
+                next
+            }
+            if (is.null(random_smooths)) {
+                random_smooths <- .cdrgam_random_smooths(object)
+            }
+            test <- .cdrgam_random_effect_test(
+                object, structure$random, i, reference_df, random_smooths
             )
-            table[i, 'Ref.df'] <- test$rank
-            table[i, statistic_column] <- if (chi_square) test$statistic else
-                test$statistic / test$rank
-            table[i, 'p-value'] <- test$p_value
-            test_status[[i]] <- 'Wood (2013)'
-            next
-        }
-        decomposition <- eigen(selected, symmetric=TRUE)
-        values <- decomposition$values
-        tolerance <- max(values) * sqrt(.Machine$double.eps)
-        rank <- sum(values > tolerance)
-        if (!rank) {
-            test_status[[i]] <- 'not computed: covariance rank zero'
-            next
-        }
-        retained <- values > tolerance
-        precision <- decomposition$vectors[, retained, drop=FALSE] %*%
-            ((1 / values[retained]) *
-                t(decomposition$vectors[, retained, drop=FALSE]))
-        coefficients <- object$coefficients[indices]
-        statistic <- drop(crossprod(coefficients, precision %*% coefficients))
-        reference_df <- max(edf[[i]], 1)
-        table[i, 'Ref.df'] <- reference_df
-        table[i, statistic_column] <- if (chi_square) {
-            statistic
-        } else statistic / reference_df
-        table[i, 'p-value'] <- if (chi_square) {
-            stats::pchisq(statistic, df=reference_df, lower.tail=FALSE)
+            status <- 'Wood (2013b) random effect'
         } else {
-            stats::pf(
-                table[i, 'F'],
-                df1=reference_df,
-                df2=residual_df,
-                lower.tail=FALSE
+            indices <- smooth$first.para:smooth$last.para
+            test <- .cdrgam_wood_test(
+                object$coefficients[indices], structure$gram(indices),
+                covariance(indices), min(length(indices), structure$edf1[[i]]),
+                reference_df
             )
+            status <- 'Wood (2013)'
         }
-        test_status[[i]] <- 'approximate'
+        table[i, 'Ref.df'] <- test$rank
+        table[i, statistic_column] <- if (chi_square) test$statistic else
+            test$statistic / test$rank
+        table[i, 'p-value'] <- test$p_value
+        test_status[[i]] <- status
     }
     attr(table, 'test.status') <- test_status
     table

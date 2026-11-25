@@ -1,5 +1,13 @@
 # cdrgam (development version)
 
+- New `effect_inference()` estimates, interval-estimates, and tests summary
+  statistics of one or more fitted effects on one joint distribution of
+  their coefficients. Linear estimands, given as weights or a matrix, get
+  exact Wald inference; function estimands, such as peak lags, use
+  coefficient simulation or, optionally, the delta method. Results include
+  simultaneous intervals and max-modulus adjusted p-values across the
+  call's estimands, and a joint Wald test.
+
 - `test_effect(method = "wood")` tests whole functionals as `summary()`
   tests smooth terms. It uses Wood's (2013) statistic over every coefficient
   the functional uses, with their summed edf1 as the reference rank, so a

@@ -4610,7 +4610,10 @@
     } else {
         checkpoint_state$best_log_sp
     }
-    if (length(checkpoint_initial) == penalty_count &&
+    # A missing checkpoint has length zero, which would otherwise match a
+    # model with no smoothing parameters left.
+    if (!is.null(checkpoint_initial) &&
+            length(checkpoint_initial) == penalty_count &&
             all(is.finite(checkpoint_initial))) {
         initial <- checkpoint_initial
         initialization <- 'checkpoint'

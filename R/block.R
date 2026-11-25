@@ -539,7 +539,8 @@
         } else {
             checkpoint_state$best_log_sp
         }
-        if (length(checkpoint_initial) == penalty_count &&
+        if (!is.null(checkpoint_initial) &&
+                length(checkpoint_initial) == penalty_count &&
                 all(is.finite(checkpoint_initial))) {
             initial <- checkpoint_initial
         }

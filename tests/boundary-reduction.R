@@ -574,3 +574,24 @@ stopifnot(
     nrow(automatic_irf) == 35L * nlevels(responses$subject),
     all(is.finite(automatic_irf$estimate))
 )
+
+# A reduction that removes every penalty leaves a refit with no smoothing
+# parameters. Without a checkpoint, that refit starts from the mapped warm
+# start instead of an empty checkpoint value. This simulation sends every
+# penalty to its upper bound.
+unpenalized_simulation <- simulate_cdr(
+    list(x=function(lag) 0 * lag, z=function(lag) 0.9 * exp(-1.5 * lag)),
+    n_impulses=300, n_responses=320, duration=60, window=2, noise_sd=1, seed=387
+)
+unpenalized_design <- prepare_cdrgam(
+    response ~ irf(x, window=c(0, 2), k=8) + irf(z, window=c(0, 2), k=8),
+    unpenalized_simulation$impulses, unpenalized_simulation$responses, quiet=TRUE
+)
+for (backend in c('sparse', 'block')) {
+    unpenalized <- suppressWarnings(
+        cdrgam.fit(unpenalized_design, backend=backend, method='REML')
+    )
+    unpenalized_table <- summary(unpenalized)$s.table
+    stopifnot(all(is.finite(fitted(unpenalized))),
+        all(is.finite(unpenalized_table[, 'p-value'])))
+}

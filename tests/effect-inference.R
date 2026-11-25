@@ -122,3 +122,39 @@ stopifnot(
     failure(effect_inference(fit, list(population=population), null=c(0, 1))),
     failure(effect_inference(fit, list(population)))
 )
+
+# The simultaneous critical value lies between the pointwise and Bonferroni
+# multipliers for independent coordinates, is the pointwise one for
+# perfectly correlated coordinates, and is reproducible under a seed
+# without disturbing the caller's random stream.
+set.seed(5)
+before <- .Random.seed
+independent <- simultaneous_critical_value(diag(20), seed=1)
+stopifnot(
+    identical(.Random.seed, before),
+    identical(independent, simultaneous_critical_value(diag(20), seed=1)),
+    length(independent) == 20L, length(unique(independent)) == 1L,
+    independent[[1L]] > stats::qnorm(0.975),
+    independent[[1L]] < stats::qnorm(1 - 0.025 / 20),
+    abs(independent[[1L]] - stats::qnorm((1 + 0.95^(1 / 20)) / 2)) < 0.05,
+    abs(simultaneous_critical_value(matrix(4, 10, 10), seed=1)[[1L]] -
+        stats::qnorm(0.975)) < 1e-6
+)
+
+# Groups get their own values: one coordinate alone is pointwise.
+grouped_values <- simultaneous_critical_value(diag(6), groups=c(1, 2, 2, 2, 2, 2),
+    seed=1)
+stopifnot(
+    abs(grouped_values[[1L]] - stats::qnorm(0.975)) < 1e-12,
+    grouped_values[[2L]] > grouped_values[[1L]]
+)
+
+# From draws, the value covers each group jointly.
+set.seed(2)
+from_draws <- simultaneous_critical_value(
+    draws=matrix(stats::rnorm(6 * 4000), 6), estimate=rep(0, 6),
+    groups=rep(c('a', 'b'), each=3)
+)
+stopifnot(all(from_draws > 1.96), all(from_draws < 3),
+    failure(simultaneous_critical_value()),
+    failure(simultaneous_critical_value(diag(2), draws=matrix(0, 2, 2))))

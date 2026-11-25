@@ -322,26 +322,23 @@ effect_inference <- function(
             min(1, 2 * min(mean(estimand_draws[j, ] <= null[[j]]),
                 mean(estimand_draws[j, ] >= null[[j]])))
         }, numeric(1))
-        deviations <- abs(estimand_draws - estimate) / standard_error
     } else {
         multiplier <- stats::qnorm(1 - alpha / 2)
         lower <- estimate - multiplier * standard_error
         upper <- estimate + multiplier * standard_error
         p_value <- ifelse(informative, 2 * stats::pnorm(-abs(statistic)), NA_real_)
-        correlation <- estimand_covariance[informative, informative, drop=FALSE] /
-            tcrossprod(standard_error[informative])
-        deviations <- matrix(NA_real_, count, draws)
-        if (any(informative)) {
-            deviations[informative, ] <- abs(.cdr_inference_root(correlation) %*%
-                matrix(stats::rnorm(sum(informative) * draws), sum(informative), draws))
-        }
     }
-    maxima <- apply(deviations[informative, , drop=FALSE], 2L, max)
-    critical <- if (any(informative)) {
-        stats::quantile(maxima, level, names=FALSE)
-    } else NA_real_
+    band <- if (identical(method, 'simulation')) {
+        .cdr_max_modulus(draws=estimand_draws, estimate=estimate, level=level)
+    } else {
+        .cdr_max_modulus(covariance=estimand_covariance, level=level,
+            simulations=draws)
+    }
+    maxima <- band$maxima
+    critical <- band$critical
     adjusted <- vapply(seq_len(count), function(j) {
         if (!informative[[j]]) return(NA_real_)
+        if (is.null(maxima)) return(p_value[[j]])
         max(p_value[[j]], mean(maxima >= abs(statistic[[j]])))
     }, numeric(1))
     result <- data.frame(
@@ -370,4 +367,133 @@ effect_inference <- function(
         attr(result, 'draws') <- structure(estimand_draws, dimnames=list(labels, NULL))
     }
     result
+}
+
+# The max-modulus critical value of one group of coordinates, and the
+# simulated maxima it is the `level` quantile of. Given `covariance`, the
+# maxima are of standardized Gaussian draws with that correlation, and the
+# value is at least the pointwise normal quantile. Given `draws` (one row per
+# coordinate) and `estimate`, they are of absolute deviations from the
+# estimate scaled by each row's draw standard deviation. Coordinates with
+# no variance are ignored; with none left, the value is the pointwise
+# quantile for a covariance and missing for draws.
+.cdr_max_modulus <- function(
+        covariance=NULL, draws=NULL, estimate=NULL, level=0.95,
+        simulations=10000L
+) {
+    pointwise <- stats::qnorm((1 + level) / 2)
+    if (!is.null(covariance)) {
+        covariance <- as.matrix(covariance)
+        se <- sqrt(pmax(diag(covariance), 0))
+        keep <- is.finite(se) & se > max(c(se, 0), na.rm=TRUE) * 1e-8
+        if (!any(keep)) return(list(critical=pointwise, maxima=NULL))
+        correlation <- covariance[keep, keep, drop=FALSE] / tcrossprod(se[keep])
+        decomposition <- eigen((correlation + t(correlation)) / 2, symmetric=TRUE)
+        positive <- decomposition$values > max(decomposition$values) * 1e-10
+        root <- decomposition$vectors[, positive, drop=FALSE] %*%
+            diag(sqrt(decomposition$values[positive]), sum(positive))
+        deviations <- abs(root %*% matrix(
+            stats::rnorm(sum(positive) * simulations), sum(positive), simulations
+        ))
+        maxima <- apply(deviations, 2L, max)
+        # Perfectly correlated coordinates move together, so the maximum is
+        # one standard normal in absolute value.
+        if (sum(positive) == 1L) return(list(critical=pointwise, maxima=maxima))
+        return(list(
+            critical=max(pointwise, stats::quantile(maxima, level, names=FALSE)),
+            maxima=maxima
+        ))
+    }
+    scale <- apply(draws, 1L, stats::sd)
+    keep <- is.finite(scale) & scale > 0
+    if (!any(keep)) return(list(critical=NA_real_, maxima=NULL))
+    deviations <- abs(draws[keep, , drop=FALSE] - estimate[keep]) / scale[keep]
+    maxima <- apply(deviations, 2L, max)
+    list(critical=stats::quantile(maxima, level, names=FALSE), maxima=maxima)
+}
+
+#' Simultaneous critical values
+#'
+#' Returns the multiplier `c` such that the interval estimate plus or minus
+#' `c` standard errors covers every coordinate of a group jointly with
+#' probability `level`: the `level` quantile of the largest absolute
+#' standardized deviation within the group. This is the max-modulus value
+#' that [effect_inference()] uses for its simultaneous intervals.
+#'
+#' Give either `covariance`, for a Gaussian vector with that covariance, or
+#' `draws` and `estimate`, for posterior draws. A covariance gives a value
+#' estimated from `simulations` Gaussian draws and is never below the
+#' pointwise normal quantile. Draws are standardized by each row's draw
+#' standard deviation. Coordinates with no variance are ignored.
+#'
+#' @param covariance A covariance matrix of the coordinates.
+#' @param draws A matrix with one row per coordinate and one column per
+#'   posterior draw.
+#' @param estimate The point estimate of each row of `draws`.
+#' @param groups Optional group of each coordinate. Each group gets its own
+#'   critical value; a covariance is then split into its diagonal blocks.
+#' @param level Joint coverage probability.
+#' @param simulations Number of Gaussian draws for a covariance.
+#' @param seed Optional seed for those draws. The previous random state is
+#'   restored, so a seed makes the value reproducible without disturbing
+#'   the caller's random stream.
+#' @return A numeric vector with the critical value of each coordinate's
+#'   group, one element per coordinate.
+#' @seealso [effect_inference()]
+#' @export
+simultaneous_critical_value <- function(
+        covariance=NULL, draws=NULL, estimate=NULL, groups=NULL, level=0.95,
+        simulations=10000L, seed=NULL
+) {
+    if (is.null(covariance) == is.null(draws)) {
+        stop('Give exactly one of covariance and draws')
+    }
+    if (!is.numeric(level) || length(level) != 1L || !is.finite(level) ||
+            level <= 0 || level >= 1) stop('level must lie strictly between zero and one')
+    simulations <- suppressWarnings(as.integer(simulations))
+    if (length(simulations) != 1L || is.na(simulations) || simulations < 2L) {
+        stop('simulations must be an integer of at least two')
+    }
+    if (!is.null(covariance)) {
+        covariance <- as.matrix(covariance)
+        if (!is.numeric(covariance) || nrow(covariance) != ncol(covariance)) {
+            stop('covariance must be a square numeric matrix')
+        }
+        count <- nrow(covariance)
+    } else {
+        draws <- as.matrix(draws)
+        if (!is.numeric(draws) || ncol(draws) < 2L) {
+            stop('draws must be a numeric matrix with at least two columns')
+        }
+        count <- nrow(draws)
+        if (!is.numeric(estimate) || length(estimate) != count) {
+            stop('estimate must have one value per row of draws')
+        }
+    }
+    if (is.null(groups)) groups <- rep.int(1L, count)
+    if (length(groups) != count) stop('groups must have one value per coordinate')
+    if (!is.null(seed)) {
+        if (!is.numeric(seed) || length(seed) != 1L || !is.finite(seed)) {
+            stop('seed must be one finite number')
+        }
+        exists <- exists('.Random.seed', envir=globalenv(), inherits=FALSE)
+        if (exists) state <- get('.Random.seed', envir=globalenv())
+        on.exit(if (exists) {
+            assign('.Random.seed', state, envir=globalenv())
+        } else if (exists('.Random.seed', envir=globalenv(), inherits=FALSE)) {
+            rm('.Random.seed', envir=globalenv())
+        }, add=TRUE)
+        set.seed(as.integer(seed), kind='Mersenne-Twister', normal.kind='Inversion')
+    }
+    critical <- numeric(count)
+    for (rows in split(seq_len(count), factor(groups, levels=unique(groups)))) {
+        critical[rows] <- if (!is.null(covariance)) {
+            .cdr_max_modulus(covariance=covariance[rows, rows, drop=FALSE],
+                level=level, simulations=simulations)$critical
+        } else {
+            .cdr_max_modulus(draws=draws[rows, , drop=FALSE],
+                estimate=estimate[rows], level=level)$critical
+        }
+    }
+    critical
 }

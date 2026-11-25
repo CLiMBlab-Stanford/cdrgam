@@ -6,7 +6,9 @@
   exact Wald inference; function estimands, such as peak lags, use
   coefficient simulation or, optionally, the delta method. Results include
   simultaneous intervals and max-modulus adjusted p-values across the
-  call's estimands, and a joint Wald test.
+  call's estimands, and a joint Wald test. The new
+  `simultaneous_critical_value()` gives the same max-modulus critical
+  value from a covariance matrix or from posterior draws, per group.
 
 - `test_effect(method = "wood")` tests whole functionals as `summary()`
   tests smooth terms. It uses Wood's (2013) statistic over every coefficient

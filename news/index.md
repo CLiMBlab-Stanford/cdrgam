@@ -2,6 +2,13 @@
 
 ## cdrgam (development version)
 
+- [`summary()`](https://rdrr.io/r/base/summary.html) of block, sparse,
+  and distributional fits reports `pTerms.table`, mgcv’s per-term Wald
+  tests of parametric terms: a factor is tested jointly over its
+  coefficients, with an F reference when the scale is estimated.
+  [`fit_report()`](https://climblab.org/cdrgam/reference/fit_report.md)
+  returns it as `parametric_terms`.
+
 - New
   [`effect_inference()`](https://climblab.org/cdrgam/reference/effect_inference.md)
   estimates, interval-estimates, and tests summary statistics of one or

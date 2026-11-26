@@ -22,5 +22,6 @@ fit_report(object)
 
 `fit_metadata()` returns fitting metadata, formulas, distributional
 parameter names, and default plotting metadata. `fit_report()` adds
-printable summary text, parametric and smooth summary tables, and
-convergence diagnostics.
+printable summary text, the parametric coefficient table
+(`coefficients`), the smooth-term tests (`smooths`), the parametric-term
+tests (`parametric_terms`), and convergence diagnostics.

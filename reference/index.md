@@ -30,6 +30,11 @@
 - [`formula(`*`<cdrgam_design>`*`)`](https://climblab.org/cdrgam/reference/formula.cdrgam.md)
   [`formula(`*`<cdrgam>`*`)`](https://climblab.org/cdrgam/reference/formula.cdrgam.md)
   : Extract a CDR-GAM formula
+- [`AIC(`*`<cdrgam_block>`*`)`](https://climblab.org/cdrgam/reference/information-criteria.md)
+  [`AIC(`*`<cdrgam_sparse>`*`)`](https://climblab.org/cdrgam/reference/information-criteria.md)
+  [`BIC(`*`<cdrgam_block>`*`)`](https://climblab.org/cdrgam/reference/information-criteria.md)
+  [`BIC(`*`<cdrgam_sparse>`*`)`](https://climblab.org/cdrgam/reference/information-criteria.md)
+  : Information criteria for block and sparse fits
 - [`irf()`](https://climblab.org/cdrgam/reference/irf.md) : Specify an
   impulse-response term
 - [`marginaleffects_view()`](https://climblab.org/cdrgam/reference/marginaleffects_view.md)

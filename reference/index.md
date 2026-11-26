@@ -14,6 +14,8 @@
   : Construct a supported CDR-GAM response family
 - [`effect_catalog()`](https://climblab.org/cdrgam/reference/effect_catalog.md)
   : List the estimable impulse-response effects in a fitted model
+- [`effect_inference()`](https://climblab.org/cdrgam/reference/effect_inference.md)
+  : Inference for summary statistics of fitted effects
 - [`estimate_effect()`](https://climblab.org/cdrgam/reference/estimate_effect.md)
   : Evaluate fitted effects on declarative axis grids
 - [`estimate_irf()`](https://climblab.org/cdrgam/reference/estimate_irf.md)
@@ -54,6 +56,8 @@
   : Simulate irregular streams from fixed impulse-response functions
 - [`simulate_effect()`](https://climblab.org/cdrgam/reference/simulate_effect.md)
   : Simulate fitted effects from the coefficient posterior
+- [`simultaneous_critical_value()`](https://climblab.org/cdrgam/reference/simultaneous_critical_value.md)
+  : Simultaneous critical values
 - [`suggest_simplifications()`](https://climblab.org/cdrgam/reference/suggest_simplifications.md)
   : Suggest model simplifications from a fitted CDR-GAM
 - [`summary(`*`<cdrgam_block>`*`)`](https://climblab.org/cdrgam/reference/summary.cdrgam.md)
@@ -62,6 +66,6 @@
   [`print(`*`<summary.cdrgam>`*`)`](https://climblab.org/cdrgam/reference/summary.cdrgam.md)
   : Summarize a fitted CDR-GAM
 - [`test_effect()`](https://climblab.org/cdrgam/reference/test_effect.md)
-  : Test fitted effects jointly over declarative axis grids
+  : Test fitted effects
 - [`variance_components()`](https://climblab.org/cdrgam/reference/variance_components.md)
   : Extract smoothing variance components

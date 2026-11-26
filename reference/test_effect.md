@@ -1,11 +1,9 @@
-# Test fitted effects jointly over declarative axis grids
+# Test fitted effects
 
-Computes a Wald test of the null hypothesis that a functional returned
-by
+Tests the null hypothesis that a functional returned by
 [`estimate_effect()`](https://climblab.org/cdrgam/reference/estimate_effect.md)
-is zero at every grid point. The arguments select the same terms, axes,
-compositions, groupings, and references. One test is returned per
-selected term and grouping level.
+is zero. The arguments select the same terms, compositions, groupings,
+and groups. One test is returned per selected term and grouping level.
 
 ## Usage
 
@@ -24,7 +22,8 @@ test_effect(
   n = 50L,
   tolerance = 1e-08,
   boundary = c("estimate", "bound"),
-  points = NULL
+  points = NULL,
+  method = c("wood", "wald")
 )
 ```
 
@@ -85,7 +84,8 @@ test_effect(
 
 - tolerance:
 
-  Relative eigenvalue threshold for the rank of `L V L'`.
+  Relative eigenvalue threshold for the rank of `L V L'` under
+  `method = "wald"`.
 
 - boundary:
 
@@ -108,31 +108,58 @@ test_effect(
   must resolve to one value. Use it to evaluate along a path through the
   axes, such as each predictor value at its own lag.
 
+- method:
+
+  `"wood"` for Wood's whole-functional test or `"wald"` for a grid Wald
+  test. When omitted, it is `"wald"` if `axes`, `reference`, or `points`
+  define a grid and `"wood"` otherwise.
+
 ## Value
 
 A `cdrgam_effect_test` data frame with `term_id`, `term`, `group`,
-`composition`, `grouping`, `statistic`, `df`, `p_value`, and `points`.
-`df` is zero and `statistic` and `p_value` are missing when the
-functional is identically zero.
+`composition`, `grouping`, `method`, `statistic`, `df`, `residual_df`,
+`p_value`, `points`, and `coefficients`. `residual_df` is missing for
+chi-squared references, and `points` for Wood tests. Under
+`method = "wald"`, `df` is zero and `statistic` and `p_value` are
+missing when the functional is identically zero.
 
 ## Details
 
-The statistic is \\\hat\beta^\top L^\top (L V L^\top)^{-} L \hat\beta\\,
-where `L` stacks the grid rows of the functional and `V` is the
-coefficient covariance. The pseudo-inverse keeps eigenvalues above
+`method = "wood"` tests the whole functional, as
+[`summary()`](https://rdrr.io/r/base/summary.html) tests smooth terms.
+The null is that every coefficient the functional uses is zero, so a
+total composition is tested over the union of its terms' coefficients.
+The statistic is Wood's (2013), with the summed alternative effective
+degrees of freedom of those coefficients as its reference rank. A
+functional made of exactly one fully penalized term, such as a grouped
+deviation, gets Wood's (2013b) random-effect test, with other random
+effects integrated out. Grouped deviations are therefore tested over all
+levels at once, and `groups` must be `NULL`. The test does not use an
+evaluation grid, so `axes`, `reference`, and `points` must be empty.
+When the scale is estimated, `statistic` is the F statistic `T / df` on
+`df` and `residual_df` degrees of freedom, as in
+[`summary()`](https://rdrr.io/r/base/summary.html); otherwise it is `T`
+on a chi-squared reference.
+
+`method = "wald"` tests the functional at every point of an evaluation
+grid. The statistic is \\\hat\beta^\top L^\top (L V L^\top)^{-} L
+\hat\beta\\, where `L` stacks the grid rows of the functional and `V` is
+the coefficient covariance. The pseudo-inverse keeps eigenvalues above
 `tolerance` times the largest, and the reference distribution is
 chi-squared with that rank as its degrees of freedom. Use a grid dense
-enough to span the functional; the rank stops growing once it does.
-
-Penalized coefficients make this test approximate. Wood (2013) reports
-that such tests can reject too rarely when the null holds on the
-boundary of the smoothing-parameter space.
+enough to span the functional; the rank stops growing once it does. This
+test can reject too rarely when the null holds on the boundary of the
+smoothing-parameter space (Wood 2013).
 
 ## References
 
 Wood, S. N. (2013). On p-values for smooth components of an extended
 generalized additive model. *Biometrika*, 100(1), 221–228.
 
+Wood, S. N. (2013b). A simple test for random effects in regression
+models. *Biometrika*, 100(4), 1005–1010.
+
 ## See also
 
-[`estimate_effect()`](https://climblab.org/cdrgam/reference/estimate_effect.md)
+[`estimate_effect()`](https://climblab.org/cdrgam/reference/estimate_effect.md),
+[`summary.cdrgam()`](https://climblab.org/cdrgam/reference/summary.cdrgam.md)

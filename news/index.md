@@ -2,6 +2,50 @@
 
 ## cdrgam (development version)
 
+- New
+  [`effect_inference()`](https://climblab.org/cdrgam/reference/effect_inference.md)
+  estimates, interval-estimates, and tests summary statistics of one or
+  more fitted effects on one joint distribution of their coefficients.
+  Linear estimands, given as weights or a matrix, get exact Wald
+  inference; function estimands, such as peak lags, use coefficient
+  simulation or, optionally, the delta method. Results include
+  simultaneous intervals and max-modulus adjusted p-values across the
+  call’s estimands, and a joint Wald test. The new
+  [`simultaneous_critical_value()`](https://climblab.org/cdrgam/reference/simultaneous_critical_value.md)
+  gives the same max-modulus critical value from a covariance matrix or
+  from posterior draws, per group.
+
+- `test_effect(method = "wood")` tests whole functionals as
+  [`summary()`](https://rdrr.io/r/base/summary.html) tests smooth terms.
+  It uses Wood’s (2013) statistic over every coefficient the functional
+  uses, with their summed edf1 as the reference rank, so a
+  `composition = "total"` effect or a conditional group effect is tested
+  as one function. A grouped deviation is tested over all levels with
+  the random-effect test. A test of a single term reproduces its row of
+  the smooth table on native, block, and sparse fits. Requests the test
+  cannot serve, such as one level of a fully penalized term, fail
+  instead of falling back. It is the default; the grid Wald test is used
+  when `method = "wald"` is given or when `axes`, `reference`, or
+  `points` define a grid without a method. Results gain `method`,
+  `residual_df`, and `coefficients` columns.
+
+- [`summary()`](https://rdrr.io/r/base/summary.html) of block, sparse,
+  and distributional fits tests each smooth term with Wood’s (2013)
+  statistic and edf1 as its reference rank, as
+  [`mgcv::summary.gam()`](https://rdrr.io/pkg/mgcv/man/summary.gam.html)
+  does. Fully penalized terms, such as random effects and grouped IRF
+  deviations, get mgcv’s random-effect test (Wood 2013b) instead of
+  being left untested, with other random effects integrated out. Block
+  and sparse fits reproduce the native `mgcv` smooth table. The
+  random-effect test uses sparse factorizations and solves only for the
+  tested coefficients, so it does not form dense whole-model matrices.
+  These tests previously used a full-rank Wald statistic referred to the
+  edf, which tends to give smaller p-values; that fallback is removed.
+  When a test cannot be computed, its `s.test` entry gives the reason:
+  for example, distributional fits do not yet test fully penalized
+  terms, and distributional fits saved without the stored likelihood
+  Hessian must be refitted.
+
 - `estimate_effect(covariance = TRUE)` returns the joint covariance of
   the result’s rows as attribute `covariance`, one row and column per
   result row. Rows of different terms or groups are covariant when they

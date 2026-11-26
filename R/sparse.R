@@ -6520,7 +6520,8 @@ logLik.cdrgam_sparse <- function(object, ...) {
     n <- length(object$y)
     gaussian <- identical(object$family$family, 'gaussian') &&
         identical(object$family$link, 'identity')
-    value <- if (gaussian) {
+    value <- .cdrgam_mgcv_loglik(object, deviance.cdrgam_sparse(object))
+    if (is.null(value)) value <- if (gaussian) {
         -0.5 * (
             n * log(2 * pi * object$scale) +
                 deviance.cdrgam_sparse(object) / object$scale

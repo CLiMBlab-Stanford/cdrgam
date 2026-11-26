@@ -1028,7 +1028,8 @@ logLik.cdrgam_block <- function(object, ...) {
     n <- length(object$y)
     gaussian <- identical(object$family$family, 'gaussian') &&
         identical(object$family$link, 'identity')
-    value <- if (gaussian) {
+    value <- .cdrgam_mgcv_loglik(object, deviance.cdrgam_block(object))
+    if (is.null(value)) value <- if (gaussian) {
         -0.5 * (
             n * log(2 * pi * object$scale) +
                 deviance.cdrgam_block(object) / object$scale

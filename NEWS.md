@@ -1,5 +1,15 @@
 # cdrgam (development version)
 
+- `AIC()` and `BIC()` of block and sparse fits correct the effective degrees
+  of freedom for smoothing-parameter uncertainty, as mgcv's `logLik.gam()`
+  does (Wood, Pya, and Saefken 2016), and reproduce the native criteria. The
+  correction needs dense matrices of the model's size, one per smoothing
+  parameter, so fits with more coefficients than
+  `getOption("cdrgam.edf2_max_coefficients", 3000)`, GCV fits, and
+  distributional fits give an error with the reason instead of an
+  uncorrected value. Gaussian `logLik()` now evaluates the likelihood at the
+  maximum-likelihood scale, as mgcv does, rather than at the REML estimate.
+
 - `summary()` of block, sparse, and distributional fits reports
   `pTerms.table`, mgcv's per-term Wald tests of parametric terms: a factor is
   tested jointly over its coefficients, with an F reference when the scale is

@@ -1,5 +1,10 @@
 # cdrgam (development version)
 
+- `summary()` of block, sparse, and distributional fits reports
+  `pTerms.table`, mgcv's per-term Wald tests of parametric terms: a factor is
+  tested jointly over its coefficients, with an F reference when the scale is
+  estimated. `fit_report()` returns it as `parametric_terms`.
+
 - New `effect_inference()` estimates, interval-estimates, and tests summary
   statistics of one or more fitted effects on one joint distribution of
   their coefficients. Linear estimands, given as weights or a matrix, get

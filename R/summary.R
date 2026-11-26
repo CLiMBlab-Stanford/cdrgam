@@ -76,6 +76,58 @@
     lapply(formulas, stringify)
 }
 
+# Wald tests of each parametric term, as mgcv's summary.gam() reports them in
+# pTerms.table: the joint statistic of the term's coefficients on as many
+# degrees of freedom, divided by them and referred to F on the residual
+# degrees of freedom when the scale is estimated, or referred to chi-squared
+# otherwise. The term of each coefficient comes from the `assign` vector the
+# fit stores for prediction; without one, or with `use_assign = FALSE`, each
+# coefficient is its own term.
+# The intercept, assigned zero, is not tested.
+.cdrgam_parametric_term_table <- function(
+        object, parametric, covariance, residual_df, chi_square, use_assign=TRUE
+) {
+    if (!length(parametric)) return(NULL)
+    setup <- object$cdrgam$prediction$setup
+    assign <- if (isTRUE(use_assign)) setup$assign else NULL
+    labels <- attr(setup$pterms, 'term.labels')
+    if (is.null(assign) || length(assign) != length(parametric) ||
+            (any(assign > 0L) && max(assign) > length(labels))) {
+        names <- names(object$coefficients)[parametric]
+        keep <- names != '(Intercept)'
+        assign <- ifelse(keep, cumsum(keep), 0L)
+        labels <- names[keep]
+    }
+    tested <- sort(unique(assign[assign > 0L]))
+    if (!length(tested)) return(NULL)
+    statistic_column <- if (chi_square) 'Chi.sq' else 'F'
+    table <- matrix(
+        NA_real_, nrow=length(tested), ncol=3L,
+        dimnames=list(labels[tested], c('df', statistic_column, 'p-value'))
+    )
+    for (row in seq_along(tested)) {
+        indices <- parametric[assign == tested[[row]]]
+        coefficients <- object$coefficients[indices]
+        variance <- as.matrix(covariance(indices))
+        statistic <- tryCatch(
+            drop(crossprod(coefficients, solve(variance, coefficients))),
+            error=function(error) NA_real_
+        )
+        df <- length(indices)
+        table[row, 'df'] <- df
+        if (chi_square || residual_df <= 0) {
+            table[row, statistic_column] <- statistic
+            table[row, 'p-value'] <- stats::pchisq(statistic, df, lower.tail=FALSE)
+        } else {
+            table[row, statistic_column] <- statistic / df
+            table[row, 'p-value'] <- stats::pf(
+                statistic / df, df, residual_df, lower.tail=FALSE
+            )
+        }
+    }
+    table
+}
+
 .cdrgam_parametric_indices <- function(object) {
     if (!length(object$smooth)) return(seq_along(object$coefficients))
     count <- min(vapply(object$smooth, `[[`, numeric(1), 'first.para')) - 1L
@@ -705,6 +757,9 @@
         chi_square=fixed_dispersion,
         structure=test_structure
     )
+    p_terms <- .cdrgam_parametric_term_table(
+        object, parametric, covariance_at_scale, residual_df, fixed_dispersion
+    )
     weights <- object$prior.weights
     mean_response <- sum(weights * object$y) / sum(weights)
     deviance <- if (is.null(object$deviance)) {
@@ -744,9 +799,11 @@
             if ('Chi.sq' %in% colnames(s_table)) s_table[, 'Chi.sq'] else
                 s_table[, 'F'] * s_table[, 'Ref.df'],
         s.pv=if (is.null(s_table)) numeric() else s_table[, 'p-value'],
-        pTerms.pv=numeric(),
-        pTerms.chi.sq=numeric(),
-        pTerms.df=numeric(),
+        pTerms.table=p_terms,
+        pTerms.pv=if (is.null(p_terms)) numeric() else p_terms[, 'p-value'],
+        pTerms.chi.sq=if (is.null(p_terms)) numeric() else
+            p_terms[, 2L] * if (fixed_dispersion) 1 else p_terms[, 'df'],
+        pTerms.df=if (is.null(p_terms)) numeric() else p_terms[, 'df'],
         m=length(object$smooth),
         edf=smooth_edf,
         residual.df=residual_df,

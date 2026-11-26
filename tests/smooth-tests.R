@@ -204,3 +204,44 @@ stopifnot(
     max(abs(summary(unflagged)$s.table[, 'F'] - grouped_tables$sparse$s.table[, 'F'])) <
         1e-8
 )
+
+# Parametric terms get mgcv's per-term Wald tests: a factor is tested jointly
+# over its coefficients, and a numeric term on one degree of freedom.
+parametric_data <- simulation$responses
+set.seed(23)
+parametric_data$g <- factor(sample(letters[1:3], nrow(parametric_data), TRUE))
+parametric_data$w <- stats::rnorm(nrow(parametric_data))
+parametric_data$response <- parametric_data$response +
+    c(a=0, b=0.4, c=-0.2)[as.character(parametric_data$g)]
+parametric_design <- prepare_cdrgam(
+    response ~ g + w + irf(x, k_l=5, k_p=4),
+    simulation$impulses, parametric_data, window=c(0, 2), quiet=TRUE
+)
+parametric_native <- summary(cdrgam.fit(
+    parametric_design, backend='mgcv', method='REML'
+))$pTerms.table
+for (backend in c('block', 'sparse')) {
+    parametric_fit <- cdrgam.fit(parametric_design, backend=backend, method='REML')
+    parametric_summary <- summary(parametric_fit)
+    parametric_table <- parametric_summary$pTerms.table
+    coefficients_table <- parametric_summary$p.table
+    factor_indices <- match(c('gb', 'gc'), names(coef(parametric_fit)))
+    factor_wald <- drop(crossprod(
+        coef(parametric_fit)[factor_indices],
+        solve(vcov(parametric_fit)[factor_indices, factor_indices],
+            coef(parametric_fit)[factor_indices])
+    ))
+    stopifnot(
+        identical(rownames(parametric_table), c('g', 'w')),
+        identical(unname(parametric_table[, 'df']), c(2, 1)),
+        abs(parametric_table['w', 'F'] - coefficients_table['w', 't value']^2) < 1e-8,
+        abs(parametric_table['w', 'p-value'] - coefficients_table['w', 'Pr(>|t|)']) < 1e-8,
+        abs(parametric_table['g', 'F'] - factor_wald / 2) < 1e-8 * factor_wald
+    )
+    # The block fit reaches the native optimum, so its table is mgcv's.
+    if (identical(backend, 'block')) stopifnot(
+        max(abs(parametric_table[, 'F'] - parametric_native[, 'F']) /
+            parametric_native[, 'F']) < 1e-2,
+        max(abs(parametric_table[, 'p-value'] - parametric_native[, 'p-value'])) < 1e-4
+    )
+}

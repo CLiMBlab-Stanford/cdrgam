@@ -331,6 +331,8 @@ available, individual commits also contain `Assisted-by:` trailers.
   impulse-response term
 - [`marginaleffects_view()`](https://climblab.org/cdrgam/reference/marginaleffects_view.md)
   : Prepare a cdrgam model for marginaleffects
+- [`methods_facts()`](https://climblab.org/cdrgam/reference/methods_facts.md)
+  : Describe estimation procedures for methods reporting
 - [`plot(`*`<cdrgam>`*`)`](https://climblab.org/cdrgam/reference/plot.cdrgam.md)
   : Plot CDR effects and translated GAM components
 - [`predict(`*`<cdrgam_block>`*`)`](https://climblab.org/cdrgam/reference/predict.cdrgam.md)

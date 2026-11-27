@@ -1,6 +1,12 @@
 # Changelog
 
-## cdrgam (development version)
+## cdrgam 0.5.0
+
+- [`methods_facts()`](https://climblab.org/cdrgam/reference/methods_facts.md)
+  describes the estimation procedure for a backend, engine, smoothing
+  criterion, and family. It resolves the default criterion, such as
+  `"fREML"` for `bam()`, and lists the term tests with their reference
+  keys.
 
 - Smooth-term tests of sparse fits hold one dense matrix of the tested
   term’s columns at a time, computed in column chunks, instead of about

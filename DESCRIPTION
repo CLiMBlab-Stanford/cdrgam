@@ -23,7 +23,8 @@ Imports:
     methods,
     mgcv,
     parallel,
-    parallelly
+    parallelly,
+    stats
 Suggests:
     marginaleffects
 Encoding: UTF-8

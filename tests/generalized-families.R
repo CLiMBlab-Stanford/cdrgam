@@ -440,8 +440,12 @@ random_terms <- random_summary$s.test == 'Wood (2013b) random effect'
 stopifnot(
     any(random_terms),
     all(is.finite(random_summary$s.table[random_terms, 'p-value'])),
-    max(abs(random_summary$s.table[random_terms, 'Ref.df'] -
-        random_native_table[random_terms, 'Ref.df'])) < 1e-6,
     max(abs(random_summary$s.table[random_terms, 'p-value'] -
-        random_native_table[random_terms, 'p-value'])) < 1e-2
+        random_native_table[random_terms, 'p-value'])) < 1e-4
 )
+# Ref.df counts the eigenvalues above max * eps^0.8, as mgcv's reTest() does.
+# For a term penalized to zero that count is unstable across platforms, while
+# the p-value, which uses the eigenvalues themselves, is not.
+compared <- random_terms & random_native_table[, 'edf'] > 0.01
+stopifnot(max(c(0, abs(random_summary$s.table[compared, 'Ref.df'] -
+    random_native_table[compared, 'Ref.df']))) < 1e-6)

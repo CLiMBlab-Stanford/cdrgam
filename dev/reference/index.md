@@ -2,56 +2,77 @@
 
 ## All functions
 
-- [`is_cdrgam()`](https://climblab-stanford.github.io/cdrgam/dev/reference/cdrgam-class.md)
-  [`as_gam()`](https://climblab-stanford.github.io/cdrgam/dev/reference/cdrgam-class.md)
+- [`as_mgcv_spec()`](https://climblab.org/cdrgam/dev/reference/as_mgcv_spec.md)
+  : Export an exact native mgcv fitting specification
+- [`is_cdrgam()`](https://climblab.org/cdrgam/dev/reference/cdrgam-class.md)
+  [`as_gam()`](https://climblab.org/cdrgam/dev/reference/cdrgam-class.md)
   : CDR-GAM model class helpers
-- [`cdrgam()`](https://climblab-stanford.github.io/cdrgam/dev/reference/cdrgam.md)
-  [`cdrgam.fit()`](https://climblab-stanford.github.io/cdrgam/dev/reference/cdrgam.md)
-  : Fit a continuous-time deconvolutional GAM
-- [`cdrgam_family()`](https://climblab-stanford.github.io/cdrgam/dev/reference/cdrgam_family.md)
+- [`cdrgam.fit()`](https://climblab.org/cdrgam/dev/reference/cdrgam.md)
+  [`cdrgam()`](https://climblab.org/cdrgam/dev/reference/cdrgam.md) :
+  Fit a continuous-time deconvolutional GAM
+- [`cdrgam_family()`](https://climblab.org/cdrgam/dev/reference/cdrgam_family.md)
   : Construct a supported CDR-GAM response family
-- [`effect_catalog()`](https://climblab-stanford.github.io/cdrgam/dev/reference/effect_catalog.md)
-  : List estimable impulse-response effects
-- [`estimate_effect()`](https://climblab-stanford.github.io/cdrgam/dev/reference/estimate_effect.md)
+- [`effect_catalog()`](https://climblab.org/cdrgam/dev/reference/effect_catalog.md)
+  : List the estimable impulse-response effects in a fitted model
+- [`effect_inference()`](https://climblab.org/cdrgam/dev/reference/effect_inference.md)
+  : Inference for summary statistics of fitted effects
+- [`estimate_effect()`](https://climblab.org/cdrgam/dev/reference/estimate_effect.md)
   : Evaluate fitted effects on declarative axis grids
-- [`estimate_irf()`](https://climblab-stanford.github.io/cdrgam/dev/reference/estimate_irf.md)
+- [`estimate_irf()`](https://climblab.org/cdrgam/dev/reference/estimate_irf.md)
   : Evaluate fitted impulse-response function terms
-- [`estimate_response_effect()`](https://climblab-stanford.github.io/cdrgam/dev/reference/estimate_response_effect.md)
+- [`estimate_response_effect()`](https://climblab.org/cdrgam/dev/reference/estimate_response_effect.md)
   : Generate response-effect plot data
-- [`fit_diagnostics()`](https://climblab-stanford.github.io/cdrgam/dev/reference/fit_diagnostics.md)
+- [`fit_diagnostics()`](https://climblab.org/cdrgam/dev/reference/fit_diagnostics.md)
   : Report standardized fit convergence diagnostics
-- [`fit_metadata()`](https://climblab-stanford.github.io/cdrgam/dev/reference/fit_report.md)
-  [`fit_report()`](https://climblab-stanford.github.io/cdrgam/dev/reference/fit_report.md)
-  : Extract Stable Fit Metadata and Summary Tables
-- [`formula(`*`<cdrgam_design>`*`)`](https://climblab-stanford.github.io/cdrgam/dev/reference/formula.cdrgam.md)
-  [`formula(`*`<cdrgam>`*`)`](https://climblab-stanford.github.io/cdrgam/dev/reference/formula.cdrgam.md)
+- [`fit_metadata()`](https://climblab.org/cdrgam/dev/reference/fit_report.md)
+  [`fit_report()`](https://climblab.org/cdrgam/dev/reference/fit_report.md)
+  : Extract stable fit metadata and summary tables
+- [`formula(`*`<cdrgam_design>`*`)`](https://climblab.org/cdrgam/dev/reference/formula.cdrgam.md)
+  [`formula(`*`<cdrgam>`*`)`](https://climblab.org/cdrgam/dev/reference/formula.cdrgam.md)
   : Extract a CDR-GAM formula
-- [`irf()`](https://climblab-stanford.github.io/cdrgam/dev/reference/irf.md)
-  : Specify an impulse-response term
-- [`marginaleffects_view()`](https://climblab-stanford.github.io/cdrgam/dev/reference/marginaleffects_view.md)
+- [`AIC(`*`<cdrgam_block>`*`)`](https://climblab.org/cdrgam/dev/reference/information-criteria.md)
+  [`AIC(`*`<cdrgam_sparse>`*`)`](https://climblab.org/cdrgam/dev/reference/information-criteria.md)
+  [`BIC(`*`<cdrgam_block>`*`)`](https://climblab.org/cdrgam/dev/reference/information-criteria.md)
+  [`BIC(`*`<cdrgam_sparse>`*`)`](https://climblab.org/cdrgam/dev/reference/information-criteria.md)
+  : Information criteria for block and sparse fits
+- [`irf()`](https://climblab.org/cdrgam/dev/reference/irf.md) : Specify
+  an impulse-response term
+- [`marginaleffects_view()`](https://climblab.org/cdrgam/dev/reference/marginaleffects_view.md)
   : Prepare a cdrgam model for marginaleffects
-- [`plot(`*`<cdrgam>`*`)`](https://climblab-stanford.github.io/cdrgam/dev/reference/plot.cdrgam.md)
+- [`methods_facts()`](https://climblab.org/cdrgam/dev/reference/methods_facts.md)
+  : Describe estimation procedures for methods reporting
+- [`plot(`*`<cdrgam>`*`)`](https://climblab.org/cdrgam/dev/reference/plot.cdrgam.md)
   : Plot CDR effects and translated GAM components
-- [`predict(`*`<cdrgam>`*`)`](https://climblab-stanford.github.io/cdrgam/dev/reference/predict.cdrgam.md)
-  [`predict(`*`<cdrgam_block>`*`)`](https://climblab-stanford.github.io/cdrgam/dev/reference/predict.cdrgam.md)
-  [`predict(`*`<cdrgam_sparse>`*`)`](https://climblab-stanford.github.io/cdrgam/dev/reference/predict.cdrgam.md)
+- [`predict(`*`<cdrgam_block>`*`)`](https://climblab.org/cdrgam/dev/reference/predict.cdrgam.md)
+  [`predict(`*`<cdrgam>`*`)`](https://climblab.org/cdrgam/dev/reference/predict.cdrgam.md)
+  [`predict(`*`<cdrgam_distributional_block>`*`)`](https://climblab.org/cdrgam/dev/reference/predict.cdrgam.md)
+  [`predict(`*`<cdrgam_distributional_sparse>`*`)`](https://climblab.org/cdrgam/dev/reference/predict.cdrgam.md)
+  [`predict(`*`<cdrgam_sparse>`*`)`](https://climblab.org/cdrgam/dev/reference/predict.cdrgam.md)
   : Predict from a fitted CDR-GAM
-- [`predict_components()`](https://climblab-stanford.github.io/cdrgam/dev/reference/predict_components.md)
-  : Predict Response and Link Components
-- [`prepare_cdrgam()`](https://climblab-stanford.github.io/cdrgam/dev/reference/prepare_cdrgam.md)
-  : Compile untiled streams for CDR-GAM fitting
-- [`response_scenarios()`](https://climblab-stanford.github.io/cdrgam/dev/reference/response_scenarios.md)
+- [`predict_components()`](https://climblab.org/cdrgam/dev/reference/predict_components.md)
+  : Predict response and link components
+- [`prepare_cdrgam()`](https://climblab.org/cdrgam/dev/reference/prepare_cdrgam.md)
+  : Compile untiled impulse and response streams for CDR-GAM fitting
+- [`response_scenarios()`](https://climblab.org/cdrgam/dev/reference/response_scenarios.md)
   : Construct response-history scenarios
-- [`save_cdrgam_plots()`](https://climblab-stanford.github.io/cdrgam/dev/reference/save_cdrgam_plots.md)
+- [`sample_effect_coefficients()`](https://climblab.org/cdrgam/dev/reference/sample_effect_coefficients.md)
+  : Sample coefficients shared by several effect simulations
+- [`save_cdrgam_plots()`](https://climblab.org/cdrgam/dev/reference/save_cdrgam_plots.md)
   : Save CDR plots to PDF or raster images
-- [`simulate_cdr()`](https://climblab-stanford.github.io/cdrgam/dev/reference/simulate_cdr.md)
+- [`simulate_cdr()`](https://climblab.org/cdrgam/dev/reference/simulate_cdr.md)
   : Simulate irregular streams from fixed impulse-response functions
-- [`suggest_simplifications()`](https://climblab-stanford.github.io/cdrgam/dev/reference/suggest_simplifications.md)
+- [`simulate_effect()`](https://climblab.org/cdrgam/dev/reference/simulate_effect.md)
+  : Simulate fitted effects from the coefficient posterior
+- [`simultaneous_critical_value()`](https://climblab.org/cdrgam/dev/reference/simultaneous_critical_value.md)
+  : Simultaneous critical values
+- [`suggest_simplifications()`](https://climblab.org/cdrgam/dev/reference/suggest_simplifications.md)
   : Suggest model simplifications from a fitted CDR-GAM
-- [`summary(`*`<cdrgam>`*`)`](https://climblab-stanford.github.io/cdrgam/dev/reference/summary.cdrgam.md)
-  [`summary(`*`<cdrgam_block>`*`)`](https://climblab-stanford.github.io/cdrgam/dev/reference/summary.cdrgam.md)
-  [`summary(`*`<cdrgam_sparse>`*`)`](https://climblab-stanford.github.io/cdrgam/dev/reference/summary.cdrgam.md)
-  [`print(`*`<summary.cdrgam>`*`)`](https://climblab-stanford.github.io/cdrgam/dev/reference/summary.cdrgam.md)
+- [`summary(`*`<cdrgam_block>`*`)`](https://climblab.org/cdrgam/dev/reference/summary.cdrgam.md)
+  [`summary(`*`<cdrgam>`*`)`](https://climblab.org/cdrgam/dev/reference/summary.cdrgam.md)
+  [`summary(`*`<cdrgam_sparse>`*`)`](https://climblab.org/cdrgam/dev/reference/summary.cdrgam.md)
+  [`print(`*`<summary.cdrgam>`*`)`](https://climblab.org/cdrgam/dev/reference/summary.cdrgam.md)
   : Summarize a fitted CDR-GAM
-- [`variance_components()`](https://climblab-stanford.github.io/cdrgam/dev/reference/variance_components.md)
+- [`test_effect()`](https://climblab.org/cdrgam/dev/reference/test_effect.md)
+  : Test fitted effects
+- [`variance_components()`](https://climblab.org/cdrgam/dev/reference/variance_components.md)
   : Extract smoothing variance components

@@ -3,9 +3,11 @@
 Evaluate and plot impulse-response functions by lag, predictor slices at
 fixed delays, lag-by-predictor surfaces, or coefficient groups. All CDR
 effects are shown on the additive linear-predictor scale. Use
-`view="gam"` on a native `mgcv` fit to plot the translated model. When
-predictor rescaling was enabled, CDR and ordinary-smooth coordinates are
-restored to native source units before display.
+`view="gam"` on a native `mgcv` fit to call
+[`mgcv::plot.gam()`](https://rdrr.io/pkg/mgcv/man/plot.gam.html) on the
+translated model. When predictor rescaling was enabled, CDR and
+ordinary-smooth coordinates are restored to native source units before
+display.
 
 ## Usage
 
@@ -73,7 +75,8 @@ plot(
 
 - unconditional:
 
-  Include smoothing-parameter uncertainty where supported.
+  Include smoothing-parameter uncertainty where the fitted backend
+  supports it.
 
 - ci_level:
 

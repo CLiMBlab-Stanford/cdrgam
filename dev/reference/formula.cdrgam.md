@@ -2,24 +2,16 @@
 
 Returns the raw user formula, the normalized CDR formula with structural
 defaults, the effective formula after automatic simplification, or the
-translated mgcv formula.
+native mgcv export formula.
 
 ## Usage
 
 ``` r
 # S3 method for class 'cdrgam_design'
-formula(
-  x,
-  type = c("raw", "normalized", "effective"),
-  ...
-)
+formula(x, type = c("raw", "normalized", "effective", "mgcv"), ...)
 
 # S3 method for class 'cdrgam'
-formula(
-  x,
-  type = c("raw", "normalized", "effective", "mgcv"),
-  ...
-)
+formula(x, type = c("raw", "normalized", "effective", "mgcv"), ...)
 ```
 
 ## Arguments
@@ -30,8 +22,13 @@ formula(
 
 - type:
 
-  Formula representation to return. The `"mgcv"` translation is
-  available for fitted models.
+  Formula representation: the raw formula supplied by the user, the
+  normalized CDR formula including structural defaults, or the effective
+  CDR formula after automatic simplification, or `"mgcv"`, the native
+  formula exported by
+  [`as_mgcv_spec()`](https://climblab.org/cdrgam/dev/reference/as_mgcv_spec.md).
+  Its named matrix terms receive their penalties through the rest of
+  that specification.
 
 - ...:
 
@@ -39,5 +36,4 @@ formula(
 
 ## Value
 
-The selected formula, or a parameter-named formula list for a
-distributional model.
+A formula, or a parameter-named formula list for a distributional model.

@@ -23,7 +23,7 @@
 
     <a class="navbar-brand me-2" href="index.html">cdrgam</a>
 
-    <small class="nav-text text-danger me-auto" data-bs-toggle="tooltip" data-bs-placement="bottom" title="In-development version">0.2.0.9000</small>
+    <small class="nav-text text-danger me-auto" data-bs-toggle="tooltip" data-bs-placement="bottom" title="In-development version">0.4.0.9000</small>
 
 
     <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbar" aria-controls="navbar" aria-expanded="false" aria-label="Toggle navigation">
@@ -53,11 +53,16 @@
 <p><code>cdrgam</code> fits continuous-time deconvolutional regression (CDR) models in R. It represents impulse-response functions with GAM smooths while compiling irregular impulse histories into compact response-level designs. This avoids materializing the much larger history-level design used by a direct <code>mgcv</code> linear-functional fit.</p>
 <p>The package is an experimental rewrite. Its API and numerical backends may change while validation continues.</p>
 <div class="section level2">
+<h2 id="documentation">Documentation<a class="anchor" aria-label="anchor" href="#documentation"></a>
+</h2>
+<p>The reference manual and articles are at <a href="https://climblab-stanford.github.io/cdrgam/" class="external-link">climblab-stanford.github.io/cdrgam</a>. To define, run, and visualize CDR-GAM analyses as projects, with dependency tracking and Slurm scheduling, use the command-line harness <a href="https://github.com/CLiMBlab-Stanford/cdrgam.cli" class="external-link">cdrgam.cli</a>.</p>
+</div>
+<div class="section level2">
 <h2 id="model-interface">Model interface<a class="anchor" aria-label="anchor" href="#model-interface"></a>
 </h2>
 <p>A model combines ordinary response-aligned GAM terms with <code><a href="reference/irf.html">irf()</a></code> terms whose predictors come from an impulse stream:</p>
 <div class="sourceCode" id="cb1"><pre class="downlit sourceCode r">
-<code class="sourceCode R"><span><span class="kw"><a href="https://rdrr.io/r/base/library.html" class="external-link">library</a></span><span class="op">(</span><span class="va"><a href="https://climblab-stanford.github.io/cdrgam/">cdrgam</a></span><span class="op">)</span></span>
+<code class="sourceCode R"><span><span class="kw"><a href="https://rdrr.io/r/base/library.html" class="external-link">library</a></span><span class="op">(</span><span class="va"><a href="https://climblab-stanford.github.io/cdrgam/" class="external-link">cdrgam</a></span><span class="op">)</span></span>
 <span></span>
 <span><span class="va">model</span> <span class="op">&lt;-</span> <span class="fu"><a href="reference/cdrgam.html">cdrgam</a></span><span class="op">(</span></span>
 <span>    <span class="va">rt</span> <span class="op">~</span> <span class="fu">s</span><span class="op">(</span><span class="va">word_position</span>, k <span class="op">=</span> <span class="fl">5</span><span class="op">)</span> <span class="op">+</span></span>
@@ -90,6 +95,7 @@
 <span><span class="op">)</span><span class="op">)</span></span></code></pre></div>
 <p>The native <code>mgcv</code> backend accepts Gaussian, binomial, Poisson, and Gamma families through the validated <code><a href="reference/cdrgam_family.html">cdrgam_family()</a></code> registry, with an optional explicit link. Stream-aware prediction supports both response and link scales. The dense block backend provides a generalized reference implementation for <code>poisson(log)</code>, <code>binomial(logit)</code>, and estimated-dispersion <code>Gamma(log)</code> models using safeguarded penalized IRLS and Laplace marginal-likelihood optimization. The sparse backend supports the same families with streamed PIRLS, numeric sparse-factor updates, and an exact Laplace score. Canonical fixed-dispersion fits use safeguarded trust-region BFGS; Gamma uses exact-gradient L-BFGS-B to avoid a boundary-adjacent secondary basin. Noncanonical links remain native-only.</p>
 <p>Set <code>rescale_predictors = TRUE</code> to improve numerical conditioning when continuous predictors or timestamps have awkward units. The transformation divides by training-data standard deviations but never centers, so interaction reference points retain their meaning. Binary, categorical, grouping, series, and constant variables are left alone. History windows are built in native time units, then lag and time are divided by the same impulse-time standard deviation. Formulas remain unchanged; new data are transformed with the stored training statistics, and CDR plots and effect estimates use native source units.</p>
+<p>Linear IRF predictors, including binary ones, are centered by default at their means over the training history links. Every term is then defined relative to an average event, so removing <code>irf(1)</code> removes the response to an average event, and omitting a lower-order term of an interaction removes that effect at the other predictors’ means. Without centering, <code>- irf(1)</code> would instead require a zero response to an event whose predictors are all zero, and the average-event response would remain inside the predictor terms. The prepared design’s <code>centering</code> table records each predictor’s center. <code>irf(1)</code> is then the response to an event with average linear predictors, and each linear term is the deviation from that response. Smooth predictor axes are already centered by their own constraint, so both kinds of term share the same reference. Lower-order terms of a linear interaction are effects with the other predictors at their means. Set <code>center_predictors = FALSE</code> for uncentered predictors, where <code>irf(1)</code> is the response at zero, or override individual terms with <code>irf(center = )</code>, which also accepts one logical value per predictor or predictor names. Centers are stored with the fit and applied to new data; effects take source values.</p>
 </div>
 <div class="section level2">
 <h2 id="plotting">Plotting<a class="anchor" aria-label="anchor" href="#plotting"></a>

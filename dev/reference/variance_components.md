@@ -1,10 +1,10 @@
 # Extract smoothing variance components
 
-Reports the variance components implied by the smoothing parameters of
-the expanded mgcv model. Native fits are passed directly to
+Report the variance components implied by the smoothing parameters of
+the expanded `mgcv` model. Native fits are passed directly to
 [`mgcv::gam.vcomp()`](https://rdrr.io/pkg/mgcv/man/gam.vcomp.html). For
 block-backend fits, the same calculation is applied to the stored REML
-scale, penalty rescaling metadata, and outer Hessian. The function does
+scale, penalty rescaling metadata, and outer Hessian. This function does
 not estimate covariance parameters beyond those present in the expanded
 model.
 

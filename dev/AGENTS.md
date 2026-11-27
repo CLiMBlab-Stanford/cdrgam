@@ -20,8 +20,8 @@ logs, or session identifiers.
 The R package occupies the repository root:
 
 - `R/formula.R` parses
-  [`irf()`](https://climblab-stanford.github.io/cdrgam/dev/reference/irf.md)
-  terms and compiles stream histories.
+  [`irf()`](https://climblab.org/cdrgam/dev/reference/irf.md) terms and
+  compiles stream histories.
 - `R/compressed.R` integrates compact designs with native `mgcv` fits.
 - `R/block.R` implements the dense Gaussian REML reference backend.
 - `R/sparse.R` implements the scalable sparse Gaussian REML backend.
@@ -43,19 +43,28 @@ the independent backend comparisons: native `mgcv`, dense block REML,
 and sparse REML provide complementary checks on preprocessing,
 optimization, prediction, and inference.
 
-Run the narrowest relevant tests while developing, then run all
-standalone tests before handing off a broad change:
+Run the narrowest relevant tests while developing. Add or run focused
+tests for the mathematical or API behavior changed by the task. Use a
+clean temporary library when installed-package behavior or namespace
+contents matter.
+
+Do not run every standalone test or a full `R CMD check` for routine
+development changes. The hosted release gate is the authoritative
+full-suite, package-check, documentation, and cross-platform validation.
+Run equivalent full validation locally only when preparing a release,
+investigating a gate failure, or when the user asks for it explicitly.
+Focused development tests can be selected with `scripts/test`, for
+example:
 
 ``` sh
-for test_file in tests/*.R; do
-    Rscript "$test_file" || exit 1
-done
+./scripts/test api
+./scripts/test optimizer
+./scripts/test generalized
 ```
 
-Use a clean temporary library when installed-package behavior or
-namespace contents matter. Do not commit installed libraries, compiled
-objects, package tarballs, checkpoints, logs, plots, fitted objects, or
-generated validation results.
+Do not commit installed libraries, compiled objects, package tarballs,
+checkpoints, logs, plots, fitted objects, or generated validation
+results.
 
 Long-running validation may have active cluster jobs and resumable
 checkpoints. Inspect job and checkpoint state before changing optimizer

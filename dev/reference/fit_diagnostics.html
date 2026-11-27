@@ -7,7 +7,7 @@
 
     <a class="navbar-brand me-2" href="../index.html">cdrgam</a>
 
-    <small class="nav-text text-danger me-auto" data-bs-toggle="tooltip" data-bs-placement="bottom" title="In-development version">0.2.0.9000</small>
+    <small class="nav-text text-danger me-auto" data-bs-toggle="tooltip" data-bs-placement="bottom" title="In-development version">0.4.0.9000</small>
 
 
     <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbar" aria-controls="navbar" aria-expanded="false" aria-label="Toggle navigation">
@@ -52,9 +52,38 @@
 </dl></div>
     <div class="section level2">
     <h2 id="value">Value<a class="anchor" aria-label="anchor" href="#value"></a></h2>
-    <p>A named list containing at least <code>converged</code>, <code>code</code>, and
-<code>message</code>. Custom backends also report available objective counts,
-gradient norms, boundary information, and Hessian diagnostics.</p>
+    <p>A named list containing at least <code>outcome</code>, <code>reasons</code>, <code>converged</code>,
+<code>code</code>, and <code>message</code>. <code>outcome</code> is <code>"success"</code>, <code>"warning"</code>, or
+<code>"nonconverged"</code>. A warning means that optimization converged but a
+recorded numerical or inferential diagnostic requires review. Custom
+backends also report available objective counts, gradient norms, boundary
+information, conditioning, and Hessian diagnostics. <code>notes</code> lists
+findings that do not change <code>outcome</code>. A sparse Gaussian REML fit adds a
+<code>boundary_variance_components</code> note when smoothing parameters are
+classified as on the boundary of their range; their profile bounds are
+in <code>hessian_boundary</code>. The <code>optimizer_stopped_short</code> reason means the
+reported optimum is not one: either a negative-curvature direction of the
+interior Hessian lies along a single smoothing parameter (listed in
+<code>hessian_negative_directions</code>), or, when the analytic Hessian was
+computed, a Newton step would still lower the -2 REML criterion by more
+than 0.1 (<code>predicted_decrease</code>). Negative curvature that mixes several
+smoothing parameters is reported as <code>indefinite_outer_hessian</code>. Such a
+fit also reports <code>newton_step_max</code>, the largest coordinate of that Newton
+step on the log smoothing-parameter scale, and
+<code>predicted_decrease_floor</code>, the smallest criterion change resolvable at
+the fitted criterion (<code>1e-10</code> times its magnitude, at least <code>1e-8</code>).
+A dense generalized block fit whose optimizer stalls on a flat
+criterion plateau counts as converged only when every gradient component
+of the -2 LAML criterion is below 0.01 and at least one log smoothing
+parameter exceeds 8 in absolute value; it then reports outcome
+<code>"warning"</code>, the parameters in <code>plateau</code>, and the reason
+<code>smoothing_parameter_plateau</code>.
+<code>gradient_norm</code> is the largest gradient component over all smoothing
+parameters and <code>exact_gradient_maximum</code> the largest over the free ones.
+Along a well-curved direction either can exceed the gradient tolerance
+while the Newton step and <code>predicted_decrease</code> stay negligible;
+convergence is judged from <code>predicted_decrease</code> against
+<code>predicted_decrease_floor</code>.</p>
     </div>
 
   </main><aside class="col-md-3"><nav id="toc" aria-label="Table of contents"><h2>On this page</h2>

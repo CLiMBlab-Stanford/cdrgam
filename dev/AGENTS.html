@@ -7,7 +7,7 @@
 
     <a class="navbar-brand me-2" href="index.html">cdrgam</a>
 
-    <small class="nav-text text-danger me-auto" data-bs-toggle="tooltip" data-bs-placement="bottom" title="In-development version">0.2.0.9000</small>
+    <small class="nav-text text-danger me-auto" data-bs-toggle="tooltip" data-bs-placement="bottom" title="In-development version">0.4.0.9000</small>
 
 
     <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbar" aria-controls="navbar" aria-expanded="false" aria-label="Toggle navigation">
@@ -66,11 +66,12 @@
 <div class="section level2">
 <h2 id="correctness-and-validation">Correctness and validation<a class="anchor" aria-label="anchor" href="#correctness-and-validation"></a></h2>
 <p>Check mathematical and API claims against the implementation. Preserve the independent backend comparisons: native <code>mgcv</code>, dense block REML, and sparse REML provide complementary checks on preprocessing, optimization, prediction, and inference.</p>
-<p>Run the narrowest relevant tests while developing, then run all standalone tests before handing off a broad change:</p>
-<div class="sourceCode" id="cb1"><pre class="sourceCode sh"><code class="sourceCode bash"><span id="cb1-1"><a href="#cb1-1" tabindex="-1"></a><span class="cf">for</span> test_file <span class="kw">in</span> tests/<span class="pp">*</span>.R<span class="kw">;</span> <span class="cf">do</span></span>
-<span id="cb1-2"><a href="#cb1-2" tabindex="-1"></a>    <span class="ex">Rscript</span> <span class="st">"</span><span class="va">$test_file</span><span class="st">"</span> <span class="kw">||</span> <span class="bu">exit</span> 1</span>
-<span id="cb1-3"><a href="#cb1-3" tabindex="-1"></a><span class="cf">done</span></span></code></pre></div>
-<p>Use a clean temporary library when installed-package behavior or namespace contents matter. Do not commit installed libraries, compiled objects, package tarballs, checkpoints, logs, plots, fitted objects, or generated validation results.</p>
+<p>Run the narrowest relevant tests while developing. Add or run focused tests for the mathematical or API behavior changed by the task. Use a clean temporary library when installed-package behavior or namespace contents matter.</p>
+<p>Do not run every standalone test or a full <code>R CMD check</code> for routine development changes. The hosted release gate is the authoritative full-suite, package-check, documentation, and cross-platform validation. Run equivalent full validation locally only when preparing a release, investigating a gate failure, or when the user asks for it explicitly. Focused development tests can be selected with <code>scripts/test</code>, for example:</p>
+<div class="sourceCode" id="cb1"><pre class="sourceCode sh"><code class="sourceCode bash"><span id="cb1-1"><a href="#cb1-1" tabindex="-1"></a><span class="ex">./scripts/test</span> api</span>
+<span id="cb1-2"><a href="#cb1-2" tabindex="-1"></a><span class="ex">./scripts/test</span> optimizer</span>
+<span id="cb1-3"><a href="#cb1-3" tabindex="-1"></a><span class="ex">./scripts/test</span> generalized</span></code></pre></div>
+<p>Do not commit installed libraries, compiled objects, package tarballs, checkpoints, logs, plots, fitted objects, or generated validation results.</p>
 <p>Long-running validation may have active cluster jobs and resumable checkpoints. Inspect job and checkpoint state before changing optimizer or serialization contracts. Do not cancel, overwrite, or invalidate a run unless the user asks.</p>
 </div>
 <div class="section level2">

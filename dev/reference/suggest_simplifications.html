@@ -15,7 +15,7 @@ concentrated there. The function does not change or refit the model."><meta name
 
     <a class="navbar-brand me-2" href="../index.html">cdrgam</a>
 
-    <small class="nav-text text-danger me-auto" data-bs-toggle="tooltip" data-bs-placement="bottom" title="In-development version">0.2.0.9000</small>
+    <small class="nav-text text-danger me-auto" data-bs-toggle="tooltip" data-bs-placement="bottom" title="In-development version">0.4.0.9000</small>
 
 
     <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbar" aria-controls="navbar" aria-expanded="false" aria-label="Toggle navigation">
@@ -63,8 +63,8 @@ concentrated there. The function does not change or refit the model.</p>
 
 
 <dt id="arg-max-candidates">max_candidates<a class="anchor" aria-label="anchor" href="#arg-max-candidates"></a></dt>
-<dd><p>Maximum number of candidates to return. Use <code>Inf</code>
-to retain every candidate.</p></dd>
+<dd><p>Maximum number of candidates to return. Use <code>Inf</code> to
+retain every candidate.</p></dd>
 
 
 <dt id="arg-conservatism">conservatism<a class="anchor" aria-label="anchor" href="#arg-conservatism"></a></dt>
@@ -76,8 +76,9 @@ freedom removed by a candidate. Zero ranks only by diagnostic evidence.</p></dd>
     <h2 id="value">Value<a class="anchor" aria-label="anchor" href="#value"></a></h2>
     <p>A <code>cdrgam_simplification_report</code>. Use <code><a href="https://rdrr.io/r/base/as.data.frame.html" class="external-link">as.data.frame()</a></code> to extract
 its ranked candidate table. The <code>patches</code> member contains exact,
-preconditioned formula replacements for candidates that are safe to automate
-mechanically; selecting and refitting them remains the caller's responsibility.</p>
+preconditioned formula replacements for candidates that are safe to
+automate mechanically; selecting and refitting them remains the caller's
+responsibility.</p>
     </div>
 
   </main><aside class="col-md-3"><nav id="toc" aria-label="Table of contents"><h2>On this page</h2>

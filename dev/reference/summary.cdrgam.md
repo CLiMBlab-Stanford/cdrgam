@@ -3,21 +3,16 @@
 The default output follows
 [`mgcv::summary.gam()`](https://rdrr.io/pkg/mgcv/man/summary.gam.html):
 it reports parametric coefficients and one row per smooth term instead
-of expanded smooth and random-effect coefficients. Fully penalized
-random-effect and grouped IRF terms report effective degrees of freedom
-and an explicit "not computed" test status. The printed output reports
-automatic formula simplifications directly; normalized and effective
-formulas remain available through
-[`formula()`](https://rdrr.io/r/stats/formula.html). This status does
-not indicate fit failure. Distributional Gaussian summaries report
-deviance, null deviance, and deviance explained without an adjusted
-R-squared statistic. Set `all.coefficients = TRUE` to request expanded
-coefficients.
+of expanded smooth and random-effect coefficients. It prints the raw
+user formula, the native `mgcv` export formula, and a direct account of
+any automatic simplifications. Use
+[`formula.cdrgam()`](https://climblab.org/cdrgam/dev/reference/formula.cdrgam.md)
+to inspect normalized and effective formulas.
 
 ## Usage
 
 ``` r
-# S3 method for class 'cdrgam'
+# S3 method for class 'cdrgam_block'
 summary(
   object,
   dispersion = NULL,
@@ -27,7 +22,7 @@ summary(
   ...
 )
 
-# S3 method for class 'cdrgam_block'
+# S3 method for class 'cdrgam'
 summary(
   object,
   dispersion = NULL,
@@ -65,19 +60,19 @@ print(x, ...)
 
   Controls passed to
   [`mgcv::summary.gam()`](https://rdrr.io/pkg/mgcv/man/summary.gam.html)
-  for a native mgcv fit. Custom backends retain these arguments for
-  interface compatibility.
+  by native fits. Custom backends retain these arguments for interface
+  compatibility.
 
 - all.coefficients:
 
   Include the expanded smooth and random-effect coefficient table. The
-  default is false.
+  default is `FALSE`.
 
 - ...:
 
   Additional arguments passed to native
   [`mgcv::summary.gam()`](https://rdrr.io/pkg/mgcv/man/summary.gam.html)
-  or the print method.
+  or to the print method.
 
 - x:
 
@@ -86,8 +81,17 @@ print(x, ...)
 ## Value
 
 A `summary.gam`-style object containing parametric and smooth-term
-tables, the raw and translated mgcv formulas, and recorded automatic
+tables, the raw and translated `mgcv` formulas, and recorded automatic
 simplifications. Native fits retain the complete `summary.gam` result.
 Custom backends provide its commonly used coefficient, smooth-term,
 fit-statistic, and formula fields. The `s.test` field states whether
 each smooth-term test was computed.
+
+## Details
+
+Fully penalized random-effect and grouped IRF terms report effective
+degrees of freedom and an explicit "not computed" test status. This
+status does not indicate fit failure. Distributional Gaussian summaries
+report deviance, null deviance, and deviance explained without an
+adjusted R-squared statistic. Set `all.coefficients=TRUE` to request the
+expanded coefficient table.

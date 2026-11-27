@@ -1,4 +1,4 @@
-# Predict Response and Link Components
+# Predict response and link components
 
 `predict_components()` returns a stable representation of response- and
 link-scale predictions for artifact writers and other downstream tools.
@@ -20,7 +20,7 @@ predict_components(object, newdata)
 - newdata:
 
   Prediction data accepted by
-  [`predict.cdrgam()`](https://climblab-stanford.github.io/cdrgam/dev/reference/predict.cdrgam.md).
+  [`predict.cdrgam()`](https://climblab.org/cdrgam/dev/reference/predict.cdrgam.md).
 
 ## Value
 

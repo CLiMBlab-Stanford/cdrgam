@@ -7,7 +7,7 @@
 
     <a class="navbar-brand me-2" href="../index.html">cdrgam</a>
 
-    <small class="nav-text text-danger me-auto" data-bs-toggle="tooltip" data-bs-placement="bottom" title="In-development version">0.2.0.9000</small>
+    <small class="nav-text text-danger me-auto" data-bs-toggle="tooltip" data-bs-placement="bottom" title="In-development version">0.4.0.9000</small>
 
 
     <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbar" aria-controls="navbar" aria-expanded="false" aria-label="Toggle navigation">
@@ -43,6 +43,13 @@
 
       <dl><dt>
 
+          <code><a href="as_mgcv_spec.html">as_mgcv_spec()</a></code>
+
+        </dt>
+        <dd>Export an exact native mgcv fitting specification</dd>
+
+        <dt>
+
           <code><a href="cdrgam-class.html">is_cdrgam()</a></code> <code><a href="cdrgam-class.html">as_gam()</a></code>
 
         </dt>
@@ -50,7 +57,7 @@
 
         <dt>
 
-          <code><a href="cdrgam.html">cdrgam()</a></code> <code><a href="cdrgam.html">cdrgam.fit()</a></code>
+          <code><a href="cdrgam.html">cdrgam.fit()</a></code> <code><a href="cdrgam.html">cdrgam()</a></code>
 
         </dt>
         <dd>Fit a continuous-time deconvolutional GAM</dd>
@@ -67,7 +74,14 @@
           <code><a href="effect_catalog.html">effect_catalog()</a></code>
 
         </dt>
-        <dd>List estimable impulse-response effects</dd>
+        <dd>List the estimable impulse-response effects in a fitted model</dd>
+
+        <dt>
+
+          <code><a href="effect_inference.html">effect_inference()</a></code>
+
+        </dt>
+        <dd>Inference for summary statistics of fitted effects</dd>
 
         <dt>
 
@@ -102,7 +116,7 @@
           <code><a href="fit_report.html">fit_metadata()</a></code> <code><a href="fit_report.html">fit_report()</a></code>
 
         </dt>
-        <dd>Extract Stable Fit Metadata and Summary Tables</dd>
+        <dd>Extract stable fit metadata and summary tables</dd>
 
         <dt>
 
@@ -110,6 +124,13 @@
 
         </dt>
         <dd>Extract a CDR-GAM formula</dd>
+
+        <dt>
+
+          <code><a href="information-criteria.html">AIC(<i>&lt;cdrgam_block&gt;</i>)</a></code> <code><a href="information-criteria.html">AIC(<i>&lt;cdrgam_sparse&gt;</i>)</a></code> <code><a href="information-criteria.html">BIC(<i>&lt;cdrgam_block&gt;</i>)</a></code> <code><a href="information-criteria.html">BIC(<i>&lt;cdrgam_sparse&gt;</i>)</a></code>
+
+        </dt>
+        <dd>Information criteria for block and sparse fits</dd>
 
         <dt>
 
@@ -127,6 +148,13 @@
 
         <dt>
 
+          <code><a href="methods_facts.html">methods_facts()</a></code>
+
+        </dt>
+        <dd>Describe estimation procedures for methods reporting</dd>
+
+        <dt>
+
           <code><a href="plot.cdrgam.html">plot(<i>&lt;cdrgam&gt;</i>)</a></code>
 
         </dt>
@@ -134,7 +162,7 @@
 
         <dt>
 
-          <code><a href="predict.cdrgam.html">predict(<i>&lt;cdrgam&gt;</i>)</a></code> <code><a href="predict.cdrgam.html">predict(<i>&lt;cdrgam_block&gt;</i>)</a></code> <code><a href="predict.cdrgam.html">predict(<i>&lt;cdrgam_sparse&gt;</i>)</a></code>
+          <code><a href="predict.cdrgam.html">predict(<i>&lt;cdrgam_block&gt;</i>)</a></code> <code><a href="predict.cdrgam.html">predict(<i>&lt;cdrgam&gt;</i>)</a></code> <code><a href="predict.cdrgam.html">predict(<i>&lt;cdrgam_distributional_block&gt;</i>)</a></code> <code><a href="predict.cdrgam.html">predict(<i>&lt;cdrgam_distributional_sparse&gt;</i>)</a></code> <code><a href="predict.cdrgam.html">predict(<i>&lt;cdrgam_sparse&gt;</i>)</a></code>
 
         </dt>
         <dd>Predict from a fitted CDR-GAM</dd>
@@ -144,14 +172,14 @@
           <code><a href="predict_components.html">predict_components()</a></code>
 
         </dt>
-        <dd>Predict Response and Link Components</dd>
+        <dd>Predict response and link components</dd>
 
         <dt>
 
           <code><a href="prepare_cdrgam.html">prepare_cdrgam()</a></code>
 
         </dt>
-        <dd>Compile untiled streams for CDR-GAM fitting</dd>
+        <dd>Compile untiled impulse and response streams for CDR-GAM fitting</dd>
 
         <dt>
 
@@ -159,6 +187,13 @@
 
         </dt>
         <dd>Construct response-history scenarios</dd>
+
+        <dt>
+
+          <code><a href="sample_effect_coefficients.html">sample_effect_coefficients()</a></code>
+
+        </dt>
+        <dd>Sample coefficients shared by several effect simulations</dd>
 
         <dt>
 
@@ -176,6 +211,20 @@
 
         <dt>
 
+          <code><a href="simulate_effect.html">simulate_effect()</a></code>
+
+        </dt>
+        <dd>Simulate fitted effects from the coefficient posterior</dd>
+
+        <dt>
+
+          <code><a href="simultaneous_critical_value.html">simultaneous_critical_value()</a></code>
+
+        </dt>
+        <dd>Simultaneous critical values</dd>
+
+        <dt>
+
           <code><a href="suggest_simplifications.html">suggest_simplifications()</a></code>
 
         </dt>
@@ -183,10 +232,17 @@
 
         <dt>
 
-          <code><a href="summary.cdrgam.html">summary(<i>&lt;cdrgam&gt;</i>)</a></code> <code><a href="summary.cdrgam.html">summary(<i>&lt;cdrgam_block&gt;</i>)</a></code> <code><a href="summary.cdrgam.html">summary(<i>&lt;cdrgam_sparse&gt;</i>)</a></code> <code><a href="summary.cdrgam.html">print(<i>&lt;summary.cdrgam&gt;</i>)</a></code>
+          <code><a href="summary.cdrgam.html">summary(<i>&lt;cdrgam_block&gt;</i>)</a></code> <code><a href="summary.cdrgam.html">summary(<i>&lt;cdrgam&gt;</i>)</a></code> <code><a href="summary.cdrgam.html">summary(<i>&lt;cdrgam_sparse&gt;</i>)</a></code> <code><a href="summary.cdrgam.html">print(<i>&lt;summary.cdrgam&gt;</i>)</a></code>
 
         </dt>
         <dd>Summarize a fitted CDR-GAM</dd>
+
+        <dt>
+
+          <code><a href="test_effect.html">test_effect()</a></code>
+
+        </dt>
+        <dd>Test fitted effects</dd>
 
         <dt>
 

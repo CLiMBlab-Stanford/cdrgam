@@ -1,9 +1,9 @@
 # Generate response-effect plot data
 
 Evaluates predictions, slopes, or comparisons on response-history
-scenarios through the marginaleffects extension API. This preserves each
-response's remaining impulse history and returns point estimates with
-pointwise uncertainty in a tidy table.
+scenarios through the `marginaleffects` extension API. This preserves
+each response's remaining impulse history and returns point estimates
+with pointwise uncertainty in a tidy table.
 
 ## Usage
 
@@ -30,7 +30,7 @@ estimate_response_effect(
 - newdata:
 
   Scenario data, usually returned by
-  [`response_scenarios()`](https://climblab-stanford.github.io/cdrgam/dev/reference/response_scenarios.md).
+  [`response_scenarios()`](https://climblab.org/cdrgam/dev/reference/response_scenarios.md).
   The default uses the unmodified incidences in the view.
 
 - estimand:
@@ -40,8 +40,8 @@ estimate_response_effect(
 
 - variables:
 
-  Predictor specification passed to marginaleffects. It is required for
-  slopes and comparisons.
+  Predictor specification passed to `marginaleffects`. It is required
+  for slopes and comparisons.
 
 - by:
 
@@ -56,7 +56,7 @@ estimate_response_effect(
 
   Include fitted-coefficient uncertainty, or supply a covariance matrix
   or function accepted by
-  [`marginaleffects_view()`](https://climblab-stanford.github.io/cdrgam/dev/reference/marginaleffects_view.md).
+  [`marginaleffects_view()`](https://climblab.org/cdrgam/dev/reference/marginaleffects_view.md).
 
 - level:
 
@@ -64,7 +64,8 @@ estimate_response_effect(
 
 - ...:
 
-  Additional arguments passed to the selected marginaleffects function.
+  Additional arguments passed to the selected `marginaleffects`
+  function.
 
 ## Value
 
@@ -73,7 +74,7 @@ scenario axes are retained when the requested aggregation permits it.
 
 ## Details
 
-Grouping columns are passed to marginaleffects. Use `.cdrgam_scenario`
+Grouping columns are passed to `marginaleffects`. Use `.cdrgam_scenario`
 to average each scenario over its reference incidences, and add
 `.cdrgam_response` or `.cdrgam_impulse` when a response- or
 event-weighted result is required.

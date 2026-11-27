@@ -245,3 +245,13 @@ for (backend in c('block', 'sparse')) {
         max(abs(parametric_table[, 'p-value'] - parametric_native[, 'p-value'])) < 1e-4
     )
 }
+
+# Sparse tests process the tested term's columns in chunks to bound memory;
+# chunks of a few columns give the same table as one chunk.
+previous_options <- options(cdrgam.test_chunk_elements=3 * length(coef(legacy)))
+chunked_table <- summary(cdrgam.fit(grouped_design, backend='sparse', method='REML'))$s.table
+options(previous_options)
+stopifnot(max(abs(
+    chunked_table[, c('Ref.df', 'F', 'p-value')] -
+        grouped_tables$sparse$s.table[, c('Ref.df', 'F', 'p-value')]
+)) < 1e-8)

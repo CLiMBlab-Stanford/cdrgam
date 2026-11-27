@@ -1,5 +1,10 @@
 # cdrgam (development version)
 
+- Smooth-term tests of sparse fits hold one dense matrix of the tested
+  term's columns at a time, computed in column chunks, instead of about
+  sixteen. Grouped deviations of large models no longer exhaust memory.
+  `cdrgam.test_chunk_elements` (2.5e7) bounds the chunk size.
+
 - `AIC()` and `BIC()` of block and sparse fits correct the effective degrees
   of freedom for smoothing-parameter uncertainty, as mgcv's `logLik.gam()`
   does (Wood, Pya, and Saefken 2016), and reproduce the native criteria. The

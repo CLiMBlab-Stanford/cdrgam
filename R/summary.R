@@ -272,6 +272,35 @@
 
 # Solves M x = rhs for a symmetric positive definite M, sparse or dense.
 # Returns NULL when M is not numerically positive definite.
+# Rows `rows` of system^{-1} E_columns for a symmetric positive-definite
+# system, factored once and solved by column chunks so that only the
+# requested rows are kept. NULL if the system is not positive definite.
+.cdrgam_spd_inverse_block <- function(system, rows, columns) {
+    size <- nrow(system)
+    solve <- tryCatch({
+        if (methods::is(system, 'sparseMatrix')) {
+            factor <- Matrix::Cholesky(Matrix::forceSymmetric(system), LDL=FALSE)
+            function(rhs) as.matrix(Matrix::solve(factor, rhs))
+        } else {
+            root <- chol(as.matrix(system))
+            function(rhs) backsolve(root, forwardsolve(t(root), as.matrix(rhs)))
+        }
+    }, error=function(error) NULL)
+    if (is.null(solve)) return(NULL)
+    output <- matrix(0, length(rows), length(columns))
+    position <- 0L
+    for (chunk in .cdrgam_column_chunks(columns, size)) {
+        selector <- Matrix::sparseMatrix(
+            i=chunk, j=seq_along(chunk), x=1, dims=c(size, length(chunk))
+        )
+        solved <- tryCatch(solve(selector), error=function(error) NULL)
+        if (is.null(solved)) return(NULL)
+        output[, position + seq_along(chunk)] <- solved[rows, , drop=FALSE]
+        position <- position + length(chunk)
+    }
+    output
+}
+
 .cdrgam_spd_solve <- function(system, rhs) {
     tryCatch({
         if (methods::is(system, 'sparseMatrix')) {
@@ -365,6 +394,15 @@
 # F = I - H^{-1} S, whose rows and columns for the smooth's coefficients
 # need one solve per coefficient. Everything stays sparse except blocks
 # with one column per tested coefficient.
+# Column chunks of `indices` whose dense dimension-by-chunk blocks stay below
+# getOption('cdrgam.test_chunk_elements', 2.5e7) elements, about 200 MB.
+.cdrgam_column_chunks <- function(indices, dimension) {
+    size <- max(1L, floor(
+        getOption('cdrgam.test_chunk_elements', 2.5e7) / max(1, dimension)
+    ))
+    split(indices, ceiling(seq_along(indices) / size))
+}
+
 .cdrgam_sparse_test_structure <- function(object) {
     factor <- object$sparse$factor
     dimension <- object$sparse$dimension
@@ -380,13 +418,29 @@
     ))
     # Per-coefficient edf1 for `indices`: F[, indices] and
     # t(F)[, indices] = (I - S H^{-1})[, indices] need one solve per column.
+    # Each coefficient's value uses only its own column and row of F, so the
+    # columns are processed in chunks to bound memory.
     edf1_coefficients <- function(indices) {
-        identity <- unit(indices)
-        columns <- identity - as.matrix(.cdr_factor_solve(
-            factor, as.matrix(penalty[, indices, drop=FALSE])
-        ))
-        rows <- identity - as.matrix(penalty %*% .cdr_factor_solve(factor, identity))
-        2 * diag(columns[indices, , drop=FALSE]) - colSums(columns * rows)
+        unlist(lapply(.cdrgam_column_chunks(indices, dimension), function(chunk) {
+            identity <- unit(chunk)
+            columns <- identity - as.matrix(.cdr_factor_solve(
+                factor, as.matrix(penalty[, chunk, drop=FALSE])
+            ))
+            rows <- identity - as.matrix(penalty %*% .cdr_factor_solve(factor, identity))
+            2 * diag(columns[chunk, , drop=FALSE]) - colSums(columns * rows)
+        }), use.names=FALSE)
+    }
+    # H^{-1} E_indices as one dense matrix, filled chunk by chunk so that no
+    # dense selector or intermediate copy of its size is formed.
+    penalized_columns <- function(indices) {
+        output <- matrix(0, dimension, length(indices))
+        position <- 0L
+        for (chunk in .cdrgam_column_chunks(indices, dimension)) {
+            columns <- position + seq_along(chunk)
+            output[, columns] <- as.matrix(.cdr_factor_solve(factor, unit(chunk)))
+            position <- position + length(chunk)
+        }
+        output
     }
     edf1 <- vapply(object$smooth, function(smooth) {
         sum(edf1_coefficients(smooth$first.para:smooth$last.para))
@@ -407,9 +461,9 @@
             smooth=owners[[i]],
             matrix=object$sp[[i]] * methods::as(components[[i]], 'generalMatrix')
         )),
-        covariance_columns=function(indices) {
-            as.matrix(.cdr_factor_solve(factor, unit(indices))) * object$scale
-        },
+        covariance_columns=function(indices) penalized_columns(indices) * object$scale,
+        penalized_columns=penalized_columns,
+        scale=object$scale,
         solve_penalized=function(rhs) as.matrix(.cdr_factor_solve(factor, rhs)),
         sig2=object$sig2
     )
@@ -581,16 +635,36 @@
         } else fixed_penalty <- fixed_penalty + penalty$matrix
     }
     target <- object$smooth[[m]]$first.para:object$smooth[[m]]$last.para
-    covariance <- random$covariance_columns(target)
-    unit <- function(indices, size) as.matrix(Matrix::sparseMatrix(
-        i=indices, j=seq_along(indices), x=1, dims=c(size, length(indices))
-    ))
+    # Sparse fits give the covariance columns as scale * H^{-1} E_target from
+    # one dense matrix, and Ve_TT = scale^2 Y' G Y is accumulated by column
+    # chunks, so only one dense matrix of the tested term's columns is held.
+    # Dense fits use their stored covariance directly.
+    if (!is.null(random$penalized_columns)) {
+        solved_columns <- random$penalized_columns(target)
+        covariance_scale <- random$scale
+        quadratic <- function(matrix) {
+            output <- matrix(0, ncol(solved_columns), ncol(solved_columns))
+            for (chunk in .cdrgam_column_chunks(seq_len(ncol(solved_columns)),
+                    nrow(solved_columns))) {
+                output[, chunk] <- crossprod(
+                    solved_columns, as.matrix(matrix %*% solved_columns[, chunk, drop=FALSE])
+                )
+            }
+            covariance_scale^2 * output
+        }
+        projection <- function(matrix) {
+            covariance_scale * as.matrix(Matrix::crossprod(matrix, solved_columns))
+        }
+    } else {
+        covariance <- random$covariance_columns(target)
+        quadratic <- function(matrix) crossprod(covariance, as.matrix(matrix %*% covariance))
+        projection <- function(matrix) as.matrix(Matrix::crossprod(matrix, covariance))
+    }
     if (!any(integrated)) {
-        solved <- if (is.null(random$solve_penalized)) {
-            .cdrgam_spd_solve(gram + fixed_penalty, unit(target, dimension))
-        } else random$solve_penalized(unit(target, dimension))
-        block <- solved[target, , drop=FALSE]
-        frequentist <- crossprod(covariance, as.matrix(gram %*% covariance))
+        block <- if (!is.null(random$penalized_columns)) {
+            solved_columns[target, , drop=FALSE]
+        } else .cdrgam_spd_inverse_block(gram + fixed_penalty, target, target)
+        frequentist <- quadratic(gram)
     } else {
         kept <- which(!integrated)
         removed <- which(integrated)
@@ -613,10 +687,9 @@
                 Matrix::t(coupling[kept, , drop=FALSE]) +
             fixed_penalty[kept, kept, drop=FALSE]
         local <- match(target, kept)
-        solved <- .cdrgam_spd_solve(marginal, unit(local, length(kept)))
-        block <- if (is.null(solved)) NULL else solved[local, , drop=FALSE]
-        projected <- as.matrix(Matrix::crossprod(coupling, covariance))
-        frequentist <- crossprod(covariance, as.matrix(gram %*% covariance)) +
+        block <- .cdrgam_spd_inverse_block(marginal, local, local)
+        projected <- projection(coupling)
+        frequentist <- quadratic(gram) +
             crossprod(projected, as.matrix(inverse %*% projected))
     }
     if (is.null(block)) {

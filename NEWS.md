@@ -1,4 +1,4 @@
-# cdrgam (development version)
+# cdrgam 0.5.0
 
 - `methods_facts()` describes the estimation procedure for a backend, engine,
   smoothing criterion, and family. It resolves the default criterion, such as

@@ -1,3 +1,90 @@
+# cdrgam 0.5.0
+
+- `methods_facts()` describes the estimation procedure for a backend, engine,
+  smoothing criterion, and family. It resolves the default criterion, such as
+  `"fREML"` for `bam()`, and lists the term tests with their reference keys.
+
+- Smooth-term tests of sparse fits hold one dense matrix of the tested
+  term's columns at a time, computed in column chunks, instead of about
+  sixteen. Grouped deviations of large models no longer exhaust memory.
+  `cdrgam.test_chunk_elements` (2.5e7) bounds the chunk size.
+
+- `AIC()` and `BIC()` of block and sparse fits correct the effective degrees
+  of freedom for smoothing-parameter uncertainty, as mgcv's `logLik.gam()`
+  does (Wood, Pya, and Saefken 2016), and reproduce the native criteria. The
+  correction needs dense matrices of the model's size, one per smoothing
+  parameter, so fits with more coefficients than
+  `getOption("cdrgam.edf2_max_coefficients", 3000)`, GCV fits, and
+  distributional fits give an error with the reason instead of an
+  uncorrected value. Gaussian `logLik()` now evaluates the likelihood at the
+  maximum-likelihood scale, as mgcv does, rather than at the REML estimate.
+
+- `summary()` of block, sparse, and distributional fits reports
+  `pTerms.table`, mgcv's per-term Wald tests of parametric terms: a factor is
+  tested jointly over its coefficients, with an F reference when the scale is
+  estimated. `fit_report()` returns it as `parametric_terms`.
+
+- New `effect_inference()` estimates, interval-estimates, and tests summary
+  statistics of one or more fitted effects on one joint distribution of
+  their coefficients. Linear estimands, given as weights or a matrix, get
+  exact Wald inference; function estimands, such as peak lags, use
+  coefficient simulation or, optionally, the delta method. Results include
+  simultaneous intervals and max-modulus adjusted p-values across the
+  call's estimands, and a joint Wald test. The new
+  `simultaneous_critical_value()` gives the same max-modulus critical
+  value from a covariance matrix or from posterior draws, per group.
+
+- `test_effect(method = "wood")` tests whole functionals as `summary()`
+  tests smooth terms. It uses Wood's (2013) statistic over every coefficient
+  the functional uses, with their summed edf1 as the reference rank, so a
+  `composition = "total"` effect or a conditional group effect is tested as
+  one function. A grouped deviation is tested over all levels with the
+  random-effect test. A test of a single term reproduces its row of the
+  smooth table on native, block, and sparse fits. Requests the test cannot
+  serve, such as one level of a fully penalized term, fail instead of
+  falling back. It is the default; the grid Wald test is used when
+  `method = "wald"` is given or when `axes`, `reference`, or `points` define
+  a grid without a method. Results gain `method`,
+  `residual_df`, and `coefficients` columns.
+
+- `summary()` of block, sparse, and distributional fits tests each smooth
+  term with Wood's (2013) statistic and edf1 as its reference rank, as
+  `mgcv::summary.gam()` does. Fully penalized terms, such as random effects
+  and grouped IRF deviations, get mgcv's random-effect test (Wood 2013b)
+  instead of being left untested, with other random effects integrated out.
+  Block and sparse fits reproduce the native `mgcv` smooth table. The
+  random-effect test uses sparse factorizations and solves only for the
+  tested coefficients, so it does not form dense whole-model matrices.
+  These tests previously used a full-rank Wald statistic referred to the
+  edf, which tends to give smaller p-values; that fallback is removed.
+  When a test cannot be computed, its `s.test` entry gives the reason: for
+  example, distributional fits do not yet test fully penalized terms, and
+  distributional fits saved without the stored likelihood Hessian must
+  be refitted.
+
+- `estimate_effect(covariance = TRUE)` returns the joint covariance of the
+  result's rows as attribute `covariance`, one row and column per result
+  row. Rows of different terms or groups are covariant when they share
+  coefficients. Simultaneous bands and other joint inferences can use it
+  instead of one evaluation per point.
+
+- `composition = "total"` again adds a term's hierarchy in fits where
+  boundary reduction removed whole terms, such as zero-variance by-subject
+  deviations. Their term specifications were no longer aligned with the
+  fitted terms, so totals silently equaled the term alone. Fits now drop the
+  removed terms' specifications, and fits saved earlier are aligned by
+  predictors and grouping factor when effects are computed.
+
+- `sample_effect_coefficients()` draws coefficients once for selected terms,
+  and `simulate_effect(coefficients=)` evaluates on those draws, so
+  simulations from separate calls are joint.
+
+- `estimate_effect()`, `simulate_effect()`, and `test_effect()` accept
+  `points`, a data frame of evaluation points whose columns pair values of
+  the axes they name, one result row per point. Use it to evaluate along a
+  path through the axes, such as each predictor value at its own peak lag,
+  without evaluating the crossed grid.
+
 # cdrgam 0.4.0
 
 - New `simulate_effect()` draws coefficient vectors from the approximate

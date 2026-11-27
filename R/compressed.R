@@ -1,5 +1,5 @@
 #' @importFrom mgcv Predict.matrix smooth.construct
-#' @importFrom stats nobs
+#' @importFrom stats AIC BIC nobs
 #' @useDynLib cdrgam, .registration=TRUE
 NULL
 

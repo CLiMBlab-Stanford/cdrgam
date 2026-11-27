@@ -647,7 +647,13 @@ summary.cdrgam_distributional_block <- function(
         smooth_edf,
         covariance,
         residual_df,
-        chi_square=TRUE
+        chi_square=TRUE,
+        structure=.cdrgam_distributional_test_structure(object)
+    )
+    # Parameters share no parametric term mapping, so each coefficient of a
+    # distributional fit is tested on its own.
+    p_terms <- .cdrgam_parametric_term_table(
+        object, parametric, covariance, -1, TRUE, use_assign=FALSE
     )
     weights <- object$prior.weights
     mean_response <- sum(weights * object$y) / sum(weights)
@@ -675,9 +681,10 @@ summary.cdrgam_distributional_block <- function(
         se=if (is.null(p_table)) numeric() else p_table[, 'Std. Error'],
         chi.sq=if (is.null(s_table)) numeric() else s_table[, 'Chi.sq'],
         s.pv=if (is.null(s_table)) numeric() else s_table[, 'p-value'],
-        pTerms.pv=numeric(),
-        pTerms.chi.sq=numeric(),
-        pTerms.df=numeric(),
+        pTerms.table=p_terms,
+        pTerms.pv=if (is.null(p_terms)) numeric() else p_terms[, 'p-value'],
+        pTerms.chi.sq=if (is.null(p_terms)) numeric() else p_terms[, 'Chi.sq'],
+        pTerms.df=if (is.null(p_terms)) numeric() else p_terms[, 'df'],
         m=length(object$smooth),
         edf=smooth_edf,
         residual.df=residual_df,

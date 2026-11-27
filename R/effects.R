@@ -22,6 +22,42 @@
     if (identical(axis$role, 'lag')) 'lag' else axis$variable
 }
 
+# The term specifications aligned with the fitted terms, or NULL when they
+# cannot be aligned. Boundary reduction can remove whole terms after the
+# specifications were recorded; fits from before the specifications were
+# subset with them hold one specification per original term. Those are
+# aligned in order by predictors and grouping factor, since the fitted terms
+# keep their original relative order.
+.cdr_effect_specifications <- function(object) {
+    specifications <- object$cdrgam$preparation$specification
+    terms <- object$cdrgam$terms
+    if (is.null(specifications)) return(NULL)
+    if (length(specifications) == length(terms)) return(specifications)
+    if (length(specifications) < length(terms)) return(NULL)
+    key <- function(predictors, group) paste(
+        paste(sort(unique(as.character(predictors))), collapse='\034'),
+        if (is.null(group)) '' else as.character(group), sep='\035'
+    )
+    keys <- vapply(specifications, function(specification) {
+        key(.cdr_effect_spec_predictors(specification), specification$group)
+    }, character(1))
+    aligned <- vector('list', length(terms))
+    position <- 0L
+    for (index in seq_along(terms)) {
+        info <- terms[[index]]
+        target <- key(unique(c(
+            info$linear_predictors,
+            vapply(Filter(function(axis) identical(axis$role, 'predictor'),
+                .cdr_effect_axes(info)), `[[`, character(1), 'variable')
+        )), info$group)
+        found <- which(keys[seq_along(keys) > position] == target)
+        if (!length(found)) return(NULL)
+        position <- position + found[[1L]]
+        aligned[[index]] <- specifications[[position]]
+    }
+    aligned
+}
+
 .cdr_effect_spec_predictors <- function(specification) {
     if (is.null(specification)) return(character())
     if (!is.null(specification$predictors)) {
@@ -65,7 +101,7 @@
     if (!is.null(responses) && !is.data.frame(responses)) {
         stop('responses must be a data frame')
     }
-    specifications <- object$cdrgam$preparation$specification
+    specifications <- .cdr_effect_specifications(object)
     for (index in seq_along(object$cdrgam$terms)) {
         info <- object$cdrgam$terms[[index]]
         specification <- specifications[[index]]
@@ -114,11 +150,11 @@ effect_catalog <- function(object, impulses=NULL, responses=NULL) {
     object <- .cdr_effect_restore_summaries(object, impulses, responses)
     terms <- object$cdrgam$terms
     labels <- object$cdrgam$term_labels
-    specifications <- object$cdrgam$preparation$specification
+    specifications <- .cdr_effect_specifications(object)
     if (!length(terms) || length(terms) != length(labels)) {
         stop('The fitted model does not contain stored IRF metadata')
     }
-    if (is.null(specifications) || length(specifications) != length(terms)) {
+    if (is.null(specifications)) {
         specifications <- rep.int(list(NULL), length(terms))
     }
     rows <- lapply(seq_along(terms), function(index) {
@@ -249,7 +285,9 @@ effect_catalog <- function(object, impulses=NULL, responses=NULL) {
     } else stop('Axis request must define at, values, quantiles, or grid=fitted')
 }
 
-.cdr_effect_grid <- function(info, axes, n) {
+# With `points`, its columns give paired values of the axes they name, one
+# evaluation point per row, and every other axis must resolve to one value.
+.cdr_effect_grid <- function(info, axes, n, points=NULL) {
     metadata <- .cdr_effect_axes(info)
     linear <- unique(c(
         names(info$linear_predictor_summaries), info$linear_predictors
@@ -268,16 +306,40 @@ effect_catalog <- function(object, impulses=NULL, responses=NULL) {
             )
         }))
     }
-    values <- lapply(metadata, function(axis) {
+    axis_names <- vapply(metadata, .cdr_effect_axis_name, character(1))
+    if (!is.null(points)) {
+        unknown <- setdiff(names(points), axis_names)
+        if (length(unknown)) stop(
+            'points columns are not evaluation axes of the term: ',
+            paste(unknown, collapse=', ')
+        )
+    }
+    values <- lapply(seq_along(metadata), function(index) {
+        name <- axis_names[[index]]
+        if (name %in% names(points)) {
+            value <- points[[name]]
+            if (!is.numeric(value) || any(!is.finite(value))) {
+                stop('points column ', name, ' must contain finite numbers')
+            }
+            return(as.numeric(value))
+        }
         value <- .cdr_effect_axis_values(
-            axis, .cdr_effect_axis_request(axes, axis), n
+            metadata[[index]], .cdr_effect_axis_request(axes, metadata[[index]]), n
         )
         if (!length(value) || any(!is.finite(value))) {
             stop('Effect axes must contain finite values')
         }
+        if (!is.null(points) && length(value) != 1L) stop(
+            'Axis ', name, ' is not a points column, so it must resolve to one value'
+        )
         value
     })
-    names(values) <- vapply(metadata, .cdr_effect_axis_name, character(1))
+    names(values) <- axis_names
+    if (!is.null(points)) {
+        return(data.frame(
+            lapply(values, rep_len, length.out=nrow(points)), check.names=FALSE
+        ))
+    }
     do.call(expand.grid, c(
         values, list(KEEP.OUT.ATTRS=FALSE, stringsAsFactors=FALSE)
     ))
@@ -315,11 +377,8 @@ effect_catalog <- function(object, impulses=NULL, responses=NULL) {
 # with matching smooth or linear treatment. A time-invariant term is included
 # below a time-varying one; the reverse is not.
 .cdr_effect_hierarchy <- function(object, index) {
-    specifications <- object$cdrgam$preparation$specification
-    if (is.null(specifications) ||
-            length(specifications) != length(object$cdrgam$terms)) {
-        return(integer())
-    }
+    specifications <- .cdr_effect_specifications(object)
+    if (is.null(specifications)) return(integer())
     selected <- specifications[[index]]
     predictors <- .cdr_effect_spec_predictors(selected)
     flags <- .cdr_effect_smooth_flags(selected)
@@ -345,9 +404,8 @@ effect_catalog <- function(object, impulses=NULL, responses=NULL) {
 }
 
 .cdr_effect_term_predictors <- function(object, index) {
-    specifications <- object$cdrgam$preparation$specification
-    if (is.null(specifications) ||
-            length(specifications) != length(object$cdrgam$terms)) {
+    specifications <- .cdr_effect_specifications(object)
+    if (is.null(specifications)) {
         info <- object$cdrgam$terms[[index]]
         return(unique(c(
             info$linear_predictors,
@@ -428,6 +486,23 @@ effect_catalog <- function(object, impulses=NULL, responses=NULL) {
     .sparse_boundary_bound_object(object)
 }
 
+# The joint covariance of the rows of `functionals`, bound in order: their
+# designs placed in the columns of the union of their coefficients, times
+# the covariance of those coefficients, times the transpose.
+.cdr_effect_joint_covariance <- function(object, functionals, unconditional) {
+    indices <- sort(unique(unlist(lapply(functionals, `[[`, 'index'))))
+    design <- do.call(rbind, lapply(functionals, function(functional) {
+        rows <- matrix(0, nrow(functional$design), length(indices))
+        rows[, match(functional$index, indices)] <- as.matrix(functional$design)
+        rows
+    }))
+    covariance <- .cdr_effect_covariance(object, indices, unconditional)
+    value <- design %*% as.matrix(covariance) %*% t(design)
+    value <- (value + t(value)) / 2
+    dimnames(value) <- NULL
+    value
+}
+
 .cdr_effect_covariance <- function(object, indices, unconditional) {
     if (inherits(object, 'cdrgam_sparse')) {
         return(.sparse_selected_vcov(object, indices, unconditional=unconditional))
@@ -488,10 +563,11 @@ effect_catalog <- function(object, impulses=NULL, responses=NULL) {
 # holds the evaluation grid, the reference grid, and the design matrix over
 # the coefficient indices it uses.
 .cdr_effect_functionals <- function(
-        object, index, axes, composition, grouping, groups, reference, n
+        object, index, axes, composition, grouping, groups, reference, n,
+        points=NULL
 ) {
     info <- object$cdrgam$terms[[index]]
-    grid <- .cdr_effect_grid(info, axes, n)
+    grid <- .cdr_effect_grid(info, axes, n, points)
     reference_grid <- .cdr_effect_reference_grid(info, grid, reference, n)
     grouped <- length(info$group_levels) > 0L
     if (!grouped && !identical(grouping, 'population')) stop(
@@ -545,9 +621,14 @@ effect_catalog <- function(object, impulses=NULL, responses=NULL) {
     output
 }
 
-.cdr_effect_validate <- function(object, axes, reference, level, n) {
+.cdr_effect_validate <- function(object, axes, reference, level, n, points=NULL) {
     if (!is_cdrgam(object)) stop('object must be a fitted cdrgam model')
     if (!is.list(axes)) stop('axes must be a list')
+    if (!is.null(points) && (!is.data.frame(points) || !nrow(points) ||
+            !ncol(points) || is.null(names(points)) || any(!nzchar(names(points))) ||
+            anyDuplicated(names(points)))) {
+        stop('points must be a data frame with at least one row and uniquely named columns')
+    }
     if (!is.list(reference) || (length(reference) && (is.null(names(reference)) ||
             any(!nzchar(names(reference))) || anyDuplicated(names(reference))))) {
         stop('reference must be a uniquely named list')
@@ -560,13 +641,15 @@ effect_catalog <- function(object, impulses=NULL, responses=NULL) {
 }
 
 .cdr_effect_all_functionals <- function(
-        object, terms, axes, composition, grouping, groups, reference, n
+        object, terms, axes, composition, grouping, groups, reference, n,
+        points=NULL
 ) {
     indices <- .cdr_effect_select(object, terms)
     output <- list()
     for (index in indices) {
         functionals <- .cdr_effect_functionals(
-            object, index, axes, composition, grouping, groups, reference, n
+            object, index, axes, composition, grouping, groups, reference, n,
+            points
         )
         for (functional in functionals) {
             if (!is.null(functional$reference)) {
@@ -634,6 +717,12 @@ effect_catalog <- function(object, impulses=NULL, responses=NULL) {
 #'   summaries from models fitted before summaries were stored.
 #' @param axes Named axis requests. Predictor requests are nested under
 #'   `predictors`; `"*"` supplies a fallback for every predictor axis.
+#' @param points Optional data frame of evaluation points, one per row, with
+#'   columns named by axis, such as `lag` or a predictor. Its columns are
+#'   paired rather than crossed, so the result has one row per point. Each
+#'   axis that is not a column takes its value from `axes`, and that request
+#'   must resolve to one value. Use it to evaluate along a path through the
+#'   axes, such as each predictor value at its own lag.
 #' @param composition Return the selected term alone or add its hierarchy of
 #'   fitted marginal terms.
 #' @param grouping Return population, grouped-deviation, or conditional effects.
@@ -643,6 +732,12 @@ effect_catalog <- function(object, impulses=NULL, responses=NULL) {
 #'   to one value. A predictor may instead be `NA` or `"default"` to leave it
 #'   at the model default. Names are axis names such as `lag` or a predictor.
 #' @param se Include pointwise standard errors.
+#' @param covariance Also return the joint covariance of every row's estimate,
+#'   as the matrix attribute `covariance`, with one row and column per result
+#'   row in the same order. Rows from different terms or groups are covariant
+#'   when they share coefficients. The matrix has as many rows and columns as
+#'   the result, so request it for small grids, such as the points a
+#'   simultaneous band is computed over. It requires `se = TRUE`.
 #' @param unconditional Include smoothing-parameter uncertainty when supported.
 #'   Smoothing parameters classified as on the boundary of their range
 #'   contribute no uncertainty, because the criterion has no local curvature
@@ -661,7 +756,10 @@ effect_catalog <- function(object, impulses=NULL, responses=NULL) {
 #' @return A `cdrgam_effect_grid` data frame with evaluation axes, estimates,
 #'   standard errors, and pointwise confidence limits on the linear-predictor
 #'   scale. Each reference axis adds a
-#'   `<axis>_reference` column, which is `NA` for a model default.
+#'   `<axis>_reference` column, which is `NA` for a model default. With
+#'   `covariance = TRUE`, attribute `covariance` holds the rows' joint
+#'   covariance \eqn{D V D^\top}, where `D` is the rows' linear map of the
+#'   coefficients and `V` their covariance.
 #' @seealso [test_effect()] for joint Wald tests of the same functionals.
 #' @export
 estimate_effect <- function(
@@ -669,15 +767,19 @@ estimate_effect <- function(
         composition=c('term', 'total'),
         grouping=c('population', 'deviation', 'conditional'), groups=NULL,
         reference=list(), se=TRUE, unconditional=FALSE, level=0.95, n=200L,
-        boundary=c('estimate', 'bound')
+        boundary=c('estimate', 'bound'), points=NULL, covariance=FALSE
 ) {
-    n <- .cdr_effect_validate(object, axes, reference, level, n)
+    if (!is.logical(covariance) || length(covariance) != 1L || is.na(covariance)) {
+        stop('covariance must be TRUE or FALSE')
+    }
+    if (covariance && !isTRUE(se)) stop('covariance = TRUE requires se = TRUE')
+    n <- .cdr_effect_validate(object, axes, reference, level, n, points)
     object <- .cdr_effect_restore_summaries(object, impulses, responses)
     object <- .cdr_effect_boundary_object(object, match.arg(boundary), unconditional)
     composition <- match.arg(composition)
     grouping <- match.arg(grouping)
     functionals <- .cdr_effect_all_functionals(
-        object, terms, axes, composition, grouping, groups, reference, n
+        object, terms, axes, composition, grouping, groups, reference, n, points
     )
     multiplier <- stats::qnorm((1 + level) / 2)
     frames <- lapply(functionals, function(functional) {
@@ -702,10 +804,82 @@ estimate_effect <- function(
     })
     result <- .cdr_effect_bind(frames)
     class(result) <- c('cdrgam_effect_grid', class(result))
+    if (covariance) {
+        attr(result, 'covariance') <- .cdr_effect_joint_covariance(
+            object, functionals, unconditional
+        )
+    }
     attr(result, 'level') <- level
     attr(result, 'scale') <- 'linear-predictor'
     attr(result, 'reference') <- if (length(reference)) names(reference) else NULL
     result
+}
+
+# Draws of the coefficients at `indices` from N(beta-hat, V), one column per
+# draw, through the eigendecomposition of V.
+.cdr_effect_sample <- function(object, indices, unconditional, draws) {
+    coefficients <- stats::coef(object)[indices]
+    covariance <- .cdr_effect_covariance(object, indices, unconditional)
+    decomposition <- eigen((covariance + t(covariance)) / 2, symmetric=TRUE)
+    root <- decomposition$vectors %*%
+        diag(sqrt(pmax(0, decomposition$values)), length(coefficients))
+    normal <- matrix(stats::rnorm(length(coefficients) * draws),
+        length(coefficients), draws)
+    coefficients + root %*% normal
+}
+
+#' Sample coefficients shared by several effect simulations
+#'
+#' Draws once from the approximate coefficient posterior
+#' \eqn{N(\hat\beta, V)}, restricted to the coefficients that the selected
+#' terms use under `composition` and `grouping`. Passing the result to
+#' [simulate_effect()] as `coefficients` evaluates every call on the same
+#' draws, so summaries computed from different calls are joint: for
+#' example, the lag at which one contrast peaks in each draw and another
+#' effect at that lag in the same draw.
+#'
+#' @inheritParams simulate_effect
+#' @return An object of class `cdrgam_coefficient_draws`: a list with
+#'   `index`, the coefficient positions; `draws`, a matrix with one row per
+#'   coefficient in `index` and one column per draw; `unconditional`; and
+#'   `boundary`.
+#' @seealso [simulate_effect()].
+#' @export
+sample_effect_coefficients <- function(
+        object, terms=NULL, impulses=NULL, responses=NULL,
+        composition=c('term', 'total'),
+        grouping=c('population', 'deviation', 'conditional'), groups=NULL,
+        unconditional=FALSE, draws=1000L, seed=NULL,
+        boundary=c('estimate', 'bound')
+) {
+    .cdr_effect_validate(object, list(), list(), 0.95, 2L, NULL)
+    draws <- suppressWarnings(as.integer(draws))
+    if (length(draws) != 1L || is.na(draws) || draws < 1L) {
+        stop('draws must be a positive integer')
+    }
+    if (!is.null(seed)) {
+        if (!is.numeric(seed) || length(seed) != 1L || !is.finite(seed)) {
+            stop('seed must be one finite number')
+        }
+        exists <- exists('.Random.seed', envir=globalenv(), inherits=FALSE)
+        if (exists) state <- get('.Random.seed', envir=globalenv())
+        on.exit(if (exists) {
+            assign('.Random.seed', state, envir=globalenv())
+        } else rm('.Random.seed', envir=globalenv()), add=TRUE)
+        set.seed(as.integer(seed))
+    }
+    boundary <- match.arg(boundary)
+    object <- .cdr_effect_restore_summaries(object, impulses, responses)
+    object <- .cdr_effect_boundary_object(object, boundary, unconditional)
+    functionals <- .cdr_effect_all_functionals(
+        object, terms, list(), match.arg(composition), match.arg(grouping), groups,
+        list(), 2L
+    )
+    index <- sort(unique(unlist(lapply(functionals, `[[`, 'index'))))
+    structure(list(
+        index=index, draws=.cdr_effect_sample(object, index, unconditional, draws),
+        unconditional=isTRUE(unconditional), boundary=boundary
+    ), class='cdrgam_coefficient_draws')
 }
 
 #' Simulate fitted effects from the coefficient posterior
@@ -730,6 +904,11 @@ estimate_effect <- function(
 #' @param draws Number of posterior draws.
 #' @param seed Optional integer seed. When given, the global random-number
 #'   state is restored on exit.
+#' @param coefficients Optional coefficient draws from
+#'   [sample_effect_coefficients()]. When given, every functional is
+#'   evaluated on those draws, so draws are joint across functionals and
+#'   across calls that share them; `draws`, `seed`, and `unconditional` are
+#'   then taken from the sample.
 #' @return A list with `grid`, a data frame like the one returned by
 #'   [estimate_effect()] with `estimate` but no interval columns, and
 #'   `draws`, a matrix with one row per row of `grid` and one column per
@@ -742,9 +921,21 @@ simulate_effect <- function(
         composition=c('term', 'total'),
         grouping=c('population', 'deviation', 'conditional'), groups=NULL,
         reference=list(), unconditional=FALSE, draws=1000L, n=200L, seed=NULL,
-        boundary=c('estimate', 'bound')
+        boundary=c('estimate', 'bound'), points=NULL, coefficients=NULL
 ) {
-    n <- .cdr_effect_validate(object, axes, reference, 0.95, n)
+    n <- .cdr_effect_validate(object, axes, reference, 0.95, n, points)
+    boundary <- match.arg(boundary)
+    if (!is.null(coefficients)) {
+        if (!inherits(coefficients, 'cdrgam_coefficient_draws')) {
+            stop('coefficients must come from sample_effect_coefficients()')
+        }
+        if (!identical(coefficients$boundary, boundary)) stop(
+            'coefficients were sampled with boundary = "', coefficients$boundary, '"'
+        )
+        unconditional <- coefficients$unconditional
+        draws <- ncol(coefficients$draws)
+        seed <- NULL
+    }
     draws <- suppressWarnings(as.integer(draws))
     if (length(draws) != 1L || is.na(draws) || draws < 1L) {
         stop('draws must be a positive integer')
@@ -761,21 +952,25 @@ simulate_effect <- function(
         set.seed(as.integer(seed))
     }
     object <- .cdr_effect_restore_summaries(object, impulses, responses)
-    object <- .cdr_effect_boundary_object(object, match.arg(boundary), unconditional)
+    object <- .cdr_effect_boundary_object(object, boundary, unconditional)
     composition <- match.arg(composition)
     grouping <- match.arg(grouping)
     functionals <- .cdr_effect_all_functionals(
-        object, terms, axes, composition, grouping, groups, reference, n
+        object, terms, axes, composition, grouping, groups, reference, n, points
     )
+    shared <- coefficients
     simulated <- lapply(functionals, function(functional) {
         coefficients <- stats::coef(object)[functional$index]
-        covariance <- .cdr_effect_covariance(object, functional$index, unconditional)
-        decomposition <- eigen((covariance + t(covariance)) / 2, symmetric=TRUE)
-        root <- decomposition$vectors %*%
-            diag(sqrt(pmax(0, decomposition$values)), length(coefficients))
-        normal <- matrix(stats::rnorm(length(coefficients) * draws),
-            length(coefficients), draws)
-        sample <- coefficients + root %*% normal
+        sample <- if (is.null(shared)) {
+            .cdr_effect_sample(object, functional$index, unconditional, draws)
+        } else {
+            rows <- match(functional$index, shared$index)
+            if (anyNA(rows)) stop(
+                'coefficients do not cover term ', functional$term,
+                '; sample them for every term this call evaluates'
+            )
+            shared$draws[rows, , drop=FALSE]
+        }
         frame <- .cdr_effect_frame(
             object, functional$term, functional, composition, grouping
         )
@@ -790,76 +985,204 @@ simulate_effect <- function(
     list(grid=grid, draws=values)
 }
 
-#' Test fitted effects jointly over declarative axis grids
+# The reference distribution of Wood's tests, as summary() uses it: F with
+# the residual degrees of freedom when the scale is estimated, else
+# chi-squared, signalled by -1.
+.cdr_effect_residual_df <- function(object) {
+    if (inherits(object, c('cdrgam_distributional_block',
+            'cdrgam_distributional_sparse'))) return(-1)
+    if (!inherits(object, c('cdrgam_block', 'cdrgam_sparse'))) {
+        return(if (isTRUE(object$scale.estimated)) object$df.residual else -1)
+    }
+    if (object$family$family %in% c('binomial', 'poisson')) return(-1)
+    total <- if (inherits(object, 'cdrgam_sparse')) {
+        .sparse_effective_df(object)
+    } else sum(object$edf)
+    length(object$y) - total
+}
+
+# Wood's whole-functional test that every coefficient a functional uses is
+# zero. A functional whose coefficients are exactly one fully penalized
+# smooth gets the random-effect test that summary() reports for it; any
+# other set gets Wood's (2013) statistic with the summed edf1 as its rank.
+.cdr_effect_wood_test <- function(
+        object, indices, structure, residual_df, unconditional, random_smooths
+) {
+    if (!is.null(structure$unavailable)) stop(structure$unavailable)
+    ranges <- lapply(object$smooth, function(smooth) smooth$first.para:smooth$last.para)
+    fully_penalized <- vapply(object$smooth, function(smooth) {
+        identical(as.integer(smooth$null.space.dim), 0L)
+    }, logical(1))
+    whole <- which(vapply(ranges, function(range) {
+        length(range) == length(indices) && all(range == indices)
+    }, logical(1)))
+    if (length(whole) == 1L && fully_penalized[[whole]]) {
+        if (is.character(structure$random)) stop(structure$random)
+        if (isTRUE(unconditional)) stop(
+            'The random-effect test uses the conditional covariance; ',
+            'use unconditional = FALSE'
+        )
+        test <- .cdrgam_random_effect_test(
+            object, structure$random, whole, residual_df, random_smooths
+        )
+        test$method <- 'Wood (2013b) random effect'
+        return(test)
+    }
+    penalized_only <- unlist(ranges[fully_penalized])
+    if (length(indices) && all(indices %in% penalized_only)) stop(
+        'Wood tests of part of a fully penalized term are not supported; ',
+        'test the whole term or use method = "wald"'
+    )
+    covariance <- as.matrix(.cdr_effect_covariance(object, indices, unconditional))
+    test <- .cdrgam_wood_test(
+        stats::coef(object)[indices], as.matrix(structure$gram(indices)),
+        covariance, min(length(indices), sum(structure$edf1_coefficients(indices))),
+        residual_df
+    )
+    test$method <- 'Wood (2013)'
+    test
+}
+
+#' Test fitted effects
 #'
-#' Computes a Wald test of the null hypothesis that a functional returned by
-#' [estimate_effect()] is zero at every grid point. The arguments select the
-#' same terms, axes, compositions, groupings, and references. One test is
-#' returned per selected term and grouping level.
+#' Tests the null hypothesis that a functional returned by
+#' [estimate_effect()] is zero. The arguments select the same terms,
+#' compositions, groupings, and groups. One test is returned per selected
+#' term and grouping level.
 #'
-#' The statistic is \eqn{\hat\beta^\top L^\top (L V L^\top)^{-} L \hat\beta},
-#' where `L` stacks the grid rows of the functional and `V` is the coefficient
-#' covariance. The pseudo-inverse keeps eigenvalues above `tolerance` times the
-#' largest, and the reference distribution is chi-squared with that rank as
-#' its degrees of freedom. Use a grid dense enough to span the functional;
-#' the rank stops growing once it does.
+#' `method = "wood"` tests the whole functional, as `summary()` tests smooth
+#' terms. The null is that every coefficient the functional uses is zero, so
+#' a total composition is tested over the union of its terms' coefficients.
+#' The statistic is Wood's (2013), with the summed alternative effective
+#' degrees of freedom of those coefficients as its reference rank. A
+#' functional made of exactly one fully penalized term, such as a grouped
+#' deviation, gets Wood's (2013b) random-effect test, with other random
+#' effects integrated out. Grouped deviations are therefore tested over all
+#' levels at once, and `groups` must be `NULL`. The test does not use an
+#' evaluation grid, so `axes`, `reference`, and `points` must be empty. When
+#' the scale is estimated, `statistic` is the F statistic `T / df` on `df`
+#' and `residual_df` degrees of freedom, as in `summary()`; otherwise it is
+#' `T` on a chi-squared reference.
 #'
-#' Penalized coefficients make this test
-#' approximate. Wood (2013) reports that such tests can reject too rarely when
-#' the null holds on the boundary of the smoothing-parameter space.
+#' `method = "wald"` tests the functional at every point of an evaluation
+#' grid. The statistic is \eqn{\hat\beta^\top L^\top (L V L^\top)^{-} L
+#' \hat\beta}, where `L` stacks the grid rows of the functional and `V` is
+#' the coefficient covariance. The pseudo-inverse keeps eigenvalues above
+#' `tolerance` times the largest, and the reference distribution is
+#' chi-squared with that rank as its degrees of freedom. Use a grid dense
+#' enough to span the functional; the rank stops growing once it does. This
+#' test can reject too rarely when the null holds on the boundary of the
+#' smoothing-parameter space (Wood 2013).
 #'
 #' @inheritParams estimate_effect
-#' @param tolerance Relative eigenvalue threshold for the rank of `L V L'`.
+#' @param method `"wood"` for Wood's whole-functional test or `"wald"` for a
+#'   grid Wald test. When omitted, it is `"wald"` if `axes`, `reference`, or
+#'   `points` define a grid and `"wood"` otherwise.
+#' @param tolerance Relative eigenvalue threshold for the rank of `L V L'`
+#'   under `method = "wald"`.
 #' @return A `cdrgam_effect_test` data frame with `term_id`, `term`, `group`,
-#'   `composition`, `grouping`, `statistic`, `df`, `p_value`, and `points`.
-#'   `df` is zero and `statistic` and `p_value` are missing when the functional
-#'   is identically zero.
+#'   `composition`, `grouping`, `method`, `statistic`, `df`, `residual_df`,
+#'   `p_value`, `points`, and `coefficients`. `residual_df` is missing for
+#'   chi-squared references, and `points` for Wood tests. Under
+#'   `method = "wald"`, `df` is zero and `statistic` and `p_value` are
+#'   missing when the functional is identically zero.
 #' @references Wood, S. N. (2013). On p-values for smooth components of an
 #'   extended generalized additive model. *Biometrika*, 100(1), 221--228.
-#' @seealso [estimate_effect()]
+#'
+#'   Wood, S. N. (2013b). A simple test for random effects in regression
+#'   models. *Biometrika*, 100(4), 1005--1010.
+#' @seealso [estimate_effect()], [summary.cdrgam()]
 #' @export
 test_effect <- function(
         object, terms=NULL, axes=list(), impulses=NULL, responses=NULL,
         composition=c('term', 'total'),
         grouping=c('population', 'deviation', 'conditional'), groups=NULL,
         reference=list(), unconditional=FALSE, n=50L, tolerance=1e-8,
-        boundary=c('estimate', 'bound')
+        boundary=c('estimate', 'bound'), points=NULL, method=c('wood', 'wald')
 ) {
-    n <- .cdr_effect_validate(object, axes, reference, 0.95, n)
+    n <- .cdr_effect_validate(object, axes, reference, 0.95, n, points)
     if (!is.numeric(tolerance) || length(tolerance) != 1L ||
             !is.finite(tolerance) || tolerance <= 0 || tolerance >= 1) {
         stop('tolerance must lie strictly between zero and one')
     }
-    object <- .cdr_effect_restore_summaries(object, impulses, responses)
-    object <- .cdr_effect_boundary_object(object, match.arg(boundary), unconditional)
+    grid <- length(axes) || length(reference) || !is.null(points)
+    method <- if (missing(method)) {
+        if (grid) 'wald' else 'wood'
+    } else match.arg(method)
     composition <- match.arg(composition)
     grouping <- match.arg(grouping)
+    if (identical(method, 'wood')) {
+        if (grid) stop(
+            'method = "wood" tests the whole functional; ',
+            'axes, reference, and points must be empty'
+        )
+        if (identical(grouping, 'deviation') && !is.null(groups)) stop(
+            'method = "wood" tests a grouped deviation over all levels; ',
+            'groups must be NULL'
+        )
+    }
+    object <- .cdr_effect_restore_summaries(object, impulses, responses)
+    object <- .cdr_effect_boundary_object(object, match.arg(boundary), unconditional)
     functionals <- .cdr_effect_all_functionals(
-        object, terms, axes, composition, grouping, groups, reference, n
+        object, terms, axes, composition, grouping, groups, reference, n, points
     )
+    if (identical(method, 'wood') && identical(grouping, 'deviation')) {
+        functionals <- lapply(split(functionals, vapply(functionals, `[[`,
+                integer(1), 'term')), function(levels) {
+            merged <- levels[[1L]]
+            merged$index <- sort(unique(unlist(lapply(levels, `[[`, 'index'))))
+            merged$group <- NA_character_
+            merged
+        })
+    }
+    if (identical(method, 'wood')) {
+        structure <- .cdrgam_test_structure(object)
+        residual_df <- .cdr_effect_residual_df(object)
+        random_smooths <- .cdrgam_random_smooths(object)
+    }
     rows <- lapply(functionals, function(functional) {
-        estimate <- drop(functional$design %*% stats::coef(object)[functional$index])
-        covariance <- .cdr_effect_covariance(object, functional$index, unconditional)
-        projected <- functional$design %*% covariance %*% t(functional$design)
-        decomposition <- eigen((projected + t(projected)) / 2, symmetric=TRUE)
-        values <- decomposition$values
-        keep <- values > tolerance * max(c(values, 0))
-        rank <- sum(keep)
-        statistic <- if (rank) {
-            scores <- crossprod(decomposition$vectors[, keep, drop=FALSE], estimate)
-            sum(scores^2 / values[keep])
-        } else NA_real_
+        if (identical(method, 'wood')) {
+            test <- .cdr_effect_wood_test(
+                object, functional$index, structure, residual_df, unconditional,
+                random_smooths
+            )
+            f_reference <- residual_df > 0
+            statistic <- if (f_reference) test$statistic / test$rank else test$statistic
+            p_value <- test$p_value
+            rank <- test$rank
+            label <- test$method
+            count <- NA_integer_
+        } else {
+            estimate <- drop(functional$design %*% stats::coef(object)[functional$index])
+            covariance <- .cdr_effect_covariance(object, functional$index, unconditional)
+            projected <- functional$design %*% covariance %*% t(functional$design)
+            decomposition <- eigen((projected + t(projected)) / 2, symmetric=TRUE)
+            values <- decomposition$values
+            keep <- values > tolerance * max(c(values, 0))
+            rank <- sum(keep)
+            statistic <- if (rank) {
+                scores <- crossprod(decomposition$vectors[, keep, drop=FALSE], estimate)
+                sum(scores^2 / values[keep])
+            } else NA_real_
+            p_value <- if (rank) stats::pchisq(statistic, rank, lower.tail=FALSE) else
+                NA_real_
+            f_reference <- FALSE
+            label <- 'Wald'
+            count <- length(estimate)
+        }
         data.frame(
             term_id=paste0('irf-', functional$term),
             term=object$cdrgam$term_labels[[functional$term]],
             group=if (is.na(functional$group)) NA_character_ else functional$group,
             composition=composition,
             grouping=grouping,
+            method=label,
             statistic=statistic,
             df=rank,
-            p_value=if (rank) stats::pchisq(statistic, rank, lower.tail=FALSE) else
-                NA_real_,
-            points=length(estimate),
+            residual_df=if (f_reference) residual_df else NA_real_,
+            p_value=p_value,
+            points=count,
+            coefficients=length(functional$index),
             stringsAsFactors=FALSE
         )
     })

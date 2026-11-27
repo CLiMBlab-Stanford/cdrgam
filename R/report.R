@@ -7,8 +7,9 @@
 #' @param object A fitted `cdrgam` model.
 #' @return `fit_metadata()` returns fitting metadata, formulas, distributional
 #'   parameter names, and default plotting metadata. `fit_report()` adds
-#'   printable summary text, parametric and smooth summary tables, and
-#'   convergence diagnostics.
+#'   printable summary text, the parametric coefficient table
+#'   (`coefficients`), the smooth-term tests (`smooths`), the parametric-term
+#'   tests (`parametric_terms`), and convergence diagnostics.
 #' @name fit_report
 #' @rdname fit_report
 #' @export
@@ -91,10 +92,22 @@ fit_report <- function(object) {
             check.names=FALSE
         )
     }
+    parametric_terms <- if (is.null(model_summary$pTerms.table) ||
+            !nrow(model_summary$pTerms.table)) {
+        data.frame()
+    } else {
+        data.frame(
+            term=rownames(model_summary$pTerms.table),
+            model_summary$pTerms.table,
+            row.names=NULL,
+            check.names=FALSE
+        )
+    }
     c(metadata, list(
         summary_text=utils::capture.output(print(model_summary)),
         coefficients=coefficients,
         smooths=smooths,
+        parametric_terms=parametric_terms,
         diagnostics=fit_diagnostics(object)
     ))
 }

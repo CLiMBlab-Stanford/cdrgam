@@ -2,7 +2,7 @@
 % Please edit documentation in R/effects.R
 \name{test_effect}
 \alias{test_effect}
-\title{Test fitted effects jointly over declarative axis grids}
+\title{Test fitted effects}
 \usage{
 test_effect(
   object,
@@ -17,7 +17,9 @@ test_effect(
   unconditional = FALSE,
   n = 50L,
   tolerance = 1e-08,
-  boundary = c("estimate", "bound")
+  boundary = c("estimate", "bound"),
+  points = NULL,
+  method = c("wood", "wald")
 )
 }
 \arguments{
@@ -54,7 +56,8 @@ positive definite after those parameters are excluded.}
 
 \item{n}{Default number of points for fitted-domain grids.}
 
-\item{tolerance}{Relative eigenvalue threshold for the rank of \verb{L V L'}.}
+\item{tolerance}{Relative eigenvalue threshold for the rank of \verb{L V L'}
+under \code{method = "wald"}.}
 
 \item{boundary}{\code{"estimate"} (the default) uses the fitted smoothing
 parameters. \code{"bound"} repeats the calculation with each boundary
@@ -63,35 +66,64 @@ component the data still support, while the other smoothing parameters
 stay at their estimates. Compare the two to check whether conclusions
 depend on treating those variance components as zero. \code{"bound"} requires
 a sparse Gaussian REML fit with \code{sparse_control$boundary_sensitivity = TRUE} and \code{unconditional = FALSE}.}
+
+\item{points}{Optional data frame of evaluation points, one per row, with
+columns named by axis, such as \code{lag} or a predictor. Its columns are
+paired rather than crossed, so the result has one row per point. Each
+axis that is not a column takes its value from \code{axes}, and that request
+must resolve to one value. Use it to evaluate along a path through the
+axes, such as each predictor value at its own lag.}
+
+\item{method}{\code{"wood"} for Wood's whole-functional test or \code{"wald"} for a
+grid Wald test. When omitted, it is \code{"wald"} if \code{axes}, \code{reference}, or
+\code{points} define a grid and \code{"wood"} otherwise.}
 }
 \value{
 A \code{cdrgam_effect_test} data frame with \code{term_id}, \code{term}, \code{group},
-\code{composition}, \code{grouping}, \code{statistic}, \code{df}, \code{p_value}, and \code{points}.
-\code{df} is zero and \code{statistic} and \code{p_value} are missing when the functional
-is identically zero.
+\code{composition}, \code{grouping}, \code{method}, \code{statistic}, \code{df}, \code{residual_df},
+\code{p_value}, \code{points}, and \code{coefficients}. \code{residual_df} is missing for
+chi-squared references, and \code{points} for Wood tests. Under
+\code{method = "wald"}, \code{df} is zero and \code{statistic} and \code{p_value} are
+missing when the functional is identically zero.
 }
 \description{
-Computes a Wald test of the null hypothesis that a functional returned by
-\code{\link[=estimate_effect]{estimate_effect()}} is zero at every grid point. The arguments select the
-same terms, axes, compositions, groupings, and references. One test is
-returned per selected term and grouping level.
+Tests the null hypothesis that a functional returned by
+\code{\link[=estimate_effect]{estimate_effect()}} is zero. The arguments select the same terms,
+compositions, groupings, and groups. One test is returned per selected
+term and grouping level.
 }
 \details{
-The statistic is \eqn{\hat\beta^\top L^\top (L V L^\top)^{-} L \hat\beta},
-where \code{L} stacks the grid rows of the functional and \code{V} is the coefficient
-covariance. The pseudo-inverse keeps eigenvalues above \code{tolerance} times the
-largest, and the reference distribution is chi-squared with that rank as
-its degrees of freedom. Use a grid dense enough to span the functional;
-the rank stops growing once it does.
+\code{method = "wood"} tests the whole functional, as \code{summary()} tests smooth
+terms. The null is that every coefficient the functional uses is zero, so
+a total composition is tested over the union of its terms' coefficients.
+The statistic is Wood's (2013), with the summed alternative effective
+degrees of freedom of those coefficients as its reference rank. A
+functional made of exactly one fully penalized term, such as a grouped
+deviation, gets Wood's (2013b) random-effect test, with other random
+effects integrated out. Grouped deviations are therefore tested over all
+levels at once, and \code{groups} must be \code{NULL}. The test does not use an
+evaluation grid, so \code{axes}, \code{reference}, and \code{points} must be empty. When
+the scale is estimated, \code{statistic} is the F statistic \code{T / df} on \code{df}
+and \code{residual_df} degrees of freedom, as in \code{summary()}; otherwise it is
+\code{T} on a chi-squared reference.
 
-Penalized coefficients make this test
-approximate. Wood (2013) reports that such tests can reject too rarely when
-the null holds on the boundary of the smoothing-parameter space.
+\code{method = "wald"} tests the functional at every point of an evaluation
+grid. The statistic is \eqn{\hat\beta^\top L^\top (L V L^\top)^{-} L
+\hat\beta}, where \code{L} stacks the grid rows of the functional and \code{V} is
+the coefficient covariance. The pseudo-inverse keeps eigenvalues above
+\code{tolerance} times the largest, and the reference distribution is
+chi-squared with that rank as its degrees of freedom. Use a grid dense
+enough to span the functional; the rank stops growing once it does. This
+test can reject too rarely when the null holds on the boundary of the
+smoothing-parameter space (Wood 2013).
 }
 \references{
 Wood, S. N. (2013). On p-values for smooth components of an
 extended generalized additive model. \emph{Biometrika}, 100(1), 221--228.
+
+Wood, S. N. (2013b). A simple test for random effects in regression
+models. \emph{Biometrika}, 100(4), 1005--1010.
 }
 \seealso{
-\code{\link[=estimate_effect]{estimate_effect()}}
+\code{\link[=estimate_effect]{estimate_effect()}}, \code{\link[=summary.cdrgam]{summary.cdrgam()}}
 }

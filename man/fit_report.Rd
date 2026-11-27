@@ -15,8 +15,9 @@ fit_report(object)
 \value{
 \code{fit_metadata()} returns fitting metadata, formulas, distributional
 parameter names, and default plotting metadata. \code{fit_report()} adds
-printable summary text, parametric and smooth summary tables, and
-convergence diagnostics.
+printable summary text, the parametric coefficient table
+(\code{coefficients}), the smooth-term tests (\code{smooths}), the parametric-term
+tests (\code{parametric_terms}), and convergence diagnostics.
 }
 \description{
 \code{fit_report()} returns the fitted-model information needed by artifact

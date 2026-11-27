@@ -18,7 +18,9 @@ estimate_effect(
   unconditional = FALSE,
   level = 0.95,
   n = 200L,
-  boundary = c("estimate", "bound")
+  boundary = c("estimate", "bound"),
+  points = NULL,
+  covariance = FALSE
 )
 }
 \arguments{
@@ -66,12 +68,29 @@ component the data still support, while the other smoothing parameters
 stay at their estimates. Compare the two to check whether conclusions
 depend on treating those variance components as zero. \code{"bound"} requires
 a sparse Gaussian REML fit with \code{sparse_control$boundary_sensitivity = TRUE} and \code{unconditional = FALSE}.}
+
+\item{points}{Optional data frame of evaluation points, one per row, with
+columns named by axis, such as \code{lag} or a predictor. Its columns are
+paired rather than crossed, so the result has one row per point. Each
+axis that is not a column takes its value from \code{axes}, and that request
+must resolve to one value. Use it to evaluate along a path through the
+axes, such as each predictor value at its own lag.}
+
+\item{covariance}{Also return the joint covariance of every row's estimate,
+as the matrix attribute \code{covariance}, with one row and column per result
+row in the same order. Rows from different terms or groups are covariant
+when they share coefficients. The matrix has as many rows and columns as
+the result, so request it for small grids, such as the points a
+simultaneous band is computed over. It requires \code{se = TRUE}.}
 }
 \value{
 A \code{cdrgam_effect_grid} data frame with evaluation axes, estimates,
 standard errors, and pointwise confidence limits on the linear-predictor
 scale. Each reference axis adds a
-\verb{<axis>_reference} column, which is \code{NA} for a model default.
+\verb{<axis>_reference} column, which is \code{NA} for a model default. With
+\code{covariance = TRUE}, attribute \code{covariance} holds the rows' joint
+covariance \eqn{D V D^\top}, where \code{D} is the rows' linear map of the
+coefficients and \code{V} their covariance.
 }
 \description{
 Computes selected impulse-response effects and their pointwise uncertainty as

@@ -539,7 +539,8 @@
         } else {
             checkpoint_state$best_log_sp
         }
-        if (length(checkpoint_initial) == penalty_count &&
+        if (!is.null(checkpoint_initial) &&
+                length(checkpoint_initial) == penalty_count &&
                 all(is.finite(checkpoint_initial))) {
             initial <- checkpoint_initial
         }
@@ -1027,7 +1028,8 @@ logLik.cdrgam_block <- function(object, ...) {
     n <- length(object$y)
     gaussian <- identical(object$family$family, 'gaussian') &&
         identical(object$family$link, 'identity')
-    value <- if (gaussian) {
+    value <- .cdrgam_mgcv_loglik(object, deviance.cdrgam_block(object))
+    if (is.null(value)) value <- if (gaussian) {
         -0.5 * (
             n * log(2 * pi * object$scale) +
                 deviance.cdrgam_block(object) / object$scale
@@ -1111,7 +1113,8 @@ summary.cdrgam_block <- function(
         smooth_edf=.cdrgam_block_smooth_edf(object),
         dispersion=dispersion,
         all.coefficients=all.coefficients,
-        all_variances=function() diag(object$Vp)
+        all_variances=function() diag(object$Vp),
+        test_structure=.cdrgam_block_test_structure(object)
     )
     class(out) <- c('summary.cdrgam_block', 'summary.cdrgam', 'summary.gam')
     out
